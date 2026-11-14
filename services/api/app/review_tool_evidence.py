@@ -134,6 +134,10 @@ def snapshot_result(kind, result, *, compact_markets=False):
                  'markets': [(_project(item, MODEL_QUOTE_FIELDS) | line_terms(item, result['fixture']['id'])) if compact_markets else _project(item, QUOTE_FIELDS)
                              for item in quotes],
                  'refresh': _project(result['refresh'], {'attempted', 'accepted', 'reason'})}
+        retry_after = result['refresh'].get('retry_after_seconds')
+        if (result['refresh'].get('accepted')is False and type(retry_after)is int
+                and 0<retry_after<=900):
+            value['refresh']['retry_after_seconds'] = retry_after
         # Replay retains the exact declared coverage; it must not reinterpret
         # old snapshots or silently remove any supported/closed option.
         value.update(_project(result, {'market_coverage', 'market_filter', 'unsupported_markets',

@@ -63,6 +63,23 @@ class _CountingPool:
 
 
 class ToolSnapshotUnitTests(unittest.TestCase):
+    def test_refresh_spacing_survives_wire_projection_without_adding_price_authority(self):
+        source=dict(fixture={'id':'fixture'},markets=[],refresh=dict(attempted=True,
+            accepted=False,reason='refresh_throttled',retry_after_seconds=2))
+        for compact in (False,True):
+            wire=snapshot_result('mcp_list_match_markets',source,compact_markets=compact)
+            self.assertEqual(source['refresh'],wire['refresh'])
+            manifest,chunks=encode_snapshot(wire)
+            manifest['call_id']='isolated-call'
+            rows=[dict(call_id='isolated-call',snapshot_sha256=manifest['sha256'],chunk_index=i,data_base64=data)
+                  for i,data in enumerate(chunks)]
+            self.assertEqual(wire,replay_snapshot(manifest,rows))
+        for invalid in (True,0,-1,901,1.5,'2'):
+            source['refresh']['retry_after_seconds']=invalid
+            self.assertNotIn('retry_after_seconds',snapshot_result('mcp_list_match_markets',source)['refresh'])
+        source['refresh'].update(accepted=True,retry_after_seconds=2)
+        self.assertNotIn('retry_after_seconds',snapshot_result('mcp_list_match_markets',source)['refresh'])
+
     def test_large_market_inventory_keeps_all_supported_quotes_with_explicit_coverage(self):
         quote = {'quote_id': str(uuid.uuid4()), 'market_id': 'total', 'market_name': '全场大小附加盘口' * 5,
                  'period': 'full_time', 'market_kind': 'total', 'line': '2.500', 'selection': 'over',

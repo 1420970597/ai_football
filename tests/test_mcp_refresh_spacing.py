@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 import test_mcp_transport as support
+import httpx
+from app.review_tool_evidence import snapshot_result
 
 
 class RefreshSpacingTests(unittest.IsolatedAsyncioTestCase):
@@ -27,6 +29,26 @@ class RefreshSpacingTests(unittest.IsolatedAsyncioTestCase):
              patch.object(self.server.asyncio, 'sleep', AsyncMock()):
             self.assertEqual(pending, await self.server._post('list_match_markets', {}))
         self.assertEqual(2, request.await_count)
+
+    async def test_native_wire_projection_reaches_the_real_same_call_recovery(self):
+        requests=[]
+        async def upstream(request):
+            requests.append(request.content)
+            refresh=(dict(attempted=True,accepted=False,reason='refresh_throttled',retry_after_seconds=1)
+                     if len(requests)==1 else dict(attempted=True,accepted=True,reason='written'))
+            wire=snapshot_result('mcp_list_match_markets',dict(fixture={'id':'fixture'},markets=[],refresh=refresh),compact_markets=True)
+            return httpx.Response(200,json=wire)
+        await self.server.client.aclose()
+        self.server.client=httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        payload=dict(review_id='job',attempt_id='attempt',fixture_id='fixture',period='full_time',
+                     market_kind='total',source_periods=['full_time'])
+        with patch.object(self.server.asyncio,'sleep',AsyncMock())as sleep:
+            result=await self.server._post('list_match_markets',payload)
+        self.assertEqual('written',result['refresh']['reason'])
+        self.assertEqual(2,len(requests))
+        self.assertEqual(requests[0],requests[1])
+        sleep.assert_awaited_once_with(1)
+        self.assertEqual(0,self.server.pending_market_requests)
 
     async def test_writes_cooldown_unknown_and_invalid_wait_never_retry(self):
         for path, reason, wait in [('record_expert_signals', 'refresh_throttled', 1),
