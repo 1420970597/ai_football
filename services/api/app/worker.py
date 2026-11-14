@@ -22,6 +22,7 @@ from .review_line_claims import split_line_claim_conflicts
 from .review_quote_claims import missing_handicap_claims
 from .review_intent_claims import image_access_unavailable, explicit_current_total_items
 from .review_accepted_context import read_accepted_context
+from .review_identity_stop import repeated_identity_failure
 from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
                                 explicit_visual_instruction,
                                 tool_recovery_pending, tool_unavailability_claim, tool_unavailability_issues,
@@ -541,6 +542,13 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
         check_retries += retries
         summary = {**summary, 'completion_verified': not issues, 'completion_rounds': turn + 1,
                    'completion_issues': issues, 'completion_check_retries': check_retries}
+        if issues and message['review_mode']=='real_time':
+            async with pool.acquire()as conn:
+                identity_stopped=await repeated_identity_failure(conn,job['id'],job['attempt_id'],issues)
+            if identity_stopped:
+                summary.update(totals,completion_terminal='repeated_identity_unresolved')
+                if usage_totals:summary['usage']=usage_totals
+                return content,summary
         if turn == 2 and tool_recovery_required:
             await _add_trace(pool, job, 'hermes_partial_result', summary)
             raise HermesProviderUnavailable()
