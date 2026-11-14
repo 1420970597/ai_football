@@ -1,13 +1,8 @@
 """只在显式提供临时数据库时运行身份和会员接口行为验收。"""
 
-import base64
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-import hashlib
-import hmac
 import os
-import struct
-import time
 from types import SimpleNamespace
 import unittest
 import uuid
@@ -20,19 +15,12 @@ import httpx
 from app import auth, database, identity_lifecycle
 from app.membership import resolve_memberships
 from app.routes import accounts, admin, public
-from app.security import decrypt_secret, encrypt_secret, hash_password, token_hash, totp_valid, verify_password
+from app.security import decrypt_secret, encrypt_secret, hash_password, token_hash, verify_password
 
 
 TEST_URL = os.environ.get("IDENTITY_TEST_DATABASE_URL", "")
 PASSWORD = "test-only-password-1234"
 TOTP_SECRET = "JBSWY3DPEHPK3PXP"
-
-
-def otp(secret=TOTP_SECRET, now=None):
-    key = base64.b32decode(secret)
-    digest = hmac.new(key, struct.pack(">Q", int((time.time() if now is None else now) // 30)), hashlib.sha1).digest()
-    offset = digest[-1] & 15
-    return f"{(struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7fffffff) % 1000000:06}"
 
 
 class SecurityTests(unittest.TestCase):
@@ -43,18 +31,6 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse(verify_password(PASSWORD, ""))
         self.assertFalse(verify_password(PASSWORD, stored.replace("16384", "1073741824")))
         self.assertFalse(verify_password(PASSWORD, stored[:-10]))
-
-    def test_totp_valid_invalid_and_boundary(self):
-        self.assertTrue(totp_valid(TOTP_SECRET, otp()))
-        self.assertFalse(totp_valid("bad!", "123456"))
-        self.assertFalse(totp_valid(TOTP_SECRET, "12345x"))
-        self.assertFalse(totp_valid(TOTP_SECRET, "１２３４５６"))
-        self.assertFalse(totp_valid("", "123456"))
-        self.assertFalse(totp_valid(TOTP_SECRET, "999999", now=0))
-        now = 300000000
-        self.assertTrue(totp_valid(TOTP_SECRET, otp(now=now - 30), now=now))
-        self.assertTrue(totp_valid(TOTP_SECRET, otp(now=now + 30), now=now))
-        self.assertFalse(totp_valid(TOTP_SECRET, otp(now=now - 90), now=now))
 
     def test_secret_encryption_uses_unique_nonce(self):
         key = bytes(range(32))
@@ -123,7 +99,7 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         return {"X-CSRF-Token": self.client.cookies[auth.ADMIN_CSRF_COOKIE if admin_session else auth.CSRF_COOKIE]}
 
     async def admin_login(self):
-        response = await self.client.post("/api/v1/admin/login", json={"email": "admin@example.invalid", "password": PASSWORD, "totp_code": otp()})
+        response = await self.client.post("/api/v1/admin/login", json={"email": "admin@example.invalid", "password": PASSWORD})
         self.assertEqual(200, response.status_code, response.text)
         return response
 
@@ -175,20 +151,21 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, (await self.client.get("/api/v1/auth/me")).status_code)
         self.assertEqual(401, (await self.client.get("/api/v1/admin/me")).status_code)
 
-    async def test_user_logout_preserves_admin_and_replayed_totp_rejected(self):
+    async def test_user_logout_preserves_admin_and_legacy_totp_does_not_gate_login(self):
         await self.register()
-        code = otp()
-        response = await self.client.post("/api/v1/admin/login", json={"email": "admin@example.invalid", "password": PASSWORD, "totp_code": code})
+        legacy_factor = await self.pool.fetchval("SELECT totp_secret_ciphertext FROM v2_users WHERE id=$1", self.admin_id)
+        self.assertTrue(legacy_factor)
+        response = await self.client.post("/api/v1/admin/login", json={"email": "admin@example.invalid", "password": PASSWORD})
         self.assertEqual(200, response.status_code)
-        replay = await self.client.post("/api/v1/admin/login", json={"email": "admin@example.invalid", "password": PASSWORD, "totp_code": code})
-        self.assertEqual(401, replay.status_code)
+        repeated = await self.client.post("/api/v1/admin/login", json={"email": "admin@example.invalid", "password": PASSWORD})
+        self.assertEqual(200, repeated.status_code)
         self.assertEqual(200, (await self.client.post("/api/v1/auth/logout", headers=self.csrf())).status_code)
         self.assertEqual(200, (await self.client.get("/api/v1/admin/me")).status_code)
 
-    async def test_admin_identifier_login_and_reauthentication_without_totp(self):
+    async def test_admin_identifier_login_and_reauthentication_endpoint_removed(self):
         password = PASSWORD
         await self.pool.execute(
-            "UPDATE v2_users SET email=$2,password_hash=$3,totp_secret_ciphertext=NULL,totp_last_step=NULL WHERE id=$1",
+            "UPDATE v2_users SET email=$2,password_hash=$3 WHERE id=$1",
             self.admin_id, "f1420970597", hash_password(password),
         )
         response = await self.client.post(
@@ -201,13 +178,12 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "/api/v1/admin/reauthenticate", headers=self.csrf(admin_session=True),
             json={"password": password},
         )
-        self.assertEqual(200, reauth.status_code, reauth.text)
+        self.assertEqual(404, reauth.status_code)
 
     async def test_bootstrap_creates_admin_identifier_without_totp(self):
         await self.pool.execute("DELETE FROM v2_users WHERE id=$1", self.admin_id)
         settings = SimpleNamespace(
             bootstrap_admin_email="f1420970597", bootstrap_admin_password=PASSWORD,
-            bootstrap_admin_totp_secret="", encryption_key=bytes(range(32)),
         )
         await auth.bootstrap_admin(self.pool, settings)
         row = await self.pool.fetchrow(
@@ -326,7 +302,7 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(201, response.status_code)
         self.assertEqual("user", response.json()["user"]["role"])
         self.assertEqual(401, (await self.client.get("/api/v1/admin/users")).status_code)
-        login = await self.client.post("/api/v1/admin/login", json={"email": "forged@example.invalid", "password": PASSWORD, "totp_code": otp()})
+        login = await self.client.post("/api/v1/admin/login", json={"email": "forged@example.invalid", "password": PASSWORD})
         self.assertEqual(401, login.status_code)
 
     async def test_audit_failure_rolls_back_sensitive_setting(self):
@@ -355,7 +331,7 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, response.status_code)
         self.assertNotEqual(old, self.client.cookies[auth.USER_COOKIE])
         self.assertEqual(401, (await self.client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {old}"})).status_code)
-        response = await self.client.put("/api/v1/auth/password", headers=self.csrf(), json={"current_password": PASSWORD, "new_password": "replacement-test-password-1234"})
+        response = await self.client.put("/api/v1/auth/password", headers=self.csrf(), json={"new_password": "replacement-test-password-1234"})
         self.assertEqual(200, response.status_code)
         self.assertEqual(401, (await self.client.get("/api/v1/auth/me")).status_code)
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_sessions WHERE session_kind='user'"))
@@ -388,8 +364,7 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bootstrap_does_not_replace_existing_admin(self):
         previous = await self.pool.fetchrow("SELECT password_hash,totp_secret_ciphertext FROM v2_users WHERE id=$1", self.admin_id)
-        settings = SimpleNamespace(bootstrap_admin_email="different@example.invalid", bootstrap_admin_password=PASSWORD,
-                                   bootstrap_admin_totp_secret=TOTP_SECRET, encryption_key=bytes(range(32)))
+        settings = SimpleNamespace(bootstrap_admin_email="different@example.invalid", bootstrap_admin_password=PASSWORD)
         await auth.bootstrap_admin(self.pool, settings)
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_users WHERE role='admin'"))
         after = await self.pool.fetchrow("SELECT password_hash,totp_secret_ciphertext FROM v2_users WHERE id=$1", self.admin_id)

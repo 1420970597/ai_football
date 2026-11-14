@@ -1,0 +1,52 @@
+{
+  "schema": "safe-deployment-evidence-v1",
+  "source_commit": "be94bfc7afd4dfa90b9b7374030993d41cacca7f",
+  "completed_at": "2026-11-08T13:56:26Z",
+  "api_image_id": "sha256:09fb258f29e0b5f8c56b98d93352ed35acad1878cba25d406f65abcc0540d2bd",
+  "full_tests": 1808,
+  "framework_exit": 0,
+  "rollout": {
+    "only_api_worker_images_and_hermes_skill_profile_recreated": true,
+    "other_four_local_and_four_remote_unchanged": true,
+    "provider_environment_config_context_runner_and_personal_permissions_unchanged": true
+  },
+  "ledger": {
+    "signals_before": 622,
+    "signals_after": 622,
+    "old_ledger_rows": 871,
+    "immutable_signals_quotes_and_ledger_preserved": true,
+    "database_rollback": false
+  },
+  "financial": {
+    "old_orders_preserved": 2,
+    "policy_and_account_ownership_unchanged": true,
+    "financial_pre_and_post_snapshots_idle": true,
+    "no_funds_lock_or_order_mutation": true
+  },
+  "prompt_artifact": {
+    "changed": true,
+    "release_id": "e1045-prompt-20261108",
+    "active_version": "b466ed1914d63d11290d98355fd4a32e5b3b48953285df8b156d80617e2be874",
+    "test_count": 1808,
+    "model_and_provider_unchanged": true,
+    "quality_approval": false
+  },
+  "prompt_transition": {
+    "prompt_artifact_only": true,
+    "model_and_provider_unchanged": true,
+    "history_preserved": true,
+    "quality_approval": false
+  },
+  "native_exit": 0,
+  "historical_backfill": false,
+  "funded_tests": 0,
+  "new_quote_id_patch_included": false,
+  "natural_semantic_acceptance_pending": true,
+  "browser_acceptance": {
+    "first_run": "E1063",
+    "native_exit": 1,
+    "finished_phase_rows": 50,
+    "live_phase_http_status": 503,
+    "complete": false
+  }
+}

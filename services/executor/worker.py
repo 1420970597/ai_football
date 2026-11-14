@@ -15,6 +15,7 @@ import httpx
 from services.collector.leyu_protocol import AuthExpired, LeyuError
 from .account_protocol import AccountProtocolClient, NativeSelection, SubmissionPermit, SubmissionRejected, SubmissionUnknown
 from .account_session import AccountScope, AccountSessionManager, RenewalHooks
+from .account_history import run as run_account_history
 
 log = logging.getLogger("platform.executor")
 
@@ -75,8 +76,12 @@ class Executor:
         return self.session_factory(scope, work["config"], RenewalHooks(claim, persist, finish))
 
     async def account_job(self, work):
+        if work.get("history") is not None:
+            await run_account_history(self, work)
+            return
         root = f"/jobs/{work['job_id']}"
         result = {"attempt_id": work["attempt_id"], "status": "failed", "category": ""}
+        manager = None
         try:
             async with asyncio.timeout(270):
                 manager = self.manager(work)
@@ -93,23 +98,44 @@ class Executor:
                         balance = await client.balance()
                 receipts = []
                 scanned = []
+                reconciliation_errors = []
                 async with self.client_factory(manager.scope, session) as client:
-                    for order in work.get("orders", [])[:2]:
-                        created = datetime.fromisoformat(order["created_at"].replace("Z", "+00:00"))
-                        lookup = await client.lookup(order["provider_order_no"], begin=created - timedelta(minutes=5),
-                                                     end=datetime.now(timezone.utc) + timedelta(minutes=5), max_pages=2)
+                    planned_orders = work.get("orders", [])[:2]
+                    lookups = {}
+                    if planned_orders:
+                        begin = min(datetime.fromisoformat(order['created_at'].replace('Z', '+00:00')) for order in planned_orders) - timedelta(minutes=5)
+                        try:
+                            lookups = await client.lookup_many([order['provider_order_no'] for order in planned_orders],
+                                                               begin=begin, end=datetime.now(timezone.utc) + timedelta(minutes=5), max_pages=2)
+                        except AuthExpired:
+                            raise
+                        except LeyuError as exc:
+                            # An order-history read failure does not invalidate a
+                            # separately verified balance or another order's receipt.
+                            # Keep this order unresolved; never release its exposure.
+                            reconciliation_errors.extend({"order_id": order['id'], "category": exc.category,
+                                                          "provider_code": exc.code} for order in planned_orders)
+                    for order in planned_orders:
+                        if order['provider_order_no'] not in lookups:
+                            continue
+                        lookup = lookups[order['provider_order_no']]
                         scanned.append(order['id'])
                         if lookup["found"] and not lookup.get("ambiguous"):
                             item = lookup["receipt"]
-                            receipts.append({key: item.get(key) for key in ("order_no", "state", "net_profit", "pnl_basis", "fees")})
+                            receipts.append({key: item.get(key) for key in (
+                                "order_no", "state", "net_profit", "pnl_basis", "fees",
+                                "price", "stake", "payout", "currency", "placed_at", "settled_at")})
                     if work.get('orders'):
                         balance = await client.balance()
                 result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"], receipts=receipts,scanned_orders=scanned)
+                if reconciliation_errors:
+                    result.update(category="order_reconciliation_partial", reconciliation_errors=reconciliation_errors)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             category = exc.category if isinstance(exc, LeyuError) else type(exc).__name__
-            result.update(category=category, status="rejected" if category == "app_login_rejected" else "failed")
+            status = 'rejected' if category == 'app_login_rejected' else 'unknown' if getattr(manager, 'last_renewal_status', None) == 'unknown' else 'failed'
+            result.update(category=category, provider_code=exc.code if isinstance(exc, LeyuError) else '', status=status)
         await self.finish(root + "/finish", result)
 
     async def order_job(self, work):
@@ -122,10 +148,11 @@ class Executor:
             # 资金路径不进行内联续期；会话失效交给独立本人校验任务处理。
             manager = self.session_factory(scope, work["config"], RenewalHooks(None, None, None))
             async with self.client_factory(scope, manager.venue_session(), live_orders_enabled=True) as client:
-                selected = NativeSelection(**work["selection"])
+                selected = NativeSelection.from_snapshot(work["selection"])
                 prepared = await client.preflight(selected, Decimal(work["stake"]), device_imei=work["config"]["leyu_app_uuid"])
                 permit = await self.rpc("POST", f"/orders/{work['order_id']}/authorize", json={"attempt_id": work["attempt_id"],
-                                        "prepared_digest": prepared.digest, "payload_json": prepared.payload_json})
+                                        "prepared_digest": prepared.digest, "payload_json": prepared.payload_json,
+                                        "quote_checked_at": prepared.checked_at})
                 authorized = True
                 permit["scope"] = AccountScope(**permit["scope"])
                 receipt = await client.submit_once(prepared, SubmissionPermit(**permit))

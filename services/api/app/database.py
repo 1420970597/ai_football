@@ -70,8 +70,12 @@ async def apply_migrations(conn, directory: Path = MIGRATIONS) -> list[str]:
     return applied
 
 
-async def open_pool(settings: Settings, *, migrate: bool = False, verify: bool = True) -> asyncpg.Pool:
+async def open_pool(settings: Settings, *, migrate: bool = False, verify: bool = True,
+                    min_size: int = 2, max_size: int = 24,
+                    connect_timeout: float = 10) -> asyncpg.Pool:
     global pool
+    if not 1 <= min_size <= max_size <= 24 or not 0 < connect_timeout <= 30:
+        raise ValueError("database pool budget is invalid")
 
     async def init_connection(conn) -> None:
         for type_name in ("json", "jsonb"):
@@ -81,9 +85,14 @@ async def open_pool(settings: Settings, *, migrate: bool = False, verify: bool =
 
     candidate = await asyncpg.create_pool(
         settings.database_url,
-        min_size=2,
-        max_size=24,
+        min_size=min_size,
+        max_size=max_size,
+        timeout=connect_timeout,
         command_timeout=5,
+        # Keep the driver's bounded 100-entry cache, but avoid TTL expiry
+        # accumulating many sequential Close round trips before the next query.
+        # Schema invalidation and capacity eviction remain driver-managed.
+        max_cached_statement_lifetime=0,
         max_inactive_connection_lifetime=180,
         server_settings={
             "application_name": "ai-football-platform-v2",

@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-26T12:59:25.514Z",
+  "date": "2026-10-27T20:09:45.209Z",
   "environment": "fresh source API + nginx + isolated temporary PostgreSQL; artificial seeded data; live orders disabled; no provider services",
   "results": [
     {
@@ -39,19 +39,628 @@
       "status": "passed"
     },
     {
+      "name": "五身份页面及接口矩阵：游客",
+      "status": "passed"
+    },
+    {
+      "name": "五身份页面及接口矩阵：普通用户",
+      "status": "passed"
+    },
+    {
+      "name": "五身份页面及接口矩阵：真实到期会员",
+      "status": "passed"
+    },
+    {
+      "name": "五身份页面及接口矩阵：有效会员",
+      "status": "passed"
+    },
+    {
+      "name": "五身份页面及接口矩阵：独立管理员",
+      "status": "passed"
+    },
+    {
       "name": "真实管理员退出保留本人身份与手机版布局",
       "status": "passed"
     },
     {
       "name": "真实无未结算记录注销撤销本人会话",
       "status": "passed"
+    },
+    {
+      "name": "真实Web入口拒绝内部路由并限制API请求大小",
+      "status": "passed"
     }
   ],
   "browser_errors": [],
   "failed_upstream_responses": [
     {
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
       "path": "/api/v1/public/messages/22222222-2222-4222-8222-222222222222/media/0",
       "status": 503
+    },
+    {
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    }
+  ],
+  "role_access_matrix": [
+    {
+      "role": "guest",
+      "pages": [
+        "比分、赛程、赛果及比赛详情可读",
+        "专家公开摘要可读",
+        "会员页展示实际有效权益",
+        "原文、深链和媒体一致拒绝",
+        "用户账户及订单入口要求独立用户身份",
+        "管理入口登录门禁与全部管理接口一致拒绝"
+      ],
+      "http": [
+        {
+          "path": "/public/matches",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches/web-integration-match-0",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/membership/plans",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts/11111111-1111-4111-8111-111111111111/messages",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/66666666-6666-4666-8666-666666666666",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/22222222-2222-4222-8222-222222222222/media/0",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/auth/me",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/accounts/orders",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/auth/export?section=profile",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/me",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/users",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/settings",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/orders",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "role": "ordinary",
+      "pages": [
+        "比分、赛程、赛果及比赛详情可读",
+        "专家公开摘要可读",
+        "会员页展示实际有效权益",
+        "原文、深链和媒体一致拒绝",
+        "个人中心仅本人绑定；他人标识不能切换归属或写入",
+        "管理入口登录门禁与全部管理接口一致拒绝"
+      ],
+      "http": [
+        {
+          "path": "/auth/me",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches/web-integration-match-0",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/membership/plans",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts/11111111-1111-4111-8111-111111111111/messages",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/66666666-6666-4666-8666-666666666666",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/22222222-2222-4222-8222-222222222222/media/0",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/accounts/leyu?user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3&account_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/auth/export?section=profile&user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "PUT",
+          "status": 422
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/accounts/orders",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/admin/me",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/users",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/settings",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/orders",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "role": "expired",
+      "pages": [
+        "比分、赛程、赛果及比赛详情可读",
+        "专家公开摘要可读",
+        "会员页展示实际有效权益",
+        "原文、深链和媒体一致拒绝",
+        "个人中心仅本人绑定；他人标识不能切换归属或写入",
+        "管理入口登录门禁与全部管理接口一致拒绝"
+      ],
+      "http": [
+        {
+          "path": "/auth/me",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches/web-integration-match-0",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/membership/plans",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/auth/export?section=memberships",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts/11111111-1111-4111-8111-111111111111/messages",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/66666666-6666-4666-8666-666666666666",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/22222222-2222-4222-8222-222222222222/media/0",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/accounts/leyu?user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3&account_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/auth/export?section=profile&user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "PUT",
+          "status": 422
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/accounts/orders",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/admin/me",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/users",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/settings",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/orders",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        }
+      ],
+      "expiry_evidence": "active grant ended before browser clock; effective membership free",
+      "status": "passed"
+    },
+    {
+      "role": "valid",
+      "pages": [
+        "比分、赛程、赛果及比赛详情可读",
+        "专家公开摘要可读",
+        "会员页展示实际有效权益",
+        "会员原文可读；未配置媒体如实503",
+        "个人中心仅本人绑定；他人标识不能切换归属或写入",
+        "管理入口登录门禁与全部管理接口一致拒绝"
+      ],
+      "http": [
+        {
+          "path": "/auth/me",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches/web-integration-match-0",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/membership/plans",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts/11111111-1111-4111-8111-111111111111/messages",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/messages/66666666-6666-4666-8666-666666666666",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/messages/22222222-2222-4222-8222-222222222222/media/0",
+          "context": "user",
+          "method": "GET",
+          "status": 503
+        },
+        {
+          "path": "/accounts/leyu?user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1&account_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/auth/export?section=profile&user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "PUT",
+          "status": 422
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/accounts/orders",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/admin/me",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/users",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/settings",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/orders",
+          "context": "admin",
+          "method": "GET",
+          "status": 401
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "role": "admin",
+      "pages": [
+        "比分、赛程、赛果及比赛详情可读",
+        "专家公开摘要可读",
+        "会员页展示实际有效权益",
+        "原文、深链和媒体一致拒绝",
+        "用户账户及订单入口要求独立用户身份",
+        "管理员独立管理及审核原文可读，未继承用户账户权限"
+      ],
+      "http": [
+        {
+          "path": "/public/matches",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/matches/web-integration-match-0",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/membership/plans",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/experts/11111111-1111-4111-8111-111111111111/messages",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/66666666-6666-4666-8666-666666666666",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/public/messages/22222222-2222-4222-8222-222222222222/media/0",
+          "context": "user",
+          "method": "GET",
+          "status": 403
+        },
+        {
+          "path": "/auth/me",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/accounts/leyu",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/accounts/orders",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/auth/export?section=profile",
+          "context": "user",
+          "method": "GET",
+          "status": 401
+        },
+        {
+          "path": "/admin/me",
+          "context": "admin",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/admin/users",
+          "context": "admin",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/admin/settings",
+          "context": "admin",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/admin/telegram/messages/66666666-6666-4666-8666-666666666666",
+          "context": "admin",
+          "method": "GET",
+          "status": 200
+        }
+      ],
+      "status": "passed"
     }
   ]
 }

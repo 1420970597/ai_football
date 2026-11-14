@@ -1,0 +1,124 @@
+{
+  "recorded_at": "2026-11-12T07:50:17.328327+00:00",
+  "status": "production_entry_verified",
+  "business_port": 3003,
+  "domain": "football.5545.eu.cc",
+  "source_revision": "26ac5f8cfc9e0690570ad134dd11f94c5c567680",
+  "web_image": "sha256:2fb58c6963503f44d6e5d8f55ee0832eb09b8ff63e64550a3420ecae146bf7e0",
+  "artifact_version": "2.0.0-dev-assets.20261112.1",
+  "deployment_overlay": "infra/production/web.yml",
+  "entry_chain": "Cloudflare -> host nginx -> 127.0.0.1:3003 -> v2 web -> API",
+  "html_sha256": "d56cdb0ae1562c8540476b29bc40a9e2240d64cfb83c8626ccf864ffc16e871a",
+  "html_and_9_runtime_resources_match_image_on_port_and_domain": true,
+  "api_database_readiness": "ready",
+  "public_sample_counts": {
+    "football": 50,
+    "basketball": 50
+  },
+  "old_web_running": false,
+  "restart_policy": "unless-stopped",
+  "entry_probe_exit_code": 0,
+  "readiness_probe_exit_code": 0,
+  "source_or_transaction_changes": false,
+  "new_orders_submitted_for_acceptance": 0,
+  "containers": [
+    {
+      "name": "ai-football-v2-web-1",
+      "image": "sha256:2fb58c6963503f44d6e5d8f55ee0832eb09b8ff63e64550a3420ecae146bf7e0",
+      "running": true,
+      "health": "healthy",
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-api-1",
+      "image": "sha256:928e9800f2c78e26f93ff38c8718a32e715eb3e47fb284c98fc7f117b33dd37a",
+      "running": true,
+      "health": "healthy",
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-review-worker-1",
+      "image": "sha256:928e9800f2c78e26f93ff38c8718a32e715eb3e47fb284c98fc7f117b33dd37a",
+      "running": true,
+      "health": null,
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-collector-1",
+      "image": "sha256:710c68254436bad35321b7b5bd2245a017ddeb6dd78b8d583c36c57dfef3afa0",
+      "running": true,
+      "health": null,
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-executor-1",
+      "image": "sha256:764382631341c4efa4853ba1db9873a873835e293602b3e960f40460d648254b",
+      "running": true,
+      "health": null,
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-hermes-1",
+      "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
+      "running": true,
+      "health": "healthy",
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-hermes-mcp-1",
+      "image": "sha256:01b019b3be32d187b8f6ed5f7e3445adc1aae11294a2997a5e4c38f6bd47f362",
+      "running": true,
+      "health": null,
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-local-mcp-api-1",
+      "image": "sha256:8088087e6d3bd14084117eac0f2cd29e0c943bb9580e986c71ca26a1bb17f524",
+      "running": true,
+      "health": "healthy",
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-raw-retention-1",
+      "image": "sha256:8088087e6d3bd14084117eac0f2cd29e0c943bb9580e986c71ca26a1bb17f524",
+      "running": true,
+      "health": "healthy",
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-minio-1",
+      "image": "sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
+      "running": true,
+      "health": null,
+      "restart_policy": "unless-stopped"
+    },
+    {
+      "name": "ai-football-v2-local-storage-local-postgres-1",
+      "image": "sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36",
+      "running": true,
+      "health": "healthy",
+      "restart_policy": "unless-stopped"
+    }
+  ],
+  "reused_evidence": {
+    "web_branch": "refactor/TASK-78-web-ux",
+    "evidence_commit": "01c4510b0cdfe100d461ce5be7ab077320476d53",
+    "report": "reports/web-asset-versioning-20261112.json",
+    "visual_screens": 14,
+    "browser_checks": 68,
+    "manual_bet_checks": 18,
+    "a11y_scans": 30,
+    "a11y_checks": 23,
+    "live_read_only_views": 10
+  },
+  "limits": [
+    "Production business entry enabled; no signed Android or GitHub Release was created.",
+    "Existing unresolved extraction/account/frontend-layout work remains tracked separately.",
+    "Image artifact retains its truthful development version; no relabeling was used to claim full release acceptance."
+  ],
+  "evidence_directory": ".runtime/production-entry-20261112",
+  "activation_command": "bash .runtime/asset-versioning-release-20261112/compose.sh -f infra/production/web.yml up -d --no-deps --no-build --pull never --wait --wait-timeout 120 web",
+  "activation_exit_code": 0,
+  "activation_recreated_containers": 0,
+  "production_overlay_sha256": "57504b5cb969194937ee0bb0cd9e1ab51699b8efd19c9b626832c44c3d5125da"
+}

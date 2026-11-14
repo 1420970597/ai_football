@@ -1,0 +1,917 @@
+{
+  "recorded_at": "2026-11-08T23:42:52.068938+00:00",
+  "source_commit": "238b1d04829cf37cf3ccaa1ef21badc8a17d6c2c",
+  "fixed_framework_image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
+  "production_writes": 0,
+  "funded_tests": false,
+  "model_and_provider_unchanged": true,
+  "one_added_generation_at_a_time_with_production_idle_precheck": true,
+  "only_secondary_top_level_tool_descriptions_differ": true,
+  "baseline_container_retired_native_exit": 0,
+  "cases": [
+    {
+      "case": "e1850",
+      "profile": "full",
+      "input": "e1348-isolated-input",
+      "elapsed_ms": 13463.192,
+      "sdk_reported_usage": {
+        "prompt_tokens": 38774,
+        "completion_tokens": 1247,
+        "total_tokens": 40021
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "408364d0fb7cadc6233da7696c3508284d923562906056a427531064391812fb",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1850",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 1
+        },
+        "complete_zero_inventory_reads": 1,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "eb61a3bf156af25210e6174a732821417e2db3a45230d7c3506203a434ecb302",
+        "model-content.private.txt": "f4d4e7c0ddc9235a5723749fa24da81fa24b6e0ba54bf693fae16be2f70ccea3",
+        "framework-messages.private.json": "719576540573d0ef5882736b22feb210b87557433278103e912e578f3c3eab37"
+      }
+    },
+    {
+      "case": "e1851",
+      "profile": "compact",
+      "input": "e1348-isolated-input",
+      "elapsed_ms": 20849.962,
+      "sdk_reported_usage": {
+        "prompt_tokens": 37812,
+        "completion_tokens": 1499,
+        "total_tokens": 39311
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "408364d0fb7cadc6233da7696c3508284d923562906056a427531064391812fb",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1851",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 1
+        },
+        "complete_zero_inventory_reads": 1,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "1f87e82edc626e1114854abfb1abe83173a6fad2236edf44c100a9c790f3bd93",
+        "model-content.private.txt": "f13be3afac360a2afb909e65d504dcd696aae563138536430916c6c3660b7634",
+        "framework-messages.private.json": "e79d7dca93098e7f9ba029b1aeddc78dc0470747b6c4575281e4322a2c0a3e2e"
+      }
+    },
+    {
+      "case": "e1852",
+      "profile": "compact",
+      "input": "e1232-isolated-input",
+      "elapsed_ms": 16224.257,
+      "sdk_reported_usage": {
+        "prompt_tokens": 63168,
+        "completion_tokens": 1258,
+        "total_tokens": 64426
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1852",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "live",
+          "live"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 2,
+          "mcp_list_match_markets": 2,
+          "mcp_resolve_match": 1
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "c598c6388c2fb478db52b21a54d181e84a9dd469faf9c9626f8dc69d9d27a336",
+        "model-content.private.txt": "22cb6f1fb903a9d81b2a2620fb13fb41420197782762948180234e26bd054272",
+        "framework-messages.private.json": "caaab1f5550ae87897c13442b70db2027d50689a37511f6ce8e6238d04bd9fd1"
+      }
+    },
+    {
+      "case": "e1853",
+      "profile": "full",
+      "input": "e1232-isolated-input",
+      "elapsed_ms": 13485.362,
+      "sdk_reported_usage": {
+        "prompt_tokens": 62072,
+        "completion_tokens": 2887,
+        "total_tokens": 64959
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1853",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "live",
+          "live"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 2,
+          "mcp_resolve_match": 1,
+          "mcp_list_match_markets": 2
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "ad9d63546463ac484978588b48626248eac08314ef60ad989e9dd20a26cf9d32",
+        "model-content.private.txt": "aa281da9763725ab215d64c7954ac3d12ff37fdeb5b0e0a3fa05d491d6dcc4e2",
+        "framework-messages.private.json": "e4b2accf9c195a3bbc1238e35a539131df6b0aa747b6d3964638260e2e3e1bf9"
+      }
+    },
+    {
+      "case": "e1854",
+      "profile": "full",
+      "input": "e1151-isolated-input",
+      "elapsed_ms": 13764.597,
+      "sdk_reported_usage": {
+        "prompt_tokens": 48181,
+        "completion_tokens": 759,
+        "total_tokens": 48940
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1854",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 2
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 1
+      },
+      "raw_sha256": {
+        "result.json": "ee7887ea7eba9afe6fc6ea5fbda88f715ee53d96d1d2cee384bf8d6e3c0a2862",
+        "model-content.private.txt": "7e2f011be89590b5f622badf964b3f8598e00c3bab3a642370a12710b83a8d93",
+        "framework-messages.private.json": "af797086c6f66e0e87de8b2eeddd92fac85bd00b0c93512bfad05c94cf0bf686"
+      }
+    },
+    {
+      "case": "e1855",
+      "profile": "compact",
+      "input": "e1151-isolated-input",
+      "elapsed_ms": 12886.488,
+      "sdk_reported_usage": {
+        "prompt_tokens": 46503,
+        "completion_tokens": 701,
+        "total_tokens": 47204
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1855",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 2
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 1
+      },
+      "raw_sha256": {
+        "result.json": "0d787d03181ce7485bcac0bcc4fc529bdab89ff86f69f2d07926ee21fe302d33",
+        "model-content.private.txt": "6c2f562ec78385cfbc4376a8a3ff3ad62cb42658ffccaf1a4c8755d8d3aa188b",
+        "framework-messages.private.json": "182d1581ab3391a34e3cb71ce9a14517c8c0529312393b78e947c0699dc33d59"
+      }
+    },
+    {
+      "case": "e1856",
+      "profile": "compact",
+      "input": "e1348-isolated-input",
+      "elapsed_ms": 9828.251,
+      "sdk_reported_usage": {
+        "prompt_tokens": 38022,
+        "completion_tokens": 1330,
+        "total_tokens": 39352
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "408364d0fb7cadc6233da7696c3508284d923562906056a427531064391812fb",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1856",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 1
+        },
+        "complete_zero_inventory_reads": 1,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "7ff3bfdb18377d9b39537b689de59b79e00f6f05d912a8faebc3106758f9c014",
+        "model-content.private.txt": "01c13ae04be5641a668b2571d40c8790d47652dcfada24f6eb956915667eba82",
+        "framework-messages.private.json": "d64a4a5e26d2fae484a55657241b1349ce7a4100534ebd960bf34e5a87a2047f"
+      }
+    },
+    {
+      "case": "e1857",
+      "profile": "full",
+      "input": "e1348-isolated-input",
+      "elapsed_ms": 13139.558,
+      "sdk_reported_usage": {
+        "prompt_tokens": 38606,
+        "completion_tokens": 457,
+        "total_tokens": 39063
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "408364d0fb7cadc6233da7696c3508284d923562906056a427531064391812fb",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1857",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 1
+        },
+        "complete_zero_inventory_reads": 1,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "ad78a5bf496c6b550e5e3e7cd698359675f76981a9bf2a2b817d3a92f129f7ee",
+        "model-content.private.txt": "170e184a049c7dea71d70238d43db3a87ffe0e9e027b73f0841e6c9c88de06f7",
+        "framework-messages.private.json": "7137ecf6e3e1f7da5e966c74192dfc9f04cfab92542e6673f2bb36067b53bab7"
+      }
+    },
+    {
+      "case": "e1858",
+      "profile": "full",
+      "input": "e1232-isolated-input",
+      "elapsed_ms": 28392.363,
+      "sdk_reported_usage": {
+        "prompt_tokens": 86416,
+        "completion_tokens": 2947,
+        "total_tokens": 89363
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1858",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "live",
+          "live"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 2,
+          "mcp_list_match_markets": 4,
+          "mcp_resolve_match": 1
+        },
+        "complete_zero_inventory_reads": 4,
+        "repeated_complete_zero_inventory_reads": 2
+      },
+      "raw_sha256": {
+        "result.json": "bdb7ae52dc43e12d77db8a8fc9933b1672445f654303f4956ebca1cbc8074110",
+        "model-content.private.txt": "8be2123c743be99d02331cda9ab3dc75f428365e0f9a03de31b2060fb73c5e6d",
+        "framework-messages.private.json": "43258e49f761d8050da0d71fa1775d9b16feeb4ff2dec9ba20545d412276e191"
+      }
+    },
+    {
+      "case": "e1859",
+      "profile": "compact",
+      "input": "e1232-isolated-input",
+      "elapsed_ms": 15377.63,
+      "sdk_reported_usage": {
+        "prompt_tokens": 58626,
+        "completion_tokens": 1253,
+        "total_tokens": 59879
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1859",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "live",
+          "live"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 2,
+          "mcp_resolve_match": 1,
+          "mcp_list_match_markets": 2
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "3cc2d9d2b770b98fa3f9d93488557c0dccc071fb53e056481e377ff6b74e3943",
+        "model-content.private.txt": "b4b8306d781af1ac24ef356a61e473071edae9d7c436c79d2db796f42f0420c6",
+        "framework-messages.private.json": "ecd94583b5e8ee35d24041186815b1b3e5e60577c90bdd053ceb60824289cbb5"
+      }
+    },
+    {
+      "case": "e1860",
+      "profile": "compact",
+      "input": "e1151-isolated-input",
+      "elapsed_ms": 10904.97,
+      "sdk_reported_usage": {
+        "prompt_tokens": 30125,
+        "completion_tokens": 500,
+        "total_tokens": 30625
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1860",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 1
+        },
+        "complete_zero_inventory_reads": 1,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "61b344188277cc2cc8aaedb9447f77007153db946d6192940d2d495b59d48572",
+        "model-content.private.txt": "e220680f74477ebba9462a8fcb5d765c533fe82dc73cd1eb5847ae5e0cc3217c",
+        "framework-messages.private.json": "eb45c3da85501da497d9f4eb6152196c4cbd4c4ac80ad711a68ff888bae9b344"
+      }
+    },
+    {
+      "case": "e1861",
+      "profile": "full",
+      "input": "e1151-isolated-input",
+      "elapsed_ms": 25836.771,
+      "sdk_reported_usage": {
+        "prompt_tokens": 48457,
+        "completion_tokens": 2832,
+        "total_tokens": 51289
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1861",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 1
+        },
+        "complete_zero_inventory_reads": 1,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "4115055696d26c14ad83a9c0329ce7836c9f9b40ef0e24d2c28ccd957c6378a1",
+        "model-content.private.txt": "7bc174814a8bdb35019fb37601b8382991151ffc4654c063681dceed88df7791",
+        "framework-messages.private.json": "f2fce3e6eab13d5b0ee90527ac753f15152115f1b3bdcc57850c6a03e1395de8"
+      }
+    },
+    {
+      "case": "e1862",
+      "profile": "full",
+      "input": "e1348-isolated-input",
+      "elapsed_ms": 23377.29,
+      "sdk_reported_usage": {
+        "prompt_tokens": 29130,
+        "completion_tokens": 1588,
+        "total_tokens": 30718
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "408364d0fb7cadc6233da7696c3508284d923562906056a427531064391812fb",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1862",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 1
+        },
+        "complete_zero_inventory_reads": 1,
+        "repeated_complete_zero_inventory_reads": 0
+      },
+      "raw_sha256": {
+        "result.json": "68242326ca5794219b31d8e38e52c7f026bf3fe813fb13c01e3b85cbf8913b5f",
+        "model-content.private.txt": "29c6d24cdad75379ef4eba805d09351c5fd52849ee2f7318b855902206d9b053",
+        "framework-messages.private.json": "93ae2f39f41180bf037abe6a95eebba217b512005c59576efc3319d76f80c44b"
+      }
+    },
+    {
+      "case": "e1863",
+      "profile": "compact",
+      "input": "e1348-isolated-input",
+      "elapsed_ms": 12541.693,
+      "sdk_reported_usage": {
+        "prompt_tokens": 62476,
+        "completion_tokens": 1596,
+        "total_tokens": 64072
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "408364d0fb7cadc6233da7696c3508284d923562906056a427531064391812fb",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1863",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 2
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 1
+      },
+      "raw_sha256": {
+        "result.json": "a28e1e8d9ee64dcdc657cea10116e635622c404b6dff5dc1c2dd7da14905d089",
+        "model-content.private.txt": "9d2cba0f5a9d1cbbea1a4badba6bc245cee1b38d2291c7e0d84267d1916e94a2",
+        "framework-messages.private.json": "59139c188d810fd05af6b4ddcd47c6338a36e6f751b16f3a46107625d8a4fc8c"
+      }
+    },
+    {
+      "case": "e1864",
+      "profile": "compact",
+      "input": "e1232-isolated-input",
+      "elapsed_ms": 32377.77,
+      "sdk_reported_usage": {
+        "prompt_tokens": 85445,
+        "completion_tokens": 3064,
+        "total_tokens": 88509
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1864",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "live",
+          "live"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 2,
+          "mcp_resolve_match": 1,
+          "mcp_list_match_markets": 3
+        },
+        "complete_zero_inventory_reads": 3,
+        "repeated_complete_zero_inventory_reads": 1
+      },
+      "raw_sha256": {
+        "result.json": "0524f7aa0e897907a0e90896ee9da8e4ae07b855bc0feb35f257687d7654e0d9",
+        "model-content.private.txt": "c271aba1f30c4a0615a7cca54b1dbdb3b2cb8f465c11835d92d6ca783fc266ff",
+        "framework-messages.private.json": "3daeb6b23c08e3cb7260755cced62af8db12cc61392980899da2b444cb9dd822"
+      }
+    },
+    {
+      "case": "e1865",
+      "profile": "full",
+      "input": "e1232-isolated-input",
+      "elapsed_ms": 17246.351,
+      "sdk_reported_usage": {
+        "prompt_tokens": 88893,
+        "completion_tokens": 3427,
+        "total_tokens": 92320
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1865",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "live",
+          "live"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 2,
+          "mcp_list_match_markets": 4,
+          "mcp_resolve_match": 1
+        },
+        "complete_zero_inventory_reads": 4,
+        "repeated_complete_zero_inventory_reads": 2
+      },
+      "raw_sha256": {
+        "result.json": "41c01ace5c5d3ed6d44f2e87c1585ac78073203ac7b2a86f134d4b5dc7dc2994",
+        "model-content.private.txt": "5bcbd3270d5a94ba08086189fdfa1e47c09666732f5a9adcecc2456a1f2bfb99",
+        "framework-messages.private.json": "fa59192a74c6f0c1f640ddf0c74b48351df5d6b46f441b7c8a060173740be28c"
+      }
+    },
+    {
+      "case": "e1866",
+      "profile": "full",
+      "input": "e1151-isolated-input",
+      "elapsed_ms": 11917.994,
+      "sdk_reported_usage": {
+        "prompt_tokens": 47665,
+        "completion_tokens": 693,
+        "total_tokens": 48358
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1866",
+        "profile": "full",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 2
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 1
+      },
+      "raw_sha256": {
+        "result.json": "f3b3d447b6fdedb7c86a3d1be21967165e7991445d8ab561b3d82eb703310c6d",
+        "model-content.private.txt": "fdd0dc6e6deafad68f98c9ca91bdc896dbb23d3f7d0913149c7a2f84bcdc6b5d",
+        "framework-messages.private.json": "026840a535478e48581c557e0830561d19f80b17398ced5e31d744ac37f7873d"
+      }
+    },
+    {
+      "case": "e1867",
+      "profile": "compact",
+      "input": "e1151-isolated-input",
+      "elapsed_ms": 12513.986,
+      "sdk_reported_usage": {
+        "prompt_tokens": 46835,
+        "completion_tokens": 711,
+        "total_tokens": 47546
+      },
+      "completion_rounds": 1,
+      "native_exit": 0,
+      "manual_full_final_text_reviewed": true,
+      "image_count": 1,
+      "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+      "signal_count": 0,
+      "order_count": 0,
+      "identity_and_source_intent_correct": true,
+      "fixture_phases_and_transaction_verified": true,
+      "actual_tool_evidence": {
+        "case": "e1867",
+        "profile": "compact",
+        "actual_completion_query": true,
+        "phase_claim_conflicts": [],
+        "line_claim_conflicts": [],
+        "binding_phases": [
+          "scheduled"
+        ],
+        "tool_calls": {
+          "mcp_search_matches": 1,
+          "mcp_list_match_markets": 2
+        },
+        "complete_zero_inventory_reads": 2,
+        "repeated_complete_zero_inventory_reads": 1
+      },
+      "raw_sha256": {
+        "result.json": "c02db4a54ad58e2c9d0293e096bb6c1accdf37478da884bf376a724f0f25414e",
+        "model-content.private.txt": "bd8ae3c795570fe6ad89db896e5fe02c10646efa6581290f8a105931a7a1eceb",
+        "framework-messages.private.json": "940d0ca5c798ddc1fa80a4ec651f459cebb182f29128bbb868009e13b9d8e264"
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "input": "e1348-isolated-input",
+      "order": [
+        "full",
+        "compact"
+      ],
+      "full_case": "e1850",
+      "compact_case": "e1851",
+      "full_elapsed_ms": 13463.192,
+      "compact_elapsed_ms": 20849.962,
+      "compact_minus_full_ms": 7386.77,
+      "compact_minus_full_percent": 54.866
+    },
+    {
+      "input": "e1232-isolated-input",
+      "order": [
+        "compact",
+        "full"
+      ],
+      "full_case": "e1853",
+      "compact_case": "e1852",
+      "full_elapsed_ms": 13485.362,
+      "compact_elapsed_ms": 16224.257,
+      "compact_minus_full_ms": 2738.895,
+      "compact_minus_full_percent": 20.31
+    },
+    {
+      "input": "e1151-isolated-input",
+      "order": [
+        "full",
+        "compact"
+      ],
+      "full_case": "e1854",
+      "compact_case": "e1855",
+      "full_elapsed_ms": 13764.597,
+      "compact_elapsed_ms": 12886.488,
+      "compact_minus_full_ms": -878.109,
+      "compact_minus_full_percent": -6.379
+    },
+    {
+      "input": "e1348-isolated-input",
+      "order": [
+        "compact",
+        "full"
+      ],
+      "full_case": "e1857",
+      "compact_case": "e1856",
+      "full_elapsed_ms": 13139.558,
+      "compact_elapsed_ms": 9828.251,
+      "compact_minus_full_ms": -3311.307,
+      "compact_minus_full_percent": -25.201
+    },
+    {
+      "input": "e1232-isolated-input",
+      "order": [
+        "full",
+        "compact"
+      ],
+      "full_case": "e1858",
+      "compact_case": "e1859",
+      "full_elapsed_ms": 28392.363,
+      "compact_elapsed_ms": 15377.63,
+      "compact_minus_full_ms": -13014.733,
+      "compact_minus_full_percent": -45.839
+    },
+    {
+      "input": "e1151-isolated-input",
+      "order": [
+        "compact",
+        "full"
+      ],
+      "full_case": "e1861",
+      "compact_case": "e1860",
+      "full_elapsed_ms": 25836.771,
+      "compact_elapsed_ms": 10904.97,
+      "compact_minus_full_ms": -14931.801,
+      "compact_minus_full_percent": -57.793
+    },
+    {
+      "input": "e1348-isolated-input",
+      "order": [
+        "full",
+        "compact"
+      ],
+      "full_case": "e1862",
+      "compact_case": "e1863",
+      "full_elapsed_ms": 23377.29,
+      "compact_elapsed_ms": 12541.693,
+      "compact_minus_full_ms": -10835.597,
+      "compact_minus_full_percent": -46.351
+    },
+    {
+      "input": "e1232-isolated-input",
+      "order": [
+        "compact",
+        "full"
+      ],
+      "full_case": "e1865",
+      "compact_case": "e1864",
+      "full_elapsed_ms": 17246.351,
+      "compact_elapsed_ms": 32377.77,
+      "compact_minus_full_ms": 15131.419,
+      "compact_minus_full_percent": 87.737
+    },
+    {
+      "input": "e1151-isolated-input",
+      "order": [
+        "full",
+        "compact"
+      ],
+      "full_case": "e1866",
+      "compact_case": "e1867",
+      "full_elapsed_ms": 11917.994,
+      "compact_elapsed_ms": 12513.986,
+      "compact_minus_full_ms": 595.992,
+      "compact_minus_full_percent": 5.001
+    }
+  ],
+  "summary": {
+    "full": {
+      "cases": 9,
+      "median_elapsed_ms": 13764.597,
+      "min_elapsed_ms": 11917.994,
+      "max_elapsed_ms": 28392.363,
+      "median_sdk_reported_prompt_tokens": 48181,
+      "repeated_complete_zero_inventory_reads": 6,
+      "cases_with_repeated_complete_zero_inventory_reads": 4
+    },
+    "compact": {
+      "cases": 9,
+      "median_elapsed_ms": 12886.488,
+      "min_elapsed_ms": 9828.251,
+      "max_elapsed_ms": 32377.77,
+      "median_sdk_reported_prompt_tokens": 46835,
+      "repeated_complete_zero_inventory_reads": 4,
+      "cases_with_repeated_complete_zero_inventory_reads": 4
+    },
+    "paired_comparisons": 9,
+    "compact_faster_pairs": 5,
+    "median_paired_compact_minus_full_ms": -878.109,
+    "median_paired_compact_minus_full_percent": -6.379
+  },
+  "stable_production_latency_gain_proven": false,
+  "three_second_acceptance": false,
+  "limits": [
+    "Three fixed original inputs, three interleaved pairs each; eighteen runs are not eighteen independent source messages.",
+    "Original images and source meaning verified against frozen fixture snapshots; quote inventory is deliberately empty, not fresh quote acceptance.",
+    "SDK prompt counters are cumulative across model turns and do not establish provider billing or unique input tokens.",
+    "Shared gateway load and within-run natural arrival are not controlled; pairing reduces but does not remove confounding.",
+    "Redundant reads after complete zero inventory remain explicitly counted, including in the full baseline.",
+    "Some final prose claims no repeated read while actual tool traces show repetition; tool traces are authoritative.",
+    "No candidate production deployment or production latency improvement is established by this replay."
+  ]
+}

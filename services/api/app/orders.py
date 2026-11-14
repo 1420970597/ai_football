@@ -1,20 +1,22 @@
 """用户账户事务锁下的订单预留与发送许可；未知结果始终保留敞口。"""
 
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-import json
 import uuid
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 
 from fastapi import HTTPException
+# services/ 是运行时导入根（容器与测试 PYTHONPATH）；静态检查器没有该路径配置。
+from execution_scope import execution_market_supported, native_sport_id  # pyright: ignore[reportMissingImports]
 
 from .auth import audit
 from .membership import has_entitlement
-from .review_state import fresh_quote
 from .security import decrypt_secret
+from .expert_profitability import require_expert_permission
 
 
 def live_enabled(settings) -> bool:
-    return getattr(settings, "live_orders_enabled", False) is True
+    value = getattr(settings, "live_orders_enabled", False)
+    return isinstance(value, bool) and value
 
 
 async def global_enabled(conn, settings) -> bool:
@@ -42,9 +44,9 @@ async def invalid_policies(conn):
     )
 
 
-async def eligible_signal(conn, signal_id, max_age: int):
+async def eligible_signal(conn, signal_id, max_age: int | None = None):
     row = await conn.fetchrow(
-        "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,"
+        "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,m.posted_at AS message_posted_at,"
         "e.enabled AS expert_enabled,src.enabled AS source_enabled,se.enabled AS trusted,f.phase AS current_phase,"
         "f.sport,f.home_score,f.away_score,q.id AS quote_id,q.price AS current_price,q.source_updated_at,"
         "q.status,q.play_id,q.market_instance_id,q.selection_id,q.market_kind AS current_kind,q.score_basis AS current_basis "
@@ -52,19 +54,23 @@ async def eligible_signal(conn, signal_id, max_age: int):
         "JOIN v2_experts e ON e.id=s.expert_id JOIN v2_expert_sources src ON src.id=m.source_id "
         "JOIN v2_source_experts se ON se.source_id=src.id AND se.expert_id=e.id JOIN v2_fixtures f ON f.id=s.fixture_id "
         "JOIN v2_current_quotes q ON q.fixture_id=s.fixture_id AND q.market_id=s.market_id AND q.period=s.period "
-        "AND q.line=s.line AND q.selection=s.selection WHERE s.id=$1", signal_id,
+        "AND q.market_kind=s.market_kind AND (q.line IS NOT DISTINCT FROM s.line OR "
+        "s.market_kind='winner' AND COALESCE(q.line,0)=0 AND COALESCE(s.line,0)=0) "
+        "AND q.selection=s.selection WHERE s.id=$1 FOR SHARE OF s", signal_id,
     )
     if not row:
         raise HTTPException(409, "推荐及原生盘口不可用")
     now = datetime.now(timezone.utc)
-    quote = {"source_updated_at": row["source_updated_at"], "price": row["current_price"], "status": row["status"]}
-    if (row["outcome"] != "pending" or row["current_phase"] != "live" or row["sport"] != "football"
+    if (row["outcome"] != "pending" or row["current_phase"] not in {"scheduled", "live"}
+            or row["phase"] != row["current_phase"]
             or row["deleted_at"] or row["withdrawn_at"] or row["media_state"] != "ready" or not all((row["expert_enabled"], row["source_enabled"], row["trusted"]))
-            or not fresh_quote(quote, max_age, now) or row["recommendation_price"] != row["current_price"]
             or any(not row[key] for key in ("play_id", "market_instance_id", "selection_id"))
-            or row["current_kind"] not in {"winner", "handicap", "total"}
-            or row["created_at"] < now - timedelta(minutes=5)):
-        raise HTTPException(409, "推荐、来源、滚球状态或当前报价不满足实盘条件")
+            or not execution_market_supported(row["sport"], row["market_id"], row["current_kind"], row["period"])
+            or row["sport"] == "basketball" and row["selection"] == "draw"
+            or row["created_at"] < now - timedelta(minutes=5)
+            or row["message_posted_at"] < now - timedelta(minutes=5)
+            or row["message_posted_at"] > now + timedelta(seconds=5)):
+        raise HTTPException(409, "推荐、来源或当前比赛盘口不满足实盘条件")
     latest = await conn.fetchval("SELECT max(revision) FROM v2_expert_messages WHERE source_id=$1 AND platform_message_id=$2",
                                  row["source_id"], row["platform_message_id"])
     if latest != row["message_revision"]:
@@ -88,6 +94,31 @@ async def account_policy(conn, user_id, settings):
     return account, policy
 
 
+def manual_limits_valid(stake, daily_limit, open_exposure_limit) -> bool:
+    """手动下注金额必须为正且同时落在日限额与开放敞口之内。"""
+    try:
+        stake, daily, exposure = Decimal(str(stake)), Decimal(str(daily_limit)), Decimal(str(open_exposure_limit))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    return all(value.is_finite() for value in (stake, daily, exposure)) and Decimal(0) < stake <= min(daily, exposure)
+
+
+async def manual_policy(conn, user_id, settings):
+    """手动下注只依赖本人显式保存的金额，不要求自动投注已启用。"""
+    account = await conn.fetchrow("SELECT a.*,u.disabled_at,u.role FROM v2_leyu_accounts a JOIN v2_users u ON u.id=a.user_id WHERE a.user_id=$1 FOR UPDATE OF a", user_id)
+    policy = await conn.fetchrow("SELECT * FROM v2_user_bet_settings WHERE user_id=$1 FOR UPDATE", user_id)
+    if (not account or account["disabled_at"] or account['role']!='user' or account["health_state"] != "healthy" or not account["encrypted_session"]
+            or account['renewal_state']!='ready' or not account['last_verified_at']
+            or (datetime.now(timezone.utc)-account['last_verified_at']).total_seconds()>120
+            or not policy or policy["emergency_stopped"] or policy["manual_stake"] <= 0):
+        raise HTTPException(409, "本人账户或手动下注金额尚未就绪")
+    if not live_enabled(settings) or not await global_enabled(conn, settings):
+        raise HTTPException(403, "实际交易尚未被开放")
+    if not await has_entitlement(user_id, "automatic_betting", connection=conn):
+        raise HTTPException(403, "当前会员没有实盘交易权益")
+    return account, policy
+
+
 async def exposure_totals(conn, user_id, daily_timezone: str, at: datetime | None = None):
     """Sum the selected local calendar day and every still-reserved order."""
     moment = at if at is not None else datetime.now(timezone.utc)
@@ -106,64 +137,94 @@ async def exposure_totals(conn, user_id, daily_timezone: str, at: datetime | Non
     )
 
 
-async def reserve_signal(conn, user_id, signal_id, settings):
-    account, policy = await account_policy(conn, user_id, settings)
+async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = False):
+    if manual:
+        account, policy = await manual_policy(conn, user_id, settings)
+    else:
+        account, policy = await account_policy(conn, user_id, settings)
     previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND signal_id=$2 AND account_id IS NOT NULL", user_id, signal_id)
     if previous:
         return previous
-    signal = await eligible_signal(conn, signal_id, settings.quote_max_age_seconds)
-    if signal["expert_id"] not in policy["allowed_experts"]:
-        raise HTTPException(403, "本人未允许此专家自动投注")
-    stake = policy["stake_per_order"]
-    if stake <= 0 or stake > policy["max_per_order"]:
-        raise HTTPException(409, "单笔限额不足")
+    signal = await eligible_signal(conn, signal_id)
+    if manual:
+        stake = policy["manual_stake"]
+        if not manual_limits_valid(stake, policy["daily_limit"], policy["open_exposure_limit"]):
+            raise HTTPException(409, "手动下注金额或限额无效，请先保存合法金额")
+    else:
+        await require_expert_permission(conn, policy, signal['expert_id'])
+        stake = policy["stake_per_order"]
+        if stake <= 0 or stake > policy["max_per_order"]:
+            raise HTTPException(409, "单笔限额不足")
     sums = await exposure_totals(conn, user_id, policy["daily_timezone"])
     if sums["daily"] + stake > policy["daily_limit"] or sums["exposure"] + stake > policy["open_exposure_limit"]:
         raise HTTPException(409, "当日或开放敞口限额不足")
     baseline = signal["score_baseline"] or {}
     score = ""
-    if baseline.get("home_score") is not None and baseline.get("away_score") is not None:
+    if signal["current_phase"] == "live" and baseline.get("home_score") is not None and baseline.get("away_score") is not None:
         score = f"{baseline['home_score']}:{baseline['away_score']}"
     snapshot = {"match_id": signal["fixture_id"].split(":", 1)[-1], "market_instance_id": signal["market_instance_id"],
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
                 "selection_code": {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"]),
-                "sport_id": "1", "chpid": signal["market_id"], "kind": signal["current_kind"], "period": signal["period"],
-                "line": str(signal["line"]), "price": str(signal["current_price"]), "phase": "live", "score_benchmark": score}
+                "sport_id": native_sport_id(signal["sport"]), "chpid": signal["market_id"], "kind": signal["current_kind"], "period": signal["period"],
+                "line": str(signal["line"]) if signal["line"] is not None else None,
+                "price": str(signal["current_price"]), "reference_quote_price": str(signal["current_price"]),
+                "expert_recommendation_price": str(signal["recommendation_price"]),
+                "phase": signal["current_phase"], "score_benchmark": score}
     identity = uuid.uuid4()
     row = await conn.fetchrow(
         "INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,account_id,binding_revision,config_revision,"
-        "policy_revision,provider_identity_hash,reserved_stake,quote_snapshot) VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10,$11,$5,$12) RETURNING *",
+        "policy_revision,provider_identity_hash,reserved_stake,quote_snapshot,manual) VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10,$11,$5,$12,$13) RETURNING *",
         identity, user_id, signal_id, f"expert:{user_id}:{signal_id}", stake, signal["current_price"], account["id"],
-        account["binding_revision"], account["config_revision"], policy["revision"], account["provider_identity_hash"], snapshot,
+        account["binding_revision"], account["config_revision"], policy["revision"], account["provider_identity_hash"], snapshot, manual,
     )
-    await audit(conn, user_id, "system", "order_reserved", "bet_order", str(identity), details={"stake": str(stake), "signal_id": str(signal_id)})
+    await audit(conn, user_id, "user" if manual else "system", "manual_order_reserved" if manual else "order_reserved", "bet_order", str(identity), details={"stake": str(stake), "signal_id": str(signal_id)})
     return row
 
 
 async def cancel_unsent(conn, user_id, reason: str):
-    return await conn.execute("UPDATE v2_bet_orders SET state='cancelled',reserved_stake=0,lease_until=NULL,"
-                              "result_payload=jsonb_build_object('reason',$2::text),updated_at=now() WHERE user_id=$1 AND state='pending'", user_id, reason)
+    return await conn.execute("UPDATE v2_bet_orders SET state='cancelled',reserved_stake=0,lease_until=NULL,result_payload=jsonb_build_object('reason',$2::text),updated_at=now() WHERE user_id=$1 AND state='pending'", user_id, reason)
 
 
 async def protect_inflight_binding(conn,user_id):
     if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_bet_orders WHERE user_id=$1 AND state='submitting' AND lease_until>now())",user_id):
         raise HTTPException(409,'资金请求仍在途，结束或转入未知核对后才能修改账户绑定')
-    await conn.execute("UPDATE v2_bet_orders SET state='unknown',result_payload=jsonb_build_object('reason','binding_after_expired_send'),updated_at=now() "
-                       "WHERE user_id=$1 AND state='submitting' AND (lease_until IS NULL OR lease_until<=now())",user_id)
+    await conn.execute("UPDATE v2_bet_orders SET state='unknown',result_payload=jsonb_build_object('reason','binding_after_expired_send'),updated_at=now() WHERE user_id=$1 AND state='submitting' AND COALESCE(lease_until,now())<=now()",user_id)
 
 
-async def recheck_order(conn, order, settings):
-    account, policy = await account_policy(conn, order["user_id"], settings)
+def order_is_manual(order) -> bool:
+    """订单是否由用户手动下注产生；缺列按自动投注处理。"""
+    try:
+        return bool(order["manual"])
+    except (KeyError, IndexError):  # asyncpg Record 用 KeyError 表示缺列
+        return False
+
+
+async def recheck_order(conn, order, settings, *, include_signal=False):
+    manual = order_is_manual(order)
+    if manual:
+        account, policy = await manual_policy(conn, order["user_id"], settings)
+    else:
+        account, policy = await account_policy(conn, order["user_id"], settings)
     if (account["id"] != order["account_id"] or account["binding_revision"] != order["binding_revision"]
             or account["config_revision"] != order["config_revision"] or policy["revision"] != order["policy_revision"]):
         raise HTTPException(409, "账户、会话或本人限额版本已变化")
-    signal = await eligible_signal(conn, order["signal_id"], settings.quote_max_age_seconds)
-    if signal["expert_id"] not in policy["allowed_experts"] or order["stake"] > policy["max_per_order"]:
-        raise HTTPException(409, "推荐或单笔许可已失效")
+    signal = await eligible_signal(conn, order["signal_id"])
+    if manual:
+        if order["stake"] != policy["manual_stake"]:
+            raise HTTPException(409, "手动下注金额已变更")
+    else:
+        await require_expert_permission(conn, policy, signal['expert_id'])
+        if order["stake"] > policy["max_per_order"]:
+            raise HTTPException(409, "推荐或单笔许可已失效")
     current = order["quote_snapshot"]
-    if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id", "selection_id")):
+    if current["phase"] != signal["current_phase"] or current["sport_id"] != native_sport_id(signal["sport"]):
+        raise HTTPException(409, "比赛阶段或体育项目已经变化")
+    if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id")):
         raise HTTPException(409, "原生盘口标识已经变化")
-    return account
+    selection_code = {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"])
+    if not selection_code or current["selection_code"] != selection_code:
+        raise HTTPException(409, "推荐方向与原生盘口不匹配")
+    return (account, signal) if include_signal else account
 
 
 def prepared_line(value, kind):
@@ -179,3 +240,14 @@ def prepared_line(value, kind):
         return sum(values)/len(values) if all(value.is_finite() for value in values) else None
     except Exception:
         return None
+
+
+def prepared_line_matches(raw, expected, kind):
+    """No-line winner is compatible with legacy zero, never a missing Asian line."""
+    if isinstance(raw, bool) or isinstance(expected, bool):
+        return False
+    actual = prepared_line(raw, kind)
+    wanted = prepared_line(expected, kind)
+    if kind == 'winner':
+        return expected != '' and actual == Decimal('0') and wanted == Decimal('0')
+    return actual is not None and wanted is not None and actual == wanted

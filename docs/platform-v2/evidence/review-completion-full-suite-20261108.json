@@ -1,0 +1,16 @@
+{
+  "schema": "safe-verification-evidence-v1",
+  "scope": "E1036 frozen be94 only; later quote-ID fix excluded",
+  "source_parent_commit": "be94bfc7afd4dfa90b9b7374030993d41cacca7f",
+  "committed_source_verified": true,
+  "tests": 1808,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 1206.542,
+  "native_exit": 0,
+  "controller_exit": 0,
+  "report_sha256": "455e7012cfe4fa79be61394a6410f0712addf1181dbb340275fed4c3f4fa6f0b",
+  "production_semantic_acceptance": false,
+  "three_second_goal_verified": false
+}

@@ -1,0 +1,92 @@
+{
+  "schema": "safe-observation-evidence-v1",
+  "run_id": "E1029/E1030",
+  "window_start": "2026-11-08T13:05:02.756450+00:00",
+  "window_last_database_sample": "2026-11-08T13:35:03.761540+00:00",
+  "database_samples": 56,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 168,
+    "published_posts": 12,
+    "older_posts_revised": 155,
+    "published_ready": 11,
+    "published_pending": 0,
+    "published_unsupported": 1
+  },
+  "reviews_final": {
+    "eligible": 11,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 11,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 13,
+    "avg_ms": "5128.0",
+    "p95_ms": "10359.9",
+    "within_3s": 6,
+    "older_backlog_versions_received": 155
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 12
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 12
+    }
+  ],
+  "market_samples": 61,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T13:34:24.840869+00:00",
+    "last_poll_elapsed_ms": 27815.2,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 32820,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 20.9,
+    "oldest_quote_age_seconds": 324703.5,
+    "failed_batches": 0
+  },
+  "official": {
+    "read_only": true,
+    "official_posts": 12,
+    "normalized_posts": 12,
+    "matched": 12,
+    "missing": []
+  },
+  "semantic": {
+    "messages": 11,
+    "messages_with_signal": 2,
+    "accepted_event_to_conclusion_ms": [
+      63392.738,
+      139021.21
+    ],
+    "known_quote_id_intent_defect": true,
+    "second_image_fixture_identity_gap_retained": true
+  },
+  "completeness_is_not_semantic_correctness": true,
+  "three_second_goal_verified": false,
+  "raw_text_images_authors_or_credentials_included": false
+}

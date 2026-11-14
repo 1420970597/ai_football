@@ -1,0 +1,75 @@
+{
+  "observed_at": "2026-11-08T18:06:42.340252+00:00",
+  "scope": "bounded last twenty minutes remote collector logs",
+  "read_only": true,
+  "log_lines_read": 601,
+  "upload_samples": 171,
+  "upload_elapsed_ms": {
+    "samples": 171,
+    "min": 1305.4,
+    "median": 3061.7,
+    "p95": 5588.1,
+    "max": 10937.9
+  },
+  "http_ms": {
+    "samples": 171,
+    "min": 1197.4,
+    "median": 2075.9,
+    "p95": 3800.0,
+    "max": 10264.0
+  },
+  "lock_wait_ms": {
+    "samples": 171,
+    "min": 0.0,
+    "median": 5.6,
+    "p95": 3128.7,
+    "max": 5359.6
+  },
+  "upload_outcomes": {
+    "response": 171
+  },
+  "poll_elapsed_ms": {
+    "samples": 21,
+    "min": 19252.1,
+    "median": 25225.1,
+    "p95": 28145.7,
+    "max": 41021.6
+  },
+  "production_writes": 0,
+  "by_envelope_size": {
+    "small_up_to_64": {
+      "samples": 107,
+      "median_elapsed_ms": 2824.8,
+      "median_http_ms": 1885.0,
+      "max_lock_wait_ms": 5359.6,
+      "all_http_200": true
+    },
+    "facts_sized_500": {
+      "samples": 64,
+      "median_elapsed_ms": 3612.95,
+      "median_http_ms": 2462.5,
+      "max_lock_wait_ms": 2954.0,
+      "all_http_200": false
+    }
+  },
+  "response_status_counts": {
+    "200": 170,
+    "503": 1
+  },
+  "non_200_uploads": [
+    {
+      "outcome": "response",
+      "stage": "request",
+      "lock_wait_ms": 0.0,
+      "http_ms": 10264.0,
+      "elapsed_ms": 10264.0,
+      "response_status": 503,
+      "fixture_count": 500
+    }
+  ],
+  "limitations": [
+    "last 600 log lines cap means this is not an exhaustive twenty-minute census",
+    "batch size does not prove contents or unchanged fixture source timestamps",
+    "does not measure upstream collection separately or prove safe upload skipping"
+  ]
+}

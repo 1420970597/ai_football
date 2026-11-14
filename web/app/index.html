@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width,initial-scale=1,viewport-fit=cover"
     />
-    <meta name="theme-color" content="#403278" />
+    <meta name="theme-color" content="#0868c5" />
     <meta name="color-scheme" content="light" />
     <title>球讯比分 · 专家与赛事</title>
     <link rel="stylesheet" href="/assets/app.css" />
@@ -30,7 +30,7 @@
           ><span>球讯比分<small>QIUXUN SCORE</small></span></a
         >
         <nav class="main-nav" aria-label="主导航">
-          <button class="active" data-page="scores">足球比分</button
+          <button class="active" data-page="scores" data-sport-label>足球比分</button
           ><button data-page="scores" data-phase="scheduled">近日赛程</button
           ><button data-page="scores" data-phase="finished">完场比分</button
           ><button data-page="experts">专家推荐</button
@@ -42,7 +42,7 @@
     <main id="main" class="site-width main-layout" tabindex="-1">
       <aside class="left-rail" aria-label="赛事与专家服务导航">
         <h2>赛事中心</h2>
-        <button class="rail-active" data-page="scores">
+        <button class="rail-active" data-page="scores" data-sport-label>
           足球比分 <span id="fixture-count">—</span></button
         ><button data-page="scores" data-phase="live">滚球赛事</button
         ><button data-page="scores" data-phase="scheduled">近日赛程</button
@@ -77,7 +77,11 @@
           <div class="sports-bar" role="group" aria-label="体育项目">
             <button class="active" data-sport="football">足球</button
             ><button data-sport="basketball">篮球</button
-            ><span>比分与盘口</span>
+            ><span id="sport-context">足球比分与盘口</span>
+          </div>
+          <div class="section-tabs homepage-match-tabs" role="group" aria-label="首页比赛范围">
+            <button class="active" data-match-scope="recommended" aria-pressed="true">专家关联比赛</button>
+            <button data-match-scope="all" aria-pressed="false">全部赛事</button>
           </div>
           <div class="score-tabs" role="group" aria-label="比赛状态">
             <button data-phase="all" class="active">全部</button
@@ -121,11 +125,24 @@
             </button>
           </div>
           <div id="matches-notice" class="notice" role="status" hidden></div>
+          <section id="account-history-summary" class="account-history-summary" aria-live="polite" aria-label="本人近七日实盘记录">登录后查看本人近 7 日账户记录。</section>
+          <section id="manual-bet-panel" class="manual-bet-panel" aria-label="一键实盘下注设置" hidden>
+            <form id="manual-bet-form">
+              <strong>一键实盘下注金额</strong>
+              <div class="form-grid">
+                <label>每单金额<input name="stake_per_order" type="number" min="0.01" step="0.01" required /></label>
+                <label>每日限额<input name="daily_limit" type="number" min="0.01" step="0.01" required /></label>
+                <label>开放敞口上限<input name="open_exposure_limit" type="number" min="0.01" step="0.01" required /></label>
+              </div>
+              <button class="primary-button" type="submit">保存下注金额</button>
+              <small id="manual-bet-status" class="muted">保存后可在下方专家关联比赛点“实盘买入”。下单按当前盘口重新核验，账户未校验或实盘未开放时不可下单。</small>
+            </form>
+          </section>
           <div class="score-table">
             <div class="score-table-head" aria-hidden="true">
               <span>联赛</span><span>时间</span><span>状态</span
               ><span>主队</span><span>比分</span><span>客队</span
-              ><span>当前盘口 / 赔率</span><span>详情</span>
+              ><span id="match-market-heading">专家关联盘口</span><span>详情</span>
             </div>
             <div id="matches-list" aria-live="polite"></div>
             <div id="matches-state" class="empty-state"></div>
@@ -133,8 +150,8 @@
               继续加载赛事
             </button>
           </div>
-          <p class="data-footnote">
-            上游报价时间未知、过期或停盘时，均不视为可交易报价。关注仅保存在当前浏览器。
+          <p class="data-footnote" id="matches-footnote">
+            专家记录展示推荐时的盘口与系统赔率，供查询原文及结算；不代表当前成交价格。关注仅保存在当前浏览器。
           </p>
         </section>
         <section id="view-experts" class="view" aria-labelledby="experts-title">
@@ -153,6 +170,10 @@
               最新推荐</button
             ><button data-page="messages">发言与审核原文</button>
           </div>
+          <div class="section-tabs expert-sport-tabs" role="group" aria-label="专家推荐运动类型">
+            <button class="active" data-expert-sport="football" aria-pressed="true">足球专家推荐</button>
+            <button data-expert-sport="basketball" aria-pressed="false">篮球专家推荐</button>
+          </div>
           <div class="stat-help">
             一单位收益使用推荐时系统赔率；准确率和收益不等同于实盘盈利。<button
               id="stats-help"
@@ -162,6 +183,14 @@
             </button>
           </div>
           <div id="experts-state" class="empty-state" hidden></div>
+          <form id="expert-stats-filter" class="filter-row" aria-label="专家统计筛选">
+            <label>运动<select name="sport"><option value="football">足球</option><option value="basketball">篮球</option></select></label>
+            <label>统计窗口<select name="days"><option value="7">近7天</option><option value="30" selected>近30天</option><option value="90">近90天</option><option value="365">近365天</option></select></label>
+            <label>推荐阶段<select name="phase"><option value="all">全部阶段</option><option value="scheduled">赛前</option><option value="live">滚球</option></select></label>
+            <label>玩法<select name="market_kind"><option value="all">全部玩法</option><option value="winner">独赢</option><option value="handicap">让球</option><option value="total">大小</option><option value="team_total">单队进球大小</option></select></label>
+            <label>推荐来源<select name="source_id"><option value="">全部来源</option></select></label>
+            <button class="small-button" type="submit">应用统计筛选</button>
+          </form>
           <div id="expert-ranking">
             <div class="filter-row">
               <button
@@ -289,12 +318,6 @@
               <summary>登录安全</summary>
               <form id="password-form" class="compact-form">
                 <label
-                  >当前密码<input
-                    name="current_password"
-                    type="password"
-                    autocomplete="current-password"
-                    required /></label
-                ><label
                   >新密码<input
                     name="new_password"
                     type="password"
@@ -315,6 +338,11 @@
                   排队无资金校验
                 </button>
               </div>
+              <form id="leyu-device-authorization" class="compact-form" hidden>
+                <p class="form-note">在常用设备的乐鱼 App 或站内信获取授权安全码，仅在此处提交，用于当前账户的一次无资金登录校验。请勿将安全码发给任何人。</p>
+                <label>乐鱼授权安全码<input name="security_code" type="password" autocomplete="off" maxlength="32" required /></label>
+                <button class="primary-button">提交安全码并校验</button>
+              </form>
               <form id="leyu-form" class="compact-form">
                 <label
                   >账户备注<input
@@ -358,6 +386,20 @@
                     type="checkbox"
                   />我本人启用自动投注</label
                 >
+                <div id="betting-expert-mode-control">
+                <label
+                  >专家跟随模式<select
+                    name="expert_selection_mode"
+                    aria-describedby="betting-expert-mode-note"
+                  >
+                    <option value="manual">手动选择专家</option>
+                    <option value="profitable">自动跟随全部盈利专家</option>
+                  </select></label
+                >
+                <p id="betting-expert-mode-note" class="form-note">
+                  盈利模式动态跟随当前统计周期内近30天1单位净收益大于0、且有有效结算的全部专家，不限于下方已选名单。走盘、作废不计有效结算；各统计页面筛选不改变此条件。自动执行支持足球赛前与滚球，以及篮球全场胜负、大小、让分的赛前与滚球。由本人保存后生效，每单本金及限额保持本人设置。
+                </p>
+                </div>
                 <fieldset>
                   <legend>允许跟随的专家</legend>
                   <div id="bet-experts" class="checkbox-grid"></div>
@@ -414,7 +456,7 @@
                   ><input
                     name="confirmed"
                     type="checkbox"
-                  />我了解自动投注会使用本人账户资金，并确认以上专家与限额。</label
+                  />我了解自动投注会使用本人账户资金，支持足球赛前与滚球、篮球全场胜负及大小让分的赛前与滚球，并确认以上专家、每单本金与限额。</label
                 ><button class="primary-button">保存投注设置</button>
               </form>
               <button id="emergency-stop" class="danger-button">
@@ -432,7 +474,7 @@
             <details class="settings-section">
               <summary>导出本人记录</summary>
               <p class="form-note">
-                按页读取并下载本人资料、会员和订单，敏感字段不会导出。读取前可能要求再次验证身份。
+                按页读取并下载本人资料、会员和订单，敏感字段不会导出。
               </p>
               <div class="form-actions">
                 <button class="small-button" data-export="profile">
@@ -454,12 +496,6 @@
               </button>
               <form id="closure-form" class="compact-form">
                 <label
-                  >本人密码<input
-                    name="password"
-                    type="password"
-                    autocomplete="current-password"
-                    required /></label
-                ><label
                   >输入“注销我的球讯账户”<input
                     name="confirmation_phrase"
                     required
@@ -610,14 +646,15 @@
                       class="compact-form directory-search"
                     >
                       <label
-                        >搜索本群管理员<input
+                        >搜索群内作者<input
                           id="tg-admin-search"
                           type="search"
                           maxlength="120"
                           placeholder="昵称、作者 ID 或 @用户名"
                       /></label>
+                      <label>搜索范围<select id="tg-directory-scope"><option value="members">所有成员（含普通成员）</option><option value="admins">仅管理员</option></select></label>
                       <div class="form-actions">
-                        <button class="small-button">搜索管理员</button
+                        <button class="small-button">搜索成员</button
                         ><button
                           type="button"
                           id="tg-admin-search-clear"
@@ -629,7 +666,7 @@
                     </form>
                     <div id="source-admins"></div>
                     <button id="tg-admins-more" class="small-button" hidden>
-                      更多管理员
+                      加载更多作者
                     </button>
                     <form id="expert-source-form" class="compact-form">
                       <h3>添加已核验作者</h3>
@@ -811,29 +848,12 @@
               </button>
             </section>
             <section id="admin-system" class="admin-panel" hidden>
-              <details class="settings-section">
-                <summary>管理身份恢复</summary>
-                <div id="mfa-status"></div>
-                <div class="form-actions">
-                  <button id="mfa-refresh" class="small-button">
-                    刷新验证器状态</button
-                  ><button id="mfa-start" class="small-button">
-                    登记新验证器 / 换手机
-                  </button>
-                </div>
-                <p class="form-note">
-                  恢复码只能查看一次。丢失动态验证码时仍需邮箱、密码及未使用的恢复码登录。
-                </p>
-                <button id="generate-mfa-recovery" class="small-button">
-                  生成新一组一次性恢复码
-                </button>
-              </details>
               <form id="system-settings" class="compact-form settings-form">
                 <h2>Hermes 与业务设置</h2>
                 <label
-                  >分析模型<input
+                  >候选分析模型<input
                     name="hermes_analysis_model"
-                    placeholder="由 Hermes 配置管理" /></label
+                    placeholder="修改后进入候选审核，不会立即生效" /><small>当前模型继续运行。新模型需冻结比较证据、人工复核及显式激活。</small></label
                 ><label
                   >报价有效秒数<input
                     name="quote_max_age_seconds"
@@ -847,6 +867,23 @@
                   />开放用户本人启用自动投注</label
                 ><button class="primary-button">保存业务设置</button>
               </form>
+              <details class="settings-section" id="model-configuration-section">
+                <summary>模型候选、质量证据与激活</summary>
+                <p id="model-configuration-state" class="form-note" aria-live="polite">等待读取模型配置</p>
+                <button id="refresh-model-configuration" class="small-button">刷新模型版本</button>
+                <form id="model-candidate-form" class="compact-form">
+                  <h3>冻结模型 / 提示 / 技能候选</h3>
+                  <label>模型标识<input name="model" maxlength="200" required /></label>
+                  <label>模型修订版本<input name="model_revision" maxlength="200" required /></label>
+                  <label>提示 SHA-256<input name="prompt_sha256" pattern="[0-9a-f]{64}" required /></label>
+                  <label>技能版本<input name="skill_version" maxlength="200" required /></label>
+                  <label>Hermes 版本<input name="hermes_version" maxlength="200" required /></label>
+                  <label>工具契约版本<input name="tool_contract_version" maxlength="200" required /></label>
+                  <p class="form-note">新提示或技能必须先有可核验部署证明；仅声明版本不会生效。当前配置标为迁移基线，不表示已通过新金标。</p>
+                  <button class="primary-button">保存冻结候选</button>
+                </form>
+                <div id="model-candidates" class="record-list" aria-live="polite"></div>
+              </details>
               <details class="settings-section">
                 <summary>管理审计</summary>
                 <button id="refresh-audit" class="small-button">
@@ -912,60 +949,12 @@
             type="password"
             autocomplete="current-password"
             required /></label
-        ><label id="totp-field" hidden
-          >动态验证码（如已启用）<input
-            name="totp_code"
-            inputmode="numeric"
-            pattern="[0-9]{6}"
-            maxlength="6" /></label
-        ><label id="admin-recovery-field" hidden
-          >管理员一次性恢复码<input
-            name="recovery_code"
-            type="password"
-            autocomplete="off" /></label
         ><button class="primary-button">登录</button>
         <p id="auth-message" role="status"></p>
       </form>
       <div class="form-actions auth-assistance">
         <button class="text-link" data-password-recovery>用户忘记密码</button
-        ><button
-          id="admin-recovery-toggle"
-          class="text-link"
-          data-use-admin-recovery
-          hidden
-        >
-          使用管理员恢复码
-        </button>
-      </div>
-    </dialog>
-    <dialog
-      id="reauth-dialog"
-      aria-labelledby="reauth-title"
-      aria-describedby="reauth-message"
-    >
-      <div class="dialog-header">
-        <h2 id="reauth-title">再次验证身份</h2>
-        <button data-close-dialog aria-label="关闭再次验证">×</button>
-      </div>
-      <form id="reauth-form" class="compact-form">
-        <p id="reauth-message" role="status"></p>
-        <label
-          >本人密码<input
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            required
-        /></label>
-        <label id="reauth-totp" hidden
-          >动态验证码（如已启用）<input
-            name="totp_code"
-            inputmode="numeric"
-            pattern="[0-9]{6}"
-            maxlength="6"
-            autocomplete="one-time-code"
-        /></label>
-        <button type="submit" class="primary-button">验证身份</button>
-      </form>
+      ></div>
     </dialog>
     <dialog
       id="content-dialog"

@@ -1,0 +1,261 @@
+{
+  "schema": "safe-production-browser-evidence-v1",
+  "api_source_commit": "19b0157265b9540f4c0d589dffbd6e678736e4d8",
+  "web_source_commit": "b187600582795593d50d64582210e5cbb05587e2",
+  "after_actual_handoff_at": "2026-11-08T19:32:47Z",
+  "cases_passed": 22,
+  "failures": 0,
+  "response_injection": false,
+  "production_writes": 0,
+  "phase_and_original_image": {
+    "results": [
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1907,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 1297,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 1496,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 1100,
+        "markets_included": false,
+        "server_items": 0,
+        "dom_rows": 0
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 1198,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1461,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 1004,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 1093,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 908,
+        "markets_included": false,
+        "server_items": 0,
+        "dom_rows": 0
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 1092,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      }
+    ],
+    "response_injection": false,
+    "production_writes": 0
+  },
+  "score_summary_anchor": {
+    "results": [
+      {
+        "width": 1440,
+        "passed": true,
+        "rows": 50,
+        "facts_ms": 1904,
+        "summaries_settled_ms": 3901,
+        "summary_responses": [
+          {
+            "status": 200
+          }
+        ],
+        "pending_rows": 0,
+        "focus_preserved": true,
+        "visible_fixture_anchor_preserved": true,
+        "scroll_before": 350,
+        "scroll_after": 389,
+        "anchor_top_before": 27,
+        "anchor_top_after": 27
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "rows": 50,
+        "facts_ms": 1600,
+        "summaries_settled_ms": 3394,
+        "summary_responses": [
+          {
+            "status": 200
+          }
+        ],
+        "pending_rows": 0,
+        "focus_preserved": true,
+        "visible_fixture_anchor_preserved": true,
+        "scroll_before": 350,
+        "scroll_after": 414,
+        "anchor_top_before": 0,
+        "anchor_top_after": 0
+      }
+    ],
+    "response_injection": false,
+    "production_writes": 0
+  },
+  "expert_and_member_search": {
+    "results": [
+      {
+        "width": 1440,
+        "case": "expert_ranking_refresh",
+        "status": "passed",
+        "experts": 10
+      },
+      {
+        "width": 1440,
+        "case": "expert_detail_and_tabs",
+        "status": "passed",
+        "settled_count_matches_api": true
+      },
+      {
+        "width": 1440,
+        "case": "telegram_monitoring_sources",
+        "status": "passed",
+        "source_count": 6,
+        "status_http": 200
+      },
+      {
+        "width": 1440,
+        "case": "ordinary_member_search_and_admin_scope",
+        "status": "passed",
+        "available_sources_checked": 0,
+        "restricted_sources_reported": 1,
+        "ordinary_member_found": true,
+        "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+        "trust_or_permissions_changed": false
+      },
+      {
+        "width": 390,
+        "case": "expert_ranking_refresh",
+        "status": "passed",
+        "experts": 10
+      },
+      {
+        "width": 390,
+        "case": "expert_detail_and_tabs",
+        "status": "passed",
+        "settled_count_matches_api": true
+      },
+      {
+        "width": 390,
+        "case": "telegram_monitoring_sources",
+        "status": "passed",
+        "source_count": 6,
+        "status_http": 200
+      },
+      {
+        "width": 390,
+        "case": "ordinary_member_search_and_admin_scope",
+        "status": "passed",
+        "available_sources_checked": 0,
+        "restricted_sources_reported": 1,
+        "ordinary_member_found": true,
+        "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+        "trust_or_permissions_changed": false
+      }
+    ],
+    "response_injection": false,
+    "production_writes": 0,
+    "identities_exported": false
+  },
+  "ordinary_member_scope": "verified own membership in an already configured source; hidden full-member enumeration not established",
+  "primary_visual_review": {
+    "screenshots": 7,
+    "completed": true,
+    "sha256": {
+      "e1450-live-browser/phase-live-1440.png": "614118f2d5275492a422374ef4a5f262f1459c048dbc1716fcf72b072ace7ac7",
+      "e1450-live-browser/original-expanded-1440.png": "688dfc8964dc49ab1b185b4f87fed6a18b69b6d92078a0ec17d0e2ca011d9154",
+      "e1450-live-browser/original-expanded-390.png": "55b700d36c4530eccca525ab79cebeb7793434734808fd48d9e748f0b6a4e8e1",
+      "e1451-anchor-production/settled-summaries-1440.png": "efa11f849e6d0be097a23c9017ce9527401cf3d3b9c1937d17c98ec5ca9fc417",
+      "e1451-anchor-production/settled-summaries-390.png": "9c6bf1f3a0122a1ba9ec27c884668979937bafe7e43b5f7e4eb44af5ffb4abc7",
+      "e1504-live-browser/expert-ranking-1440.png": "6ddf7285b6183d2ce56c9ef279a297ea7a7b4702ea2b2afeb48d443fb1a3bc5f",
+      "e1504-live-browser/expert-ranking-390.png": "f116f180234ae49437d294f2fcc2cacd9649ea80a5a9acadfeb808ce412fce06"
+    }
+  }
+}

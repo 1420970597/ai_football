@@ -2,8 +2,13 @@ name: Publish development candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Existing immutable tag v2.0.0-dev.YYYYMMDD.N at this source commit
+        required: true
+        type: string
   push:
-    tags: [v2.0.0-dev]
+    tags: ['v2.0.0-dev.*']
 
 permissions:
   contents: read
@@ -12,11 +17,35 @@ concurrency:
   group: development-release
   cancel-in-progress: false
 
+env:
+  SOURCE_COMMIT: ${{ github.sha }}
+  RELEASE_EVENT: ${{ github.event_name }}
+  RELEASE_REF: ${{ github.ref }}
+  CANDIDATE_TAG_INPUT: ${{ inputs.candidate_tag || '' }}
+
 jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Require a new immutable candidate tag at the exact source
+        run: |
+          set -eu
+          mkdir -p .runtime/release
+          docker run --rm --cpus=.5 --memory=256m \
+            -e GH_TOKEN -e GITHUB_REPOSITORY -e SOURCE_COMMIT -e RELEASE_EVENT -e RELEASE_REF -e CANDIDATE_TAG_INPUT \
+            -v "$PWD:/work" -w /work \
+            python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
+            python infra/release/development_policy.py --output .runtime/release/development-policy.json \
+              --tag-output .runtime/release/candidate-tag.txt
   verify:
+    needs: policy
     uses: ./.github/workflows/verify.yml
   publish:
-    needs: verify
+    needs: [policy, verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     permissions:
@@ -33,6 +62,7 @@ jobs:
           set -eu
           mkdir -p .runtime/release
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
           for component in api collector executor mcp web storage-tunnel; do
             case "$component" in
               api) recipe=services/api/Dockerfile ;;
@@ -42,8 +72,8 @@ jobs:
               web) recipe=web/app/Dockerfile ;;
               storage-tunnel) recipe=infra/tunnel/Dockerfile ;;
             esac
-            reference="ghcr.io/1420970597/ai-football-$component:2.0.0-dev-$GITHUB_SHA"
-            docker build -f "$recipe" --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            reference="ghcr.io/1420970597/ai-football-$component:2.0.0-dev-$SOURCE_COMMIT"
+            docker build -f "$recipe" --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
               --label org.opencontainers.image.version=2.0.0-dev \
               --label org.opencontainers.image.source=https://github.com/1420970597/ai_football -t "$reference" .
             docker push "$reference"
@@ -51,7 +81,6 @@ jobs:
             digest=$(docker image inspect "$reference" --format '{{index .RepoDigests 0}}')
             printf '%s %s\n' "$component" "$digest" >> .runtime/release/image-digests.txt
           done
-          docker logout ghcr.io
       - name: Validate immutable release provenance
         run: |
           docker run --rm --cpus=.5 --memory=256m --network none -v "$PWD:/work" -w /work \
@@ -59,14 +88,26 @@ jobs:
             python -c 'import json,pathlib; p=pathlib.Path(".runtime/release"); rows=[line.split() for line in (p/"image-digests.txt").read_text().splitlines()]; (p/"images.json").write_text(json.dumps(dict(rows)))'
           docker run --rm --cpus=.5 --memory=256m --network none -v "$PWD:/work" -w /work \
             python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
-            python infra/release/manifest.py --commit "$GITHUB_SHA" --images .runtime/release/images.json \
+            python infra/release/manifest.py --commit "$SOURCE_COMMIT" --images .runtime/release/images.json \
               --artifacts android/build/artifacts --output .runtime/release/release-manifest.json \
               --compose-output .runtime/release/compose-images.json
+      - name: Recheck remote tag and release absence immediately before publication
+        run: |
+          set -eu
+          docker run --rm --cpus=.5 --memory=256m \
+            -e GH_TOKEN -e GITHUB_REPOSITORY -e SOURCE_COMMIT -e RELEASE_EVENT -e RELEASE_REF -e CANDIDATE_TAG_INPUT \
+            -v "$PWD:/work" -w /work \
+            python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
+            python infra/release/development_policy.py --output .runtime/release/development-policy.json \
+              --tag-output .runtime/release/candidate-tag.txt --manifest .runtime/release/release-manifest.json
       - name: Create explicitly non-production GitHub prerelease
         run: |
-          gh release create v2.0.0-dev --target "$GITHUB_SHA" --prerelease \
-            --title 'v2.0.0-dev · 开发候选，尚未生产验收' \
+          set -eu
+          candidate_tag=$(cat .runtime/release/candidate-tag.txt)
+          gh release create "$candidate_tag" --verify-tag --target "$SOURCE_COMMIT" --prerelease \
+            --title "$candidate_tag · 开发候选，尚未生产验收" \
             --notes-file docs/platform-v2/DEVELOPMENT_RELEASE.md \
+            .runtime/release/development-policy.json \
             .runtime/release/release-manifest.json \
             .runtime/release/compose-images.json \
             android/build/artifacts/ballnews-2.0.0-dev-debug.apk \

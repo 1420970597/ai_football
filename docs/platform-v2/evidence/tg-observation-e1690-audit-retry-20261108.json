@@ -1,0 +1,111 @@
+{
+  "schema": "same_observation_official_audit_retry_v1",
+  "source_observation": "e1690",
+  "audit_retry": "e1760",
+  "new_observation_window": false,
+  "window_start": "2026-11-08T21:55:29.310291+00:00",
+  "window_end": "2026-11-08T22:25:30.058136+00:00",
+  "original_audit_exit": 1,
+  "original_failure": "collector configuration GET HTTP 503 during API release",
+  "original_failure_preserved": true,
+  "retry_read_only_native_exit": 0,
+  "official_sources_complete": 6,
+  "official_posts": 6,
+  "official_matched": 6,
+  "official_missing": 0,
+  "ready_messages_completed": 5,
+  "reuses_manual_samples_from_e1660": true,
+  "additional_unique_manual_samples": 0,
+  "database_samples": 55,
+  "market_samples": 61,
+  "observer_samples": 91,
+  "observer_read_errors": 0,
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1802.3,
+    "health_all_200": false,
+    "telegram_all_healthy": false,
+    "baseline_live_event_counters": {
+      "received": 112949,
+      "staged": 5850,
+      "deferred": 0,
+      "unmapped_source": 107099
+    },
+    "final_live_event_counters": {
+      "received": 114164,
+      "staged": 5917,
+      "deferred": 0,
+      "unmapped_source": 108247
+    },
+    "live_event_delta": {
+      "received": 1215,
+      "staged": 67,
+      "deferred": 0,
+      "unmapped_source": 1148
+    }
+  },
+  "health_non_200_samples": [
+    {
+      "observed_at": "2026-11-08T22:25:30.058136+00:00",
+      "health": {
+        "healthz": null,
+        "readyz": null
+      }
+    }
+  ],
+  "telegram_degraded_samples": [],
+  "messages_final": {
+    "created_versions": 175,
+    "published_posts": 6,
+    "older_posts_revised": 169,
+    "published_ready": 5,
+    "published_pending": 0,
+    "published_unsupported": 1
+  },
+  "reviews_final": {
+    "eligible": 5,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 5,
+    "missing_receipt": 0
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "includes_api_release_interruption": true,
+  "next_api_handoff_completed_after_window": "2026-11-08T22:27:48Z",
+  "dedicated_post_latest_release_window": false,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T22:24:55.586919+00:00",
+    "last_poll_elapsed_ms": 20557.1,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 22197,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 17.2,
+    "oldest_quote_age_seconds": 356527.0,
+    "failed_batches": 0
+  },
+  "whole_database_freshness_claim": false,
+  "three_second_acceptance": false,
+  "raw_sha256": {
+    "e1690-official-scan.stderr": "85b5b55787b230e6547d15a590a7550c9aaa3e5e6a8e21dfba895a2ff68a7f5b",
+    "e1760-watch-summary.json": "87785d48a836277903b405a7e2d84bf90d30789f11255da9e8438daa24e0139d",
+    "e1760-official-scan.json": "cd6dc5ab03c5f0b034ebf4934fc033cc4e818cea964b01eecdd24b4eb8d77cee",
+    "e1760-official-reconcile.json": "648c76ed8926ccbd505ef04ff530f55f8038ec13cda4dd7bb8b357e234ca18c4",
+    "e1760-natural-audit.json": "059bf45ee51279310febd6b59635fd9d648c9a482bd7f382ded2287029fb6895",
+    "e1691-composition-readonly.jsonl": "e3fb3ab1e4a86d3202608a503d55ef28f4a76f69a517e268d9dd2c5af903db9c"
+  }
+}

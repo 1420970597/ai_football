@@ -1,0 +1,21 @@
+{
+  "task_owned_database_only": true,
+  "production_or_money_tests": false,
+  "groups": [
+    {
+      "task": "e1039-regression-final",
+      "command": "bash .runtime/e209-live/e1039-regression-final.sh",
+      "tests": 192,
+      "seconds": 437.154,
+      "native_exit_code": 0
+    },
+    {
+      "task": "e1046-candidate-regression",
+      "command": "bash .runtime/e209-live/e1046-candidate-regression.sh",
+      "tests": 66,
+      "seconds": 71.795,
+      "native_exit_code": 0
+    }
+  ],
+  "full_frozen_source_suite_required": true
+}

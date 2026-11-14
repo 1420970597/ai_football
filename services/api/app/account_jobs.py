@@ -5,6 +5,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import json
+import re
 import uuid
 
 from fastapi import HTTPException
@@ -15,6 +16,35 @@ from .security import decrypt_secret, encrypt_secret
 PROTOCOL_KEYS = frozenset({"leyu_app_host", "leyu_app_signing_config", "leyu_app_discovery_config", "leyu_venue",
                            "leyu_login_proxy_url", "leyu_login_proxy_password_template"})
 SESSION_KEYS = frozenset({"leyu_app_host", "leyu_api_base", "leyu_origin", "leyu_request_id", "leyu_app_token"})
+LOGIN_PROTOCOL_KEYS = PROTOCOL_KEYS
+
+
+def public_task(row, binding_revision):
+    """Only bounded diagnostic fields may leave the private executor task."""
+    item = dict(row)
+    details = item.pop('details', {}) or {}
+    code = str(details.get('provider_code') or '')
+    code = code if re.fullmatch(r'[0-9]{1,12}', code) else ''
+    item['provider_code'] = code
+    item['current_binding'] = item['binding_revision'] == binding_revision
+    category = item.get('last_error') or ''
+    item['recovery_action'] = None
+    if category == 'order_reconciliation_partial' and item['state'] == 'succeeded':
+        item['message'] = '余额校验已成功；部分历史订单暂未核对，系统将继续查单，相关未结本金仍计入敞口。'
+    elif (category == 'app_login_rejected' and code == '6026') or (details.get('device_authorization') and item['state'] in {'failed', 'rejected'}):
+        item['message'] = '乐鱼新设备身份验证' + (f'（{code}）' if code else '') + '未完成；请在常用设备的乐鱼 App 获取授权安全码，在下方提交。安全码过期或错误时请获取新码，不要重新绑定。'
+        item['recovery_action'] = 'provider_identity_verification'
+    elif category == 'app_login_rejected':
+        item['message'] = '乐鱼拒绝本次账户登录' + (f'（业务码 {code}）' if code else '') + '；请先核对官方 App 登录结果，不要反复提交相同凭据。'
+    elif category.endswith('_proxy_http_rejected'):
+        item['message'] = '登录代理拒绝连接' + (f'（HTTP {code}）' if code else '') + '；账户登录请求未发出，请检查登录代理配置和服务状态。'
+    elif item['state'] == 'unknown' or category == 'executor_lease_expired':
+        item['message'] = '本次校验结果无法确认；为避免重复登录已停止重试，请先核对官方账户状态。'
+    elif item['state'] == 'failed':
+        item['message'] = '本次账户校验未成功；请按错误类别检查连接或配置后重新校验。'
+    else:
+        item['message'] = ''
+    return item
 
 
 def identity_hash(key: bytes, username: str) -> str:
@@ -46,9 +76,25 @@ async def private_config(conn, account, settings) -> dict:
         raise HTTPException(503, "用户账户登录协议模板尚未配置")
     if account["encrypted_session"]:
         document = decode_document(settings.encryption_key, account["encrypted_session"])
-        config.update({key: value for key, value in document.items() if key in SESSION_KEYS})
+        config.update({key: value for key, value in document.items()
+                       if key in SESSION_KEYS and key != "leyu_app_host"})
     config.update(leyu_app_login_name=credentials["username"], leyu_app_login_password=credentials["password"], leyu_app_uuid=credentials["device_uuid"])
     return config
+
+
+async def reverification_available(conn, account) -> bool:
+    job = await conn.fetchrow(
+        "SELECT kind,state,last_error,updated_at FROM v2_account_jobs WHERE account_id=$1 "
+        "ORDER BY created_at DESC,id DESC LIMIT 1", account["id"])
+    if not job or (job['kind'], job['state'], job['last_error']) != ('verify', 'rejected', 'app_login_rejected'):
+        return False
+    settings = await conn.fetch("SELECT setting_key,updated_at FROM v2_admin_settings WHERE setting_key=ANY($1::text[])",
+                                list(LOGIN_PROTOCOL_KEYS))
+    latest_change = max((row['updated_at'] for row in settings), default=None)
+    configured = await conn.fetchval(
+        "SELECT count(*)=2 FROM v2_admin_settings WHERE setting_key=ANY($1::text[])",
+        ['leyu_app_host', 'leyu_app_signing_config'])
+    return bool(configured and latest_change and latest_change > job['updated_at'])
 
 
 def scope(account) -> dict:
@@ -96,11 +142,19 @@ async def reconcile_receipts(conn, account, receipts: list[dict]):
         if not row:
             continue
         state = receipt.get("state")
-        if state == "settled":
-            await conn.execute("UPDATE v2_bet_orders SET state='settled',reserved_stake=0,settled_net=$2,settled_at=now(),result_payload=$3,updated_at=now() WHERE id=$1",
-                               row["id"], Decimal(receipt['net_profit']) if receipt.get('net_profit') is not None else None, receipt)
-        elif state == "unsettled":
-            await conn.execute("UPDATE v2_bet_orders SET state='accepted',result_payload=$2,updated_at=now() WHERE id=$1", row["id"], receipt)
-        else:
+        if state not in {"settled", "unsettled"}:
             continue
+        digest = hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        await conn.execute("INSERT INTO v2_order_receipt_evidence(id,order_id,receipt_sha256,payload) VALUES($1,$2,$3,$4) "
+                           "ON CONFLICT(order_id,receipt_sha256) DO NOTHING",uuid.uuid4(),row['id'],digest,receipt)
+        numeric = lambda key: Decimal(receipt[key]) if receipt.get(key) is not None else None
+        timestamp = lambda key: datetime.fromisoformat(receipt[key].replace('Z', '+00:00')) if receipt.get(key) else None
+        await conn.execute(
+            "UPDATE v2_bet_orders SET state=$2,reserved_stake=CASE WHEN $2='settled' THEN 0 ELSE reserved_stake END,"
+            "settled_net=$3,settled_at=$4,result_payload=$5,provider_price=$6,provider_stake=$7,provider_payout=$8,"
+            "provider_currency=$9,provider_fees=$10,provider_placed_at=$11,pnl_basis=$12,receipt_observed_at=now(),updated_at=now() WHERE id=$1",
+            row["id"], "settled" if state == "settled" else "accepted",
+            numeric('net_profit') if state == "settled" else None, timestamp('settled_at') if state == "settled" else None,
+            receipt, numeric('price'), numeric('stake'), numeric('payout'), receipt.get('currency'), numeric('fees'),
+            timestamp('placed_at'), receipt.get('pnl_basis', 'unknown'))
         await audit(conn, None, "executor", "order_reconciled", "bet_order", str(row["id"]), details={"state": state})

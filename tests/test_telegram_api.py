@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 import httpx
 
 from app import auth, database
+from app.main import request_context
 from app.routes import internal, telegram
 from app.security import decrypt_secret, token_hash
 
@@ -28,6 +30,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         url = TEST_URL.rsplit("/", 1)[0] + "/" + self.name
         self.pool = await database.open_pool(SimpleNamespace(database_url=url), migrate=True)
         self.app = FastAPI()
+        self.app.middleware("http")(request_context)
         self.app.state.settings = SimpleNamespace(collector_token="test-collector-token", encryption_key=bytes(range(32)))
         self.app.state.decrypt_secret = lambda value: decrypt_secret(bytes(range(32)), value)
         self.app.include_router(internal.router)
@@ -35,6 +38,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://testserver",
                                         headers={"Authorization": "Bearer test-collector-token"})
         self.source_id, self.expert_id, self.admin_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        self.event_time = datetime.now(timezone.utc)
         await self.pool.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'-1001','测试来源')", self.source_id)
         await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'7','测试专家')", self.expert_id)
         await self.pool.execute("INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2)", self.source_id, self.expert_id)
@@ -48,18 +52,34 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         await self.control.execute(f'DROP DATABASE "{self.name}"')
         await self.control.close()
 
-    def event(self, *, version="v1", text="赛前阿森纳大2.5", media=False, kind="message", minutes=0):
-        when = datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(minutes=minutes)
+    def event(self, *, version="v1", text="赛前阿森纳大2.5", media=False, kind="message", minutes=0, days_ago=0):
+        when = self.event_time + timedelta(minutes=minutes)
         return {"chat_id": "-1001", "owner": str(self.owner), "platform_message_id": "11", "member_message_ids": [11],
                 "version_key": hashlib.sha256(version.encode()).hexdigest(), "event_kind": kind,
                 "sender_id": "7", "sender_nickname": "测试专家", "source_version_at": when.isoformat(),
-                "posted_at": datetime(2026, 10, 26, tzinfo=timezone.utc).isoformat(), "raw_text": text,
+                "posted_at": (self.event_time - timedelta(days=days_ago)).isoformat(), "raw_text": text,
                 "media_state": "pending" if media else "ready",
                 "media_manifest": [{"message_id": 11, "mime_type": "image/jpeg", "bytes": 100}] if media else [],
                 "media_objects": []}
 
     async def post(self, body):
         return await self.client.post("/internal/telegram/events", json=body)
+
+    async def test_event_phase_log_splits_pool_lock_and_persistence_without_private_fields(self):
+        body = self.event()
+        with self.assertLogs("platform.api", level="INFO") as captured:
+            response = await self.post(body)
+        self.assertEqual(200, response.status_code, response.text)
+        output = "\n".join(captured.output)
+        self.assertIn("operation=events status=200", output)
+        self.assertIn("pool_wait_ms=", output)
+        self.assertIn("source_message_lock_ms=", output)
+        self.assertIn("event_sql_ms=", output)
+        self.assertIn("transaction_ms=", output)
+        self.assertIn("event_path=live", output)
+        self.assertIn("remaining_ms=", output)
+        for private_value in (body["chat_id"], body["owner"], body["raw_text"], body["sender_nickname"]):
+            self.assertNotIn(private_value, output)
 
     async def admin_client(self):
         await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,'test-admin@example.invalid','管理员','unused','admin')", self.admin_id)
@@ -69,6 +89,65 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.client.cookies.set(auth.ADMIN_COOKIE, "test-admin-session")
         self.client.cookies.set(auth.ADMIN_CSRF_COOKIE, "test-admin-csrf")
         self.client.headers["X-CSRF-Token"] = "test-admin-csrf"
+
+    async def test_pending_restage_and_retry_keep_registered_media_candidate(self):
+        body = self.event(media=True)
+        candidate = {'object_key': 'telegram/test/candidate', 'mime_type': 'image/jpeg',
+                     'sha256': 'a' * 64, 'bytes': 100}
+        response = await self.post(body | {'media_state': 'failed', 'media_objects': [candidate]})
+        self.assertEqual(200, response.status_code, response.text)
+        restage = await self.post(body)
+        self.assertEqual(200, restage.status_code, restage.text)
+        self.assertEqual([candidate], restage.json()['media_objects'])
+        pending = await self.client.get('/internal/telegram/pending')
+        self.assertEqual([candidate], pending.json()['items'][0]['media_objects'])
+        self.assertEqual([candidate], await self.pool.fetchval(
+            "SELECT media_objects FROM v2_expert_messages WHERE platform_message_id='11'"))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+
+    async def test_pending_batch_prioritizes_current_pending_then_failed_and_history_fifo(self):
+        historical_ids = []
+        for index in range(31):
+            platform_id = str(1000 + index)
+            member_id = 1000 + index
+            body = self.event(version=f"historical-{index}", days_ago=2, media=True)
+            body.update(platform_message_id=platform_id, member_message_ids=[member_id])
+            body['media_manifest'][0]['message_id'] = member_id
+            response = await self.post(body)
+            self.assertEqual(200, response.status_code, response.text)
+            historical_ids.append(platform_id)
+            await self.pool.execute(
+                "UPDATE v2_telegram_events SET updated_at=$2 WHERE platform_message_id=$1",
+                platform_id, self.event_time - timedelta(minutes=31 - index),
+            )
+
+        failed_recent = self.event(version="failed-recent", media=True)
+        failed_recent.update(platform_message_id="failed-recent", member_message_ids=[2001],
+                             posted_at=(self.event_time - timedelta(minutes=5)).isoformat(),
+                             media_state="failed", last_error="TimeoutError")
+        failed_recent['media_manifest'][0]['message_id'] = 2001
+        response = await self.post(failed_recent)
+        self.assertEqual(200, response.status_code, response.text)
+
+        older_recent = self.event(version="older-recent", media=True)
+        older_recent.update(platform_message_id="older-recent", member_message_ids=[2002],
+                            posted_at=(self.event_time - timedelta(minutes=10)).isoformat())
+        older_recent['media_manifest'][0]['message_id'] = 2002
+        response = await self.post(older_recent)
+        self.assertEqual(200, response.status_code, response.text)
+
+        recent = self.event(version="recent-recommendation", media=True)
+        recent.update(platform_message_id="recent-recommendation", member_message_ids=[2000])
+        recent['media_manifest'][0]['message_id'] = 2000
+        response = await self.post(recent)
+        self.assertEqual(200, response.status_code, response.text)
+
+        batch = (await self.client.get('/internal/telegram/pending?limit=30')).json()['items']
+        self.assertEqual(30, len(batch))
+        self.assertEqual("recent-recommendation", batch[0]['platform_message_id'])
+        self.assertEqual("older-recent", batch[1]['platform_message_id'])
+        self.assertEqual("failed-recent", batch[2]['platform_message_id'])
+        self.assertEqual(historical_ids[:27], [item['platform_message_id'] for item in batch[3:]])
 
     async def test_pending_failed_ready_is_durable_and_job_once(self):
         body = self.event(media=True)
@@ -88,8 +167,67 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, ready.status_code, ready.text)
         self.assertEqual(ready.json()["message_id"], repeated.json()["message_id"])
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs"))
+        self.assertEqual('queued', await self.pool.fetchval("SELECT state FROM v2_analysis_jobs"))
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_expert_messages"))
         self.assertEqual([], (await self.client.get("/internal/telegram/pending")).json()["items"])
+
+    async def test_historical_ready_message_is_preserved_without_automatic_model_job(self):
+        body = self.event(days_ago=2, media=True)
+        body.update(media_state='ready', media_objects=[{
+            'object_key':'telegram/test/history-image', 'mime_type':'image/jpeg',
+            'sha256':'a'*64, 'bytes':100,
+        }])
+        response = await self.post(body)
+        self.assertEqual(200, response.status_code, response.text)
+        message_id = uuid.UUID(response.json()['message_id'])
+        job_id = uuid.UUID(response.json()['review_id'])
+        job = await self.pool.fetchrow("SELECT state,review_mode,last_error FROM v2_analysis_jobs WHERE id=$1", job_id)
+        self.assertEqual(('unresolved','historical_replay','historical_backlog_auto_suppressed_by_operator'),
+                         tuple(job.values()))
+        self.assertEqual(body['raw_text'], await self.pool.fetchval('SELECT raw_text FROM v2_expert_messages WHERE id=$1', message_id))
+        self.assertEqual(body['media_objects'], await self.pool.fetchval('SELECT media_objects FROM v2_expert_messages WHERE id=$1', message_id))
+        audit = await self.pool.fetchrow("SELECT trace_kind,payload FROM v2_analysis_traces WHERE job_id=$1", job_id)
+        self.assertEqual('telegram_auto_review_suppressed', audit['trace_kind'])
+        self.assertEqual('historical_backlog_auto_suppressed_by_operator', audit['payload']['reason'])
+        repeated = await self.post(body)
+        self.assertEqual(response.json()['message_id'], repeated.json()['message_id'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+
+    async def test_backfill_beyond_three_days_cannot_restore_original_or_media(self):
+        body = self.event(days_ago=4, media=True)
+        body.update(media_state='ready',media_objects=[{
+            'object_key':'v2/telegram/messages/chat/old/hash','mime_type':'image/jpeg',
+            'sha256':'a'*64,'bytes':100,
+        }])
+        response=await self.post(body)
+        self.assertEqual(200,response.status_code,response.text)
+        message=await self.pool.fetchrow('SELECT raw_text,media_objects,raw_content_expired_at FROM v2_expert_messages')
+        self.assertEqual('',message['raw_text'])
+        self.assertEqual([],message['media_objects'])
+        self.assertIsNotNone(message['raw_content_expired_at'])
+        event=await self.pool.fetchrow('SELECT content,media_objects FROM v2_telegram_events')
+        self.assertEqual(({},[]),tuple(event))
+        job=await self.pool.fetchrow('SELECT state,last_error FROM v2_analysis_jobs')
+        self.assertEqual(('failed','raw_content_expired'),tuple(job))
+        self.assertEqual([], (await self.client.get('/internal/telegram/pending')).json()['items'])
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_raw_retention_media'))
+
+    async def test_expired_media_batch_fits_existing_collectors_delete_ack_budget(self):
+        await self.pool.executemany('INSERT INTO v2_raw_retention_media(object_key,source_id) VALUES($1,$2)',
+            [('v2/telegram/messages/chat/expired/'+str(i),self.source_id)for i in range(25)])
+        response=await self.client.post('/internal/telegram/media/orphans',json={
+            'owner':str(self.owner),'limit':100,'older_than_hours':24})
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(10,len(response.json()['items']))
+        self.assertEqual(10,await self.pool.fetchval('SELECT count(*) FROM v2_raw_retention_media WHERE claim_until>now()'))
+
+    async def test_future_timestamp_is_preserved_but_never_claimed_as_live(self):
+        body = self.event(minutes=30)
+        body['posted_at'] = (self.event_time + timedelta(minutes=30)).isoformat()
+        response = await self.post(body)
+        self.assertEqual(200, response.status_code, response.text)
+        job = await self.pool.fetchrow("SELECT state,review_mode,last_error FROM v2_analysis_jobs")
+        self.assertEqual(('unresolved','real_time','message_timestamp_in_future'), tuple(job.values()))
 
     async def test_edit_withdraws_previous_job_and_keeps_original(self):
         first = await self.post(self.event())
@@ -107,7 +245,14 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         original = await self.post(self.event())
         deleted = self.event(version="deleted", text="", kind="delete", minutes=2)
         deleted["platform_message_id"] = "delete:test"
-        self.assertEqual("deleted", (await self.post(deleted)).json()["state"])
+        with self.assertLogs("platform.api", level="INFO") as captured:
+            deleted_response = await self.post(deleted)
+        self.assertEqual("deleted", deleted_response.json()["state"])
+        output = "\n".join(captured.output)
+        self.assertIn("event_path=delete", output)
+        self.assertRegex(output, r"transaction_ms=[0-9]+\.[0-9]+")
+        for private_value in (deleted["chat_id"], deleted["owner"], deleted["sender_nickname"]):
+            self.assertNotIn(private_value, output)
         replay = await self.post(self.event(version="late-edit", text="迟到编辑", kind="edit", minutes=3))
         self.assertEqual("deleted", replay.json()["state"])
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_expert_messages"))
@@ -123,6 +268,187 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(422, (await self.client.put("/internal/telegram/checkpoints", json=advance)).status_code)
         await self.pool.execute("UPDATE v2_source_checkpoints SET lease_until=now()-interval '1 second'")
         self.assertEqual(409, (await self.post(self.event())).status_code)
+
+    async def test_event_validates_active_lease_with_shared_read_without_renewing_it(self):
+        async with self.pool.acquire() as blocker:
+            async with blocker.transaction():
+                lease_before = await blocker.fetchval(
+                    "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
+                await blocker.fetchrow(
+                    "SELECT pg_advisory_xact_lock_shared(hashtext('telegram-source:' || $1))", '-1001')
+                response = await self.post(self.event())
+                self.assertEqual(200, response.status_code, response.text)
+                lease_during = await blocker.fetchval(
+                    "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
+                self.assertEqual(lease_before, lease_during)
+
+        lease_after = await self.pool.fetchval(
+            "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
+        self.assertEqual(lease_before, lease_after)
+
+    async def test_event_rechecks_lease_after_waiting_for_message_lock(self):
+        async with self.pool.acquire() as blocker:
+            async with blocker.transaction():
+                await blocker.fetchval(
+                    "SELECT pg_advisory_xact_lock(hashtext('telegram:' || $1::text || ':11'))",
+                    str(self.source_id))
+                pending = asyncio.create_task(self.post(self.event()))
+                await asyncio.sleep(0.05)
+                self.assertFalse(pending.done(), "event should be waiting on the message lock")
+                await blocker.execute(
+                    "UPDATE v2_source_checkpoints SET lease_until=statement_timestamp()-interval '1 second' "
+                    "WHERE source_id=$1", self.source_id)
+
+        response = await asyncio.wait_for(pending, timeout=3)
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_expert_messages"))
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_telegram_events"))
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs"))
+
+    async def test_live_and_reconciliation_use_consistent_message_event_lock_order(self):
+        self.assertEqual(200, (await self.post(self.event(media=True))).status_code)
+        await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute'")
+        page = await self.client.post('/internal/telegram/observed', json={
+            'chat_id': '-1001', 'owner': str(self.owner), 'limit': 1,
+            'reconciliation_protocol': 'claim-ack-v1'})
+        self.assertEqual(200, page.status_code, page.text)
+        item = page.json()['items'][0]
+        body = self.event(version='reconciled-edit', text='改为小2.5', kind='edit', minutes=1)
+        body['reconciliation'] = {key: item[source] for key, source in (
+            ('event_id', 'id'), ('version_key', 'version_key'), ('claim_id', 'claim_id'))}
+        live_locked, release_live = asyncio.Event(), asyncio.Event()
+        original = telegram.persist_fast_event
+
+        async def paused_persist(*args, **kwargs):
+            live_locked.set()
+            await release_live.wait()
+            return await original(*args, **kwargs)
+
+        tasks = []
+        with patch.object(telegram, 'persist_fast_event', new=paused_persist):
+            try:
+                live_body = self.event(media=True) | {
+                    'media_state': 'ready', 'media_objects': [{
+                        'object_key': 'telegram/test/lock-order', 'mime_type': 'image/jpeg',
+                        'sha256': 'a' * 64, 'bytes': 100}]}
+                live = asyncio.create_task(self.post(live_body))
+                tasks.append(live)
+                await asyncio.wait_for(live_locked.wait(), timeout=3)
+                reconciliation = asyncio.create_task(self.post(body))
+                tasks.append(reconciliation)
+                async with self.pool.acquire() as observer:
+                    async with asyncio.timeout(3):
+                        while not await observer.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' "
+                            "AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))"
+                        ):
+                            await asyncio.sleep(0.01)
+                release_live.set()
+                responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=4)
+                self.assertEqual([200, 200], [r.status_code for r in responses],
+                                 [r.text for r in responses])
+            finally:
+                release_live.set()
+                await asyncio.gather(*tasks, return_exceptions=True)
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events WHERE is_current'))
+        self.assertEqual('改为小2.5', await self.pool.fetchval(
+            'SELECT raw_text FROM v2_expert_messages WHERE deleted_at IS NULL'))
+
+    async def test_reconciliation_rechecks_lease_after_waiting_for_message_lock(self):
+        self.assertEqual(200, (await self.post(self.event())).status_code)
+        await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute'")
+        page = await self.client.post('/internal/telegram/observed', json={
+            'chat_id': '-1001', 'owner': str(self.owner), 'limit': 1,
+            'reconciliation_protocol': 'claim-ack-v1'})
+        self.assertEqual(200, page.status_code, page.text)
+        item = page.json()['items'][0]
+        body = self.event(version='reconciled-edit', kind='edit', minutes=1)
+        body['reconciliation'] = {key: item[source] for key, source in (
+            ('event_id', 'id'), ('version_key', 'version_key'), ('claim_id', 'claim_id'))}
+        async with self.pool.acquire() as blocker:
+            async with blocker.transaction():
+                await blocker.fetchval(
+                    "SELECT pg_advisory_xact_lock(hashtext('telegram:' || $1::text || ':11'))",
+                    str(self.source_id))
+                pending = asyncio.create_task(self.post(body))
+                async with self.pool.acquire() as observer:
+                    async with asyncio.timeout(3):
+                        while not await observer.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' "
+                            "AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))"
+                        ):
+                            await asyncio.sleep(0.01)
+                self.assertFalse(pending.done())
+                await blocker.execute(
+                    "UPDATE v2_source_checkpoints SET lease_until=statement_timestamp()-interval '1 second' "
+                    "WHERE source_id=$1", self.source_id)
+        response = await asyncio.wait_for(pending, timeout=3)
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+        row = await self.pool.fetchrow(
+            'SELECT reconcile_applied_at,reconcile_acknowledged_at FROM v2_telegram_events')
+        self.assertIsNone(row['reconcile_applied_at'])
+        self.assertIsNone(row['reconcile_acknowledged_at'])
+
+    async def test_same_owner_renewal_and_checkpoint_advance_do_not_wait_for_source_lock(self):
+        async with self.pool.acquire() as holder:
+            async with holder.transaction():
+                await telegram.source_with_lease(holder, '-1001', self.owner)
+                renewed = await asyncio.wait_for(self.client.post(
+                    '/internal/telegram/checkpoints/claim',
+                    json={'chat_id': '-1001', 'owner': str(self.owner)}), timeout=1)
+                self.assertEqual(200, renewed.status_code, renewed.text)
+                advanced = await asyncio.wait_for(self.client.put(
+                    '/internal/telegram/checkpoints', json={
+                        'chat_id': '-1001', 'owner': str(self.owner),
+                        'last_message_id': 1, 'previous_message_id': 0}), timeout=1)
+                self.assertEqual(200, advanced.status_code, advanced.text)
+        self.assertEqual(1, await self.pool.fetchval(
+            'SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1', self.source_id))
+
+    async def test_expired_checkpoint_takeover_waits_for_active_source_transaction(self):
+        new_owner = uuid.uuid4()
+        await self.pool.execute(
+            "UPDATE v2_source_checkpoints SET lease_until=now()+interval '250 milliseconds' WHERE source_id=$1",
+            self.source_id)
+        async with self.pool.acquire() as holder:
+            async with holder.transaction():
+                source = await telegram.source_with_lease(holder, '-1001', self.owner)
+                self.assertEqual(self.source_id, source['id'])
+                await asyncio.sleep(0.3)
+                takeover = asyncio.create_task(self.client.post(
+                    '/internal/telegram/checkpoints/claim',
+                    json={'chat_id': '-1001', 'owner': str(new_owner)}))
+                await asyncio.sleep(0.05)
+                self.assertFalse(takeover.done())
+        response = await asyncio.wait_for(takeover, timeout=3)
+        self.assertEqual(200, response.status_code, response.text)
+        owner = await self.pool.fetchval(
+            'SELECT collector_owner FROM v2_source_checkpoints WHERE source_id=$1', self.source_id)
+        self.assertEqual(new_owner, owner)
+
+    async def test_author_backfill_is_leased_monotonic_and_independent_of_group_checkpoint(self):
+        await self.pool.execute(
+            "UPDATE v2_source_experts SET backfill_since=now()-interval '7 days',backfill_cursor=36,"
+            "backfill_until_id=35,backfill_completed_at=NULL WHERE source_id=$1 AND expert_id=$2",
+            self.source_id, self.expert_id)
+        sources = await self.client.get('/internal/telegram/sources')
+        self.assertEqual(200, sources.status_code, sources.text)
+        task = sources.json()['items'][0]['author_backfills'][0]
+        self.assertEqual({'sender_id': '7', 'cursor': 36, 'until_id': 35},
+                         {key: task[key] for key in ('sender_id', 'cursor', 'until_id')})
+        body = {'chat_id': '-1001', 'owner': str(self.owner), 'sender_id': '7',
+                'previous_cursor': 36, 'cursor': 30, 'complete': False}
+        self.assertEqual(200, (await self.client.put('/internal/telegram/author-backfill', json=body)).status_code)
+        self.assertEqual(409, (await self.client.put('/internal/telegram/author-backfill', json=body)).status_code)
+        invalid = body | {'previous_cursor': 30, 'cursor': 31}
+        self.assertEqual(422, (await self.client.put('/internal/telegram/author-backfill', json=invalid)).status_code)
+        self.assertEqual(0, await self.pool.fetchval('SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1', self.source_id))
+        self.assertEqual(30, await self.pool.fetchval(
+            'SELECT backfill_cursor FROM v2_source_experts WHERE source_id=$1 AND expert_id=$2', self.source_id, self.expert_id))
 
     async def test_untrusted_sender_and_service_token_rejected(self):
         body = self.event()
@@ -164,9 +490,18 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute'")
         observed = []
         for _ in range(3):
-            page = await self.client.post("/internal/telegram/observed", json={"chat_id": "-1001", "owner": str(self.owner), "limit": 10})
+            page = await self.client.post("/internal/telegram/observed", json={"chat_id": "-1001", "owner": str(self.owner), "limit": 10,
+                                                                                "reconciliation_protocol": "claim-ack-v1"})
             self.assertEqual(200, page.status_code, page.text)
             observed.extend(item["id"] for item in page.json()["items"])
+            for item in page.json()['items']:
+                reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
+                checked = {**item['content'], 'owner': str(self.owner), 'media_state': 'ready',
+                           'media_objects': [], 'reconciliation': reference}
+                self.assertEqual(200, (await self.post(checked)).status_code)
+                ack = await self.client.post('/internal/telegram/observed/ack',
+                    json={'chat_id': '-1001', 'owner': str(self.owner), 'reconciliation': reference})
+                self.assertEqual(200, ack.status_code, ack.text)
         self.assertEqual(23, len(set(observed)))
 
     async def test_album_member_deletion_does_not_recommend_incomplete_album(self):
@@ -252,6 +587,22 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, acknowledged.status_code, acknowledged.text)
         self.assertEqual([], await self.pool.fetchval("SELECT media_objects FROM v2_telegram_events WHERE platform_message_id='11'"))
         self.assertEqual("storage_timeout", await self.pool.fetchval("SELECT last_error FROM v2_telegram_events WHERE platform_message_id='11'"))
+
+    async def test_superseded_failed_media_candidate_remains_reclaimable(self):
+        body = self.event(version='superseded-orphan', media=True)
+        candidate = {'object_key': 'telegram/test/old-candidate', 'mime_type': 'image/jpeg',
+                     'sha256': 'c' * 64, 'bytes': 100}
+        self.assertEqual(200, (await self.post(body | {'media_state': 'failed', 'media_objects': [candidate]})).status_code)
+        await self.pool.execute(
+            "UPDATE v2_telegram_events SET is_current=false,updated_at=now()-interval '48 hours'")
+        result = await self.client.post('/internal/telegram/media/orphans',
+            json={'owner': str(self.owner), 'older_than_hours': 24})
+        self.assertEqual(200, result.status_code, result.text)
+        self.assertEqual([candidate['object_key']], [row['object_key'] for row in result.json()['items']])
+        ack = await self.client.post('/internal/telegram/media/orphans/ack',
+            json={'owner': str(self.owner), 'object_keys': [candidate['object_key']]})
+        self.assertEqual(200, ack.status_code, ack.text)
+        self.assertEqual([], await self.pool.fetchval('SELECT media_objects FROM v2_telegram_events'))
 
     async def test_media_orphan_inventory_never_returns_key_referenced_by_ready_message(self):
         key = "telegram/messages/-1001/ready/" + "b" * 64

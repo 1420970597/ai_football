@@ -10,6 +10,8 @@ TASK_PERF_CREATED_NETWORK=false
 TASK_PERF_CREATED_PG=false
 TASK_PERF_CREATED_API=false
 cleanup() {
+  if "$TASK_PERF_CREATED_API"; then docker logs "$TASK_PERF_API" > reports/performance/api-on-exit.log 2>&1 || true; fi
+  if "$TASK_PERF_CREATED_PG"; then docker logs "$TASK_PERF_PG" > reports/performance/postgres-on-exit.log 2>&1 || true; fi
   if "$TASK_PERF_CREATED_API"; then docker rm -f "$TASK_PERF_API" >/dev/null; fi
   if "$TASK_PERF_CREATED_PG"; then docker rm -fv "$TASK_PERF_PG" >/dev/null; fi
   if "$TASK_PERF_CREATED_NETWORK"; then docker network rm "$TASK_PERF_NETWORK" >/dev/null; fi
@@ -28,10 +30,11 @@ fi
 mkdir -p reports/performance
 docker network create --internal "$TASK_PERF_NETWORK" >/dev/null
 TASK_PERF_CREATED_NETWORK=true
-docker run -d --name "$TASK_PERF_PG" --network "$TASK_PERF_NETWORK" --cpus=0.35 --memory=384m \
-  --tmpfs /var/lib/postgresql/data:rw,nosuid,size=268435456 \
+docker run -d --name "$TASK_PERF_PG" --network "$TASK_PERF_NETWORK" --cpus=0.35 --memory=768m \
+  --tmpfs /var/lib/postgresql/data:rw,nosuid,size=536870912 \
   -e POSTGRES_USER=performance_test -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=postgres \
-  postgres:16-alpine -c shared_buffers=32MB -c max_connections=32 -c max_parallel_workers_per_gather=0 >/dev/null
+  postgres:16-alpine -c shared_buffers=32MB -c max_connections=32 -c max_parallel_workers_per_gather=0 \
+  -c max_wal_size=128MB -c min_wal_size=32MB -c checkpoint_timeout=30s >/dev/null
 TASK_PERF_CREATED_PG=true
 for TASK_PERF_WAIT in $(seq 1 30); do
   if docker exec "$TASK_PERF_PG" pg_isready -U performance_test -d postgres >/dev/null 2>&1; then break; fi

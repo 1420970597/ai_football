@@ -25,8 +25,12 @@ import {
 } from "./ui.js";
 import { initAdmin, loadAdmin } from "./admin.js";
 import { initIdentity } from "./identity.js";
-import { initMfa } from "./mfa.js";
+import { createAccountHistory } from "./account-history.js";
+const accountHistory = createAccountHistory();
 const initial = new URLSearchParams(location.hash.split("?")[1] || "");
+const SPORT_LABELS = { football: "足球", basketball: "篮球" };
+const validSport = (value) => Object.hasOwn(SPORT_LABELS, value);
+const sportLabel = (value = state.sport) => SPORT_LABELS[value] || SPORT_LABELS.football;
 const state = {
   page: "scores",
   date: validDate(initial.get("date")) ? initial.get("date") : dayKey(),
@@ -35,29 +39,45 @@ const state = {
   )
     ? initial.get("phase")
     : "all",
-  sport: "football",
+  sport: validSport(initial.get("sport")) ? initial.get("sport") : "football",
+  matchScope: initial.get('scope') === 'all' ? 'all' : 'recommended',
   leagueIds: initial.getAll("league_ids").slice(0, 100),
   leagueOptions: [],
+  leagueRequest: null,
+  leagueError: null,
   q: "",
   matches: [],
   cursor: null,
   experts: [],
+  expertFilters: { days: 30, phase: 'all', market_kind: 'all', source_id: '', sport: location.hash.startsWith('#experts') && validSport(initial.get('sport')) ? initial.get('sport') : 'football' },
+  expertSequence: 0,
+  signalSequence: 0,
   signals: [],
   signalCursor: null,
   messages: [],
   messageCursor: null,
   user: null,
   admin: null,
+  manualBet: null,
   authTab: "login",
   messageContext: "user",
   favoritesOnly: false,
   followedExpertsOnly: false,
   matchAbort: null,
   matchSequence: 0,
+  matchQueryKey: null,
+  leagueSequence: 0,
   retryTimer: null,
   plans: [],
   mediaUrls: [],
+  messagePreviewUrls: [],
+  messagePreviewObserver: null,
+  messagePreviewSequence: 0,
   accountBound: false,
+  accountSequence: 0,
+  accountPollTimer: null,
+  accountPollGeneration: 0,
+  accountPollStartedAt: 0,
   orders: [],
   orderCursor: null,
   dialogSequence: 0,
@@ -131,6 +151,11 @@ function route(
     ].includes(page)
   )
     page = "scores";
+  if (page !== "scores") {
+    state.matchAbort?.abort();
+    ++state.matchSequence;
+    clearTimeout(state.retryTimer);
+  }
   if (phase) state.phase = phase;
   state.page = page;
   if (page === "messages") state.messageContext = asAdmin ? "admin" : "user";
@@ -142,9 +167,11 @@ function route(
         params({
           date: state.date,
           phase: state.phase,
+          sport: state.sport,
           league_ids: state.leagueIds,
+          scope: state.matchScope,
         })
-      : "");
+      : page === "experts" ? "?" + params({ sport: state.expertFilters.sport }) : "");
   if (!preserveHash && location.hash !== hash)
     history[replace ? "replaceState" : "pushState"]({}, "", hash);
   $(".main-layout").dataset.page = page;
@@ -169,15 +196,18 @@ function route(
     renderDates();
     loadMatches();
     loadLeagues();
+    loadManualBet();
+    accountHistory.load();
   }
   if (page === "experts") loadExperts();
   if (page === "membership") loadPlans();
   if (page === "messages") loadMessages();
   if (page === "account") loadAccount();
+  else stopAccountPolling();
   if (page === "admin") loadAdmin();
   document.title =
     {
-      scores: "足球即时比分",
+      scores: sportLabel() + (state.matchScope === 'recommended' ? '专家关联比赛' : '即时比分'),
       experts: "专家推荐",
       messages: "发言与审核原文",
       membership: "会员服务",
@@ -211,7 +241,20 @@ function renderDates() {
     button.setAttribute("aria-pressed", String(selected));
   }
   $("#score-title").textContent =
-    state.sport === "basketball" ? "篮球即时比分" : "足球即时比分";
+    sportLabel() + (state.matchScope === 'recommended' ? '专家关联比赛' : '即时比分');
+  $("#sport-context").textContent = sportLabel() + (state.matchScope === 'recommended' ? '专家关联比赛与盘口' : '比分与盘口');
+  $$('[data-match-scope]').forEach(button => {
+    const selected = button.dataset.matchScope === state.matchScope;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  $('#match-market-heading').textContent = state.matchScope === 'recommended' ? '专家关联盘口' : '当前盘口 / 赔率';
+  $('#matches-footnote').textContent = state.matchScope === 'recommended'
+    ? '专家记录展示推荐时的盘口与系统赔率，供查询原文及结算；不代表当前成交价格。关注仅保存在当前浏览器。'
+    : '上游报价时间未知、过期或停盘时，均不视为可交易报价。关注仅保存在当前浏览器。';
+  $$('[data-sport-label]').forEach((element) => {
+    element.firstChild.nodeValue = sportLabel() + "比分 ";
+  });
 }
 function setDate(date) {
   if (!validDate(date)) return;
@@ -220,26 +263,51 @@ function setDate(date) {
   route("scores", { replace: true });
 }
 function quoteLabel(q) {
-  return `${q.market_name || q.market_kind || "盘口"} ${period(q.period)} ${q.line ?? ""} ${selection(q.selection)} ${decimal(q.price)}`;
+  return `${q.market_name || q.market_kind || "盘口"} ${period(q.period)} ${lineLabel(q)} ${selection(q.selection)} ${decimal(q.price)}`;
+}
+function renderMatchOdds(m) {
+  const all = m.markets || [], first = all.find((q) => q.is_main !== false) || all[0];
+  const quotes = first ? all.filter((q) => q.market_id === first.market_id &&
+    q.period === first.period && q.line === first.line).slice(0, 3) : [];
+  const empty = m.markets_status === "loading" ? "盘口加载中…"
+    : m.markets_status === "unavailable" ? "盘口暂时不可用" : "暂无有效赔率";
+  const market = m.sport === "basketball" && first
+    ? `<span class="odds-market">${esc(period(first.period))} · ${esc(first.market_name || first.market_kind || "盘口")}</span>`
+    : "";
+  return market + (quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(lineLabel(q))} ${decimal(q.price)}</span>`).join("") : `<span class="stale">${empty}</span>`) +
+    (all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : "");
+}
+function scoreMarkup(match) {
+  const hasScore = match.home_score !== null && match.home_score !== undefined;
+  const score = hasScore
+    ? esc(match.home_score) + " : " + esc(match.away_score ?? "－")
+    : match.phase === "scheduled"
+      ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
+      : "－";
+  const half = match.sport === "basketball" &&
+      match.half_home_score !== null && match.half_home_score !== undefined
+    ? `<small class="basketball-half-score">半场 ${esc(match.half_home_score)} : ${esc(match.half_away_score ?? "－")}</small>`
+    : "";
+  return score + half;
+}
+function matchRecommendationMarkup(match) {
+  const signals = match.expert_signals || [];
+  const stake = state.user && state.manualBet?.enabled ? state.manualBet.stake_per_order : null;
+  return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
+    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${stake !== null ? `<button class="small-button manual-bet" data-bet-signal="${esc(s.id)}">实盘买入 ${decimal(stake)}</button>` : ''}</div><small class="muted">报价时间 ${stamp(s.quote_time)}</small></article>`
+  ).join('') || '<p class="muted">关联记录已变更，请刷新列表。</p>'}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
 function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
     .map((m) => {
-      const all = m.markets || [],
-        first = all.find((q) => q.is_main !== false) || all[0];
-      const related = first
-          ? all.filter(
-              (q) =>
-                q.market_id === first.market_id &&
-                q.period === first.period &&
-                q.line === first.line,
-            )
-          : [],
-        quotes = related.slice(0, 3);
-      return `<article class="match-row" data-fixture="${esc(m.id)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${m.home_score === null || m.home_score === undefined ? "－" : esc(m.home_score) + " : " + esc(m.away_score ?? "－")}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(q.line ?? "")} ${decimal(q.price)}</span>`).join("") : '<span class="stale">暂无有效赔率</span>'}${all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : ""}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button></article>`;
+      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${state.matchScope === 'recommended' ? '推荐盘口见下方' : renderMatchOdds(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
     })
     .join("");
+  $$('#matches-list > .match-row').forEach((row, index) => {
+    const fixtureId = items[index].id;
+    row.insertAdjacentHTML('beforeend', `<div class="match-account-history" data-account-fixture="${esc(fixtureId)}"${state.user ? '' : ' hidden'}>${accountHistory.matchMarkup(fixtureId)}</div>`);
+  });
   $("#fixture-count").textContent =
     state.matches.length + (state.cursor ? "+" : "");
   $("#load-more").hidden = !state.cursor;
@@ -248,16 +316,97 @@ function renderMatches() {
     stateBox($("#matches-state"), {
       title: state.favoritesOnly
         ? "当前筛选下没有关注比赛"
-        : "暂无符合条件的比赛",
+        : state.matchScope === 'recommended' ? "暂无符合条件的专家关联比赛" : "暂无符合条件的比赛",
       description: state.favoritesOnly
         ? "可先在全部赛事中点击星标关注。"
         : "尝试切换日期、状态或联赛；没有比赛不会补入演示数据。",
     });
 }
+function updateMatchServiceState() {
+  if (state.matchScope === 'recommended') {
+    $('#service-state').textContent = `专家关联赛事已响应 · ${state.matches.length} 场已载入`;
+    $('#matches-notice').hidden = true;
+    return;
+  }
+  const stale = state.matches.filter((m) => m.markets?.length && !m.quote_fresh).length;
+  const pending = state.matches.filter((m) => m.markets_status === "loading").length;
+  const unavailable = state.matches.filter((m) => m.markets_status === "unavailable").length;
+  $("#service-state").textContent = `赛事服务已响应 · ${state.matches.length} 场已载入${pending ? " · 盘口加载中 " + pending + " 场" : ""}${unavailable ? " · 盘口暂时不可用 " + unavailable + " 场" : ""}${stale ? " · " + stale + " 场报价过期或时间未知" : ""}`;
+  const notices = [];
+  if (unavailable) notices.push(`${unavailable} 场比赛盘口暂时不可用，比分和状态已更新；可稍后刷新盘口。`);
+  if (stale) notices.push(`${stale} 场比赛报价过期或时间未知，保留显示供查询；详情会标明报价状态。`);
+  $("#matches-notice").hidden = !notices.length;
+  $("#matches-notice").className = "notice";
+  $("#matches-notice").textContent = notices.join(" ");
+}
+async function loadMatchSummaries(identifiers, sequence, parentSignal) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  parentSignal.addEventListener("abort", cancel, { once: true });
+  if (parentSignal.aborted) cancel();
+  const timer = setTimeout(cancel, 25000);
+  const current = () => !parentSignal.aborted && sequence === state.matchSequence && state.page === "scores";
+  const merge = (ids, summaries = []) => {
+    const rows = $$("#matches-list .match-row");
+    const anchor = rows.find((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    });
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const requested = new Set(ids), byId = new Map(summaries.map((m) => [m.fixture_id, m]));
+    for (const m of state.matches) {
+      if (!requested.has(m.id)) continue;
+      const summary = byId.get(m.id);
+      m.markets = summary?.markets || [];
+      m.markets_status = summary ? "loaded" : "unavailable";
+      m.quote_fresh = !!summary?.quote_fresh && summary.phase === m.phase;
+    }
+    const matches = new Map(state.matches.filter((m) => requested.has(m.id)).map((m) => [m.id, m]));
+    for (const row of rows) {
+      const m = matches.get(row.dataset.fixture);
+      if (m) row.querySelector(".match-odds").innerHTML = renderMatchOdds(m);
+    }
+    updateMatchServiceState();
+    if (anchor?.isConnected) {
+      const shift = anchor.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(shift) > 0.5) window.scrollBy(0, shift);
+    }
+  };
+  let offset = 0;
+  try {
+    for (; offset < identifiers.length && !controller.signal.aborted; offset += 50) {
+      const batch = identifiers.slice(offset, offset + 50);
+      try {
+        const result = await api("/public/match-summaries?" + params({ fixture_ids: batch }),
+          { signal: controller.signal, timeout: 7000 });
+        if (!current()) return;
+        if (!Array.isArray(result.items)) throw new Error("盘口摘要响应不完整");
+        merge(batch, result.items);
+      } catch {
+        if (!current()) return;
+        merge(batch);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    parentSignal.removeEventListener("abort", cancel);
+    if (current() && offset < identifiers.length) merge(identifiers.slice(offset));
+  }
+}
 async function loadMatches(append = false) {
+  const queryKey = JSON.stringify([state.date, state.phase, state.sport, state.matchScope, [...state.leagueIds].sort(), state.q]);
+  if (queryKey !== state.matchQueryKey) {
+    state.matchAbort?.abort();
+    ++state.matchSequence;
+    state.matchQueryKey = queryKey;
+    state.matches = [];
+    state.cursor = null;
+    append = false;
+    renderMatches();
+  }
   if (!navigator.onLine) {
     $("#matches-notice").hidden = false;
-    $("#matches-notice").textContent = "当前网络已断开，保留上次赛事。";
+    $("#matches-notice").textContent = "筛选已更新；网络断开，恢复连接后重新读取赛事。";
     return;
   }
   clearTimeout(state.retryTimer);
@@ -277,6 +426,7 @@ async function loadMatches(append = false) {
     const refreshDeadline = performance.now() + 30000;
     let cursor = append ? state.cursor : null;
     const items = [];
+    const summaryIds = [];
     let result;
     const seenCursors = new Set();
     do {
@@ -293,10 +443,18 @@ async function loadMatches(append = false) {
             q: state.q,
             cursor,
             page_size: Math.min(200, Math.max(50, targetCount - items.length)),
+            include_markets: false,
+            recommended_only: state.matchScope === 'recommended',
           }),
         { signal: controller.signal },
       );
       if (sequence !== state.matchSequence) return;
+      if (result.markets_included === false && state.matchScope !== 'recommended') {
+        for (const match of result.items) {
+          match.markets_status = "loading";
+          summaryIds.push(match.id);
+        }
+      }
       const ids = new Set(items.map((match) => match.id));
       items.push(...result.items.filter((match) => !ids.has(match.id)));
       cursor = result.next_cursor;
@@ -316,18 +474,10 @@ async function loadMatches(append = false) {
     renderMatches();
     if (!append) scrollTo({ top: scrollPosition, behavior: "instant" });
     $("#last-updated").textContent = "更新 " + time(result.server_time);
-    const stale = state.matches.filter(
-      (m) => m.markets?.length && !m.quote_fresh,
-    ).length;
-    $("#service-state").textContent =
-      `赛事服务已响应 · ${state.matches.length} 场已载入${stale ? " · " + stale + " 场报价过期或时间未知" : ""}`;
-    if (stale) {
-      $("#matches-notice").hidden = false;
-      $("#matches-notice").textContent =
-        `${stale} 场比赛报价过期或时间未知，保留显示供查询；详情会标明报价状态。`;
-    }
+    updateMatchServiceState();
+    if (summaryIds.length) void loadMatchSummaries([...new Set(summaryIds)], sequence, controller.signal);
   } catch (error) {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || sequence !== state.matchSequence) return;
     $("#service-state").textContent = "赛事服务暂未响应";
     if (state.matches.length) {
       $("#matches-notice").hidden = false;
@@ -338,7 +488,7 @@ async function loadMatches(append = false) {
     if (state.page === "scores")
       state.retryTimer = setTimeout(() => loadMatches(), 30000);
   } finally {
-    button.disabled = false;
+    if (sequence === state.matchSequence) button.disabled = false;
   }
 }
 function leagueLabel() {
@@ -346,8 +496,12 @@ function leagueLabel() {
     ? "联赛 (" + state.leagueIds.length + ") ▾"
     : "全部联赛 ▾";
 }
-async function loadLeagues() {
-  try {
+function loadLeagues() {
+  const sequence = ++state.leagueSequence;
+  state.leagueError = null;
+  state.leagueOptions = [];
+  state.leagueRequest = (async () => {
+   try {
     const data = await api(
       "/public/leagues?" +
         params({
@@ -357,13 +511,29 @@ async function loadLeagues() {
           tz: "Asia/Shanghai",
         }),
     );
+    if (sequence !== state.leagueSequence) return;
     state.leagueOptions = data.items;
     leagueLabel();
   } catch (error) {
+    if (sequence !== state.leagueSequence) return;
+    state.leagueError = error.message;
     $("#league-filter").title = error.message;
   }
+  })();
+  return state.leagueRequest;
 }
-function chooseLeagues() {
+async function chooseLeagues() {
+  dialog('选择联赛', '<div class="empty-state" role="status">正在读取当前联赛目录…</div>');
+  const sequence = state.dialogSequence;
+  const leagueSequence = state.leagueSequence;
+  await (state.leagueRequest || loadLeagues());
+  if (sequence !== state.dialogSequence || !$("#content-dialog").open || leagueSequence !== state.leagueSequence) return;
+  if (state.leagueError) {
+    $("#dialog-content").innerHTML = '<div class="empty-state">' + esc(state.leagueError) +
+      '<br><button class="small-button" id="retry-league-directory">重新读取联赛</button></div>';
+    $("#retry-league-directory").onclick = () => { loadLeagues(); chooseLeagues(); };
+    return;
+  }
   dialog(
     "选择联赛",
     `<section class="detail-section"><p class="form-note">当前日期与状态下的完整联赛目录，可多选（最多100项）。</p><div class="league-choices">${state.leagueOptions.map((l) => `<label class="check-label"><input type="checkbox" data-league-id="${esc(l.competition_id)}" ${state.leagueIds.includes(l.competition_id) ? "checked" : ""} ${l.competition_id === null ? "disabled" : ""}><span>${esc(l.competition_name)} <small>(${esc(l.match_count)})</small></span></label>`).join("") || '<p class="muted">暂无可用联赛，请切换日期。</p>'}</div><div class="form-actions"><button class="small-button" data-clear-leagues>清除筛选</button><button class="primary-button" data-apply-leagues>应用筛选</button></div></section>`,
@@ -371,14 +541,55 @@ function chooseLeagues() {
 }
 export function signalCard(s, renderContext = "user") {
   const hasFixture = s.home_team && s.away_team;
-  return `<article class="signal-card"><div class="signal-meta"><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || "专家昵称未记录")}</button><span>${stamp(s.created_at)}</span><span class="badge ${esc(s.phase)}">${esc(phases[s.phase] || s.phase || "阶段未知")}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || s.outcome || "待结算")}</span></div><div class="signal-match">${hasFixture ? esc(s.home_team) + ' <span class="muted">vs</span> ' + esc(s.away_team) : "赛事编号：" + esc(s.fixture_id)}</div><div class="muted">${esc(s.competition_name || "")} ${s.kickoff_at ? stamp(s.kickoff_at) : ""}</div><div class="signal-pick"><span>${esc(s.market_name)} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span>系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span></div><div class="signal-evidence">报价时间：${stamp(s.quote_time)}　报价编号：${esc(s.quote_id || "历史记录未提供")} ${s.score_baseline?.home !== null && s.score_baseline?.home !== undefined ? "　比分基线 " + esc(s.score_baseline.home) + ":" + esc(s.score_baseline.away) : ""}</div><div class="signal-actions">${s.fixture_id ? `<button class="text-link" data-match="${esc(s.fixture_id)}" data-quote="${esc(s.quote_id || "")}">系统比赛与盘口</button>` : ""}<button class="text-link" ${s.message_id ? `data-message="${esc(s.message_id)}" data-context="${renderContext}"` : `data-signal="${esc(s.id)}"`}>完整原文与审核</button><span class="${color(s.unit_net)}">${s.outcome !== "pending" && s.unit_net !== null ? "1单位净收益 " + signed(s.unit_net) : "等待赛果结算"}</span></div></article>`;
+  const fixturePhase = s.fixture_phase;
+  const fixtureStatus = phases[fixturePhase] || s.match_state || "状态未知";
+  const recommendationPhase = phases[s.phase] || s.phase || "阶段未知";
+  const withdrawn = Boolean(s.withdrawn_at);
+  const withdrawalNotice = s.withdrawal_reason === "source_edited"
+    ? "原消息已编辑，原版本推荐已撤回；原始证据保留。"
+    : s.withdrawal_reason === "source_deleted"
+      ? "原消息已删除，该推荐已撤回；原始证据保留。"
+      : "该推荐已撤回；原始证据保留。";
+  const intentCorrected = withdrawn && ["review_source_period_intent_ambiguous", "review_source_period_intent_conflict", "review_source_line_intent_conflict", "review_source_selection_intent_conflict", "review_source_period_not_supported", "review_source_selection_not_supported"].includes(s.withdrawal_reason);
+  const intentCorrectionNotice = s.withdrawal_reason === "review_source_line_intent_conflict"
+    ? "已撤销：推荐盘口线与来源证据不一致，已排除收益统计；原始证据保留。"
+    : s.withdrawal_reason === "review_source_selection_intent_conflict"
+      ? "已撤销：推荐方向与来源证据不一致，已排除收益统计；原始证据保留。"
+      : s.withdrawal_reason === "review_source_selection_not_supported"
+        ? "已撤销：来源未选择该推荐项，已排除收益统计；原始证据保留。"
+        : s.withdrawal_reason === "review_source_period_not_supported"
+          ? "已撤销：来源未明确推荐期间，已排除收益统计；原始证据保留。"
+          : "已撤销：推荐期间无法核验，已排除收益统计；原始证据保留。";
+  const intentCorrectionLabel = s.withdrawal_reason === "review_source_line_intent_conflict"
+    ? "盘口线纠错，已排除统计"
+    : s.withdrawal_reason === "review_source_selection_intent_conflict"
+      ? "方向纠错，已排除统计"
+      : s.withdrawal_reason === "review_source_selection_not_supported"
+        ? "选择证据不足，已排除统计"
+        : s.withdrawal_reason === "review_source_period_not_supported"
+          ? "期间证据不足，已排除统计"
+          : "期间纠错，已排除统计";
+  const signalSport = s.sport && validSport(s.sport) ? `<span class="badge sport-badge">${sportLabel(s.sport)}</span>` : "";
+  return `<article class="signal-card"><div class="signal-meta"><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || "专家昵称未记录")}</button><span>${stamp(s.created_at)}</span>${signalSport}<span class="badge ${esc(fixturePhase || "unknown")}" title="当前比赛状态">比赛：${esc(fixtureStatus)}</span><span class="badge recommendation-phase" title="专家发布推荐时的比赛阶段">推荐：${esc(recommendationPhase)}</span><span class="badge ${esc(s.outcome)}">${esc(withdrawn && s.outcome === "pending" ? "已撤回" : outcomes[s.outcome] || s.outcome || "待结算")}</span></div><div class="signal-match">${hasFixture ? esc(s.home_team) + ' <span class="muted">vs</span> ' + esc(s.away_team) : "赛事编号：" + esc(s.fixture_id)}</div><div class="muted">${esc(s.competition_name || "")} ${s.kickoff_at ? stamp(s.kickoff_at) : ""}</div><div class="signal-pick"><span>${esc(s.market_name)} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span>系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span></div><div class="signal-evidence">${intentCorrected ? `<strong class="negative">${esc(intentCorrectionNotice)}</strong><br>` : withdrawn ? `<strong class="negative">${esc(withdrawalNotice)}</strong><br>` : ""}报价时间：${stamp(s.quote_time)}　报价编号：${esc(s.quote_id || "历史记录未提供")} ${s.score_baseline?.home !== null && s.score_baseline?.home !== undefined ? "　比分基线 " + esc(s.score_baseline.home) + ":" + esc(s.score_baseline.away) : ""}</div><div class="signal-actions">${s.fixture_id ? `<button class="text-link" data-match="${esc(s.fixture_id)}" data-quote="${esc(s.quote_id || "")}">系统比赛与盘口</button>` : ""}<button class="text-link" ${s.message_id ? `data-message="${esc(s.message_id)}" data-context="${renderContext}"` : `data-signal="${esc(s.id)}"`}>完整原文与审核</button><span class="${color(s.unit_net)}">${intentCorrected ? esc(intentCorrectionLabel) : withdrawn ? "原推荐已撤回" : s.outcome !== "pending" && s.unit_net !== null ? "1单位净收益 " + signed(s.unit_net) : "等待赛果结算"}</span></div></article>`;
+}
+function effectiveSettledCount(expert) {
+  if (Object.hasOwn(expert, 'effective_settled_signals')) return expert.effective_settled_signals;
+  const counts = ['win', 'half_win', 'loss', 'half_loss'].map(key => expert[key]);
+  return counts.every(count => Number.isInteger(count) && count >= 0) ? counts.reduce((sum, count) => sum + count, 0) : null;
 }
 function renderExperts() {
+  const sportLabel = state.expertFilters.sport === 'basketball' ? '篮球' : '足球';
+  $('#experts-title').textContent = sportLabel + '专家推荐';
+  $$('[data-expert-sport]').forEach((button) => {
+    const selected = button.dataset.expertSport === state.expertFilters.sport;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
   const experts = state.experts;
   $("#experts-list").innerHTML = experts
     .map(
       (e, i) =>
-        `<article class="expert-row" data-expert-row="${esc(e.id)}"><div class="expert-identity"><button class="expert-name" data-expert="${esc(e.id)}"><span class="avatar">${esc((e.display_nickname || "?").slice(0, 1))}</span><span><strong>${esc(e.display_nickname)}</strong><small>${i + 1} 位 · 近30天 ${esc(e.total_signals ?? 0)} 条</small></span></button><button class="expert-follow" data-follow-expert="${esc(e.id)}" aria-label="关注 ${esc(e.display_nickname)}，仅当前浏览器" aria-pressed="${followedExperts.has(e.id)}" title="关注仅保存于当前浏览器，不启用自动投注">${followedExperts.has(e.id) ? "★" : "☆"}</button></div><span>${esc(e.settled_signals ?? 0)}</span><span>${percent(e.accuracy)}</span><span class="${color(e.unit_net)}">${e.settled_signals ? signed(e.unit_net) : "样本不足"}</span></article>`,
+        `<article class="expert-row" data-expert-row="${esc(e.id)}"><div class="expert-identity"><button class="expert-name" data-expert="${esc(e.id)}"><span class="avatar">${esc((e.display_nickname || "?").slice(0, 1))}</span><span><strong>${esc(e.display_nickname)}</strong><small>${sportLabel} · ${i + 1} 位 · 近${state.expertFilters.days}天 ${esc(e.total_signals ?? 0)} 条 · 证据不足排除 ${esc(e.excluded_signals ?? 0)}</small></span></button><button class="expert-follow" data-follow-expert="${esc(e.id)}" aria-label="关注 ${esc(e.display_nickname)}，仅当前浏览器" aria-pressed="${followedExperts.has(e.id)}" title="关注仅保存于当前浏览器，不启用自动投注">${followedExperts.has(e.id) ? "★" : "☆"}</button></div><span>${esc(effectiveSettledCount(e) ?? '样本不足')}</span><span>${percent(e.accuracy)}</span><span class="${color(e.unit_net)}">${e.settled_signals ? signed(e.unit_net) : "样本不足"}</span></article>`,
     )
     .join("");
   applyExpertFollowing();
@@ -418,9 +629,16 @@ function applyExpertFollowing() {
     state.experts.some((expert) => followedExperts.has(expert.id));
 }
 async function loadExperts() {
+  const sequence = ++state.expertSequence;
   if (!state.experts.length) stateBox($("#experts-state"), { loading: true });
   try {
-    const data = await api("/public/experts?days=30");
+    const data = await api("/public/experts?" + params(state.expertFilters));
+    if (sequence !== state.expertSequence) return;
+    if (data.source_options) {
+      const select = $('#expert-stats-filter [name=source_id]');
+      select.innerHTML = '<option value="">全部来源</option>' + data.source_options.map(s => `<option value="${esc(s.id)}">${esc(s.display_name)}</option>`).join('');
+      select.value = state.expertFilters.source_id;
+    }
     state.experts = data.items;
     renderExperts();
     $("#experts-state").hidden = !!data.items.length;
@@ -431,16 +649,20 @@ async function loadExperts() {
       });
     await loadSignals();
   } catch (error) {
+    if (sequence !== state.expertSequence) return;
     if (!state.experts.length) displayError($("#experts-state"), error);
     else toast(error.message + "，保留上次专家记录");
   }
 }
 async function loadSignals(append = false) {
+  const sequence = ++state.signalSequence;
+  const sport = state.expertFilters.sport;
   try {
     const data = await api(
       "/public/signals?" +
-        params({ page_size: 20, cursor: append ? state.signalCursor : null }),
+        params({ page_size: 20, cursor: append ? state.signalCursor : null, sport }),
     );
+    if (sequence !== state.signalSequence) return;
     state.signals = append ? [...state.signals, ...data.items] : data.items;
     state.signalCursor = data.next_cursor;
     $("#signals-list").innerHTML =
@@ -449,6 +671,7 @@ async function loadSignals(append = false) {
     $("#signals-more").hidden = !data.next_cursor;
     $("#signals-limited").hidden = !data.limited;
   } catch (error) {
+    if (sequence !== state.signalSequence) return;
     $("#signals-list").innerHTML =
       `<div class="empty-state">${esc(error.message)}</div>`;
   }
@@ -457,6 +680,7 @@ async function loadMessages(append = false) {
   const expertId = $("#message-expert").value;
   const target = $("#messages-state");
   if (!expertId && state.messageContext !== "admin") {
+    clearMessagePreviews();
     stateBox(target, {
       title: "选择一位专家",
       description:
@@ -487,9 +711,10 @@ async function loadMessages(append = false) {
     $("#messages-list").innerHTML = state.messages
       .map(
         (m) =>
-          `<article class="message-card"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span class="badge">${esc(analysisState(m.analysis_state || m.state))}</span>${m.deleted_at ? '<span class="badge">原消息已删除</span>' : ""}${m.edited_at ? "<span>已编辑 · 版本 " + esc(m.revision) + "</span>" : ""}</div><div class="message-preview">${esc(m.raw_text || "仅图片消息")}</div><div class="muted">${(m.media_objects || []).length} 张图片 ${m.media_state === "pending" ? "· 媒体待上传" : ""}</div><button class="text-link" data-message="${esc(m.id)}" data-context="${state.messageContext}">阅读原文、模型输出与对应买入</button></article>`,
+          `<article class="message-card"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span class="badge">${esc(analysisState(m.analysis_state || m.state))}</span>${m.deleted_at ? '<span class="badge">原版本已失效</span>' : ""}${m.edited_at ? "<span>已编辑 · 版本 " + esc(m.revision) + "</span>" : ""}</div><div class="message-preview">${esc(m.raw_text || "仅图片消息")}</div>${(m.media_objects || []).length ? `<div class="muted">${m.media_objects.length} 张图片 ${m.media_state === "pending" ? "· 媒体待上传" : ""}</div><div class="message-media-preview" data-preview-message="${esc(m.id)}" data-context="${state.messageContext}"></div>` : ""}<button class="text-link" data-message="${esc(m.id)}" data-context="${state.messageContext}">阅读原文、模型输出与对应买入</button></article>`,
       )
       .join("");
+    loadMessagePreviews(state.messages, state.messageContext);
     $("#messages-more").hidden = !data.next_cursor;
     if (!state.messages.length)
       stateBox(target, {
@@ -498,6 +723,71 @@ async function loadMessages(append = false) {
       });
   } catch (error) {
     displayError(target, error);
+  }
+}
+function clearMessagePreviews() {
+  state.messagePreviewSequence++;
+  state.messagePreviewObserver?.disconnect();
+  state.messagePreviewObserver = null;
+  state.messagePreviewUrls.forEach(URL.revokeObjectURL);
+  state.messagePreviewUrls = [];
+}
+function loadMessagePreviews(messages, context) {
+  clearMessagePreviews();
+  const sequence = state.messagePreviewSequence;
+  const containers = $$('[data-preview-message]');
+  let budget = 12;
+  const load = async (container) => {
+    const message = messages.find((item) => item.id === container.dataset.previewMessage);
+    const media = message?.media_objects?.[0];
+    if (!message || !media || budget <= 0) return;
+    budget--;
+    const root = `/api/v1/${context === 'admin' ? 'admin/telegram' : 'public'}/messages/${encodeURIComponent(message.id)}/media/`;
+    const publicRoot = `/api/v1/public/messages/${encodeURIComponent(message.id)}/media/`;
+    const url = media.url || `${root}0`;
+    if (!url.startsWith(root) && !(context === 'admin' && url.startsWith(publicRoot))) return;
+    try {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: { 'X-Session-Context': context },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!response.ok) throw new Error('media unavailable');
+      const type = response.headers.get('Content-Type')?.split(';')[0] || '';
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(type)) throw new Error('unsupported media');
+      const blob = await response.blob();
+      if (blob.size > 6 * 1024 * 1024) throw new Error('media too large');
+      if (sequence !== state.messagePreviewSequence) return;
+      const objectUrl = URL.createObjectURL(blob);
+      state.messagePreviewUrls.push(objectUrl);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'message-thumbnail';
+      button.dataset.message = message.id;
+      button.dataset.context = context;
+      button.title = '查看原消息与完整图片';
+      const image = document.createElement('img');
+      image.src = objectUrl;
+      image.alt = 'Telegram 原文图片预览';
+      button.append(image);
+      container.replaceChildren(button);
+    } catch {
+      if (sequence === state.messagePreviewSequence)
+        container.textContent = '图片暂不可预览';
+    }
+  };
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer.unobserve(entry.target);
+        void load(entry.target);
+      }
+    }, { rootMargin: '160px 0px' });
+    state.messagePreviewObserver = observer;
+    containers.forEach((container) => state.messagePreviewObserver.observe(container));
+  } else {
+    containers.slice(0, 12).forEach((container) => void load(container));
   }
 }
 function analysisState(value) {
@@ -518,7 +808,7 @@ function analysisState(value) {
   );
 }
 function lineLabel(q) {
-  const value = q.line;
+  const value = q.selection_line ?? q.line;
   if (value === null || value === undefined) return "";
   return (q.market_kind === "handicap" || /让球/.test(q.market_name || "")) &&
     Number(value) > 0
@@ -538,7 +828,7 @@ function marketMarkup(markets, filters = { period: "all", scope: "all" }) {
     controls +
     [...groups.entries()]
       .map(
-        ([key, quotes]) =>
+        ([, quotes]) =>
           `<section class="market-group" data-period="${esc(quotes[0].period)}"><h4>${esc(period(quotes[0].period))} · ${esc(quotes[0].market_name)}</h4><div class="table-scroll"><table class="market-table"><thead><tr><th>盘口线 / 方向</th><th>系统赔率</th><th>报价状态 / 时间</th></tr></thead><tbody>${quotes.map((q) => `<tr data-main="${q.is_main !== false}" data-quote="${esc(q.quote_id)}"><td>${esc(lineLabel(q))} · ${esc(selection(q.selection))} <small>${q.is_main === false ? "附加线" : "主线"}</small><br><small>${esc(q.quote_id || "无编号")}</small></td><td class="${q.change > 0 ? "price-up" : q.change < 0 ? "price-down" : ""}">${decimal(q.price)}${q.change > 0 ? " ↑" : q.change < 0 ? " ↓" : ""}</td><td>${q.status && !["active", "open"].includes(q.status) ? esc({ suspended: "停盘", closed: "关闭" }[q.status] || q.status) : q.fresh ? "有效" : "过期 / 时间未知"}<br><small>${stamp(q.source_updated_at)}</small></td></tr>`).join("")}</tbody></table></div></section>`,
       )
       .join("")
@@ -579,6 +869,15 @@ async function openMatch(id, { refresh = false, quoteId = null } = {}) {
   const sequence = ++state.dialogSequence;
   try {
     const data = await api("/public/matches/" + encodeURIComponent(id));
+    const wanted = refresh && same ? (state.matchMarketCount || 0) : 0;
+    while (data.next_market_cursor &&
+      (data.markets.length < wanted || (quoteId && !data.markets.some((q) => q.quote_id === quoteId)))) {
+      if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
+      const next = await api("/public/matches/" + encodeURIComponent(id) + "/markets?" +
+        params({ cursor: data.next_market_cursor }));
+      data.markets.push(...next.markets);
+      data.next_market_cursor = next.next_market_cursor;
+    }
     const f = data.fixture;
     if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
     const previous = state.quotePrices || new Map();
@@ -589,9 +888,51 @@ async function openMatch(id, { refresh = false, quoteId = null } = {}) {
     state.quotePrices = new Map(data.markets.map((q) => [q.quote_id, q.price]));
     if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
     $("#dialog-title").textContent = f.home_team + " vs " + f.away_team;
+    const halfScore = f.sport === "basketball" && f.half_home_score !== null && f.half_home_score !== undefined
+      ? ` · 半场比分 ${esc(f.half_home_score)} : ${esc(f.half_away_score ?? "－")}`
+      : "";
     $("#dialog-content").innerHTML =
-      `<section class="detail-hero"><p>${esc(f.competition_name)} · ${stamp(f.kickoff_at)}</p><div class="detail-teams"><h3>${esc(f.home_team)}</h3><strong>${f.home_score === null || f.home_score === undefined ? "VS" : esc(f.home_score) + " : " + esc(f.away_score)}</strong><h3>${esc(f.away_team)}</h3></div><p>${esc(phases[f.phase] || f.match_state)} ${f.phase === "live" && f.clock_minute !== null ? esc(f.clock_minute ?? "") + "′" : ""} · 上游更新 ${stamp(f.source_updated_at)}</p><button class="small-button" id="refresh-detail">刷新本场数据</button></section><section class="detail-section"><h3>系统当前盘口</h3>${data.markets.length ? marketMarkup(data.markets, state.matchFilters) : '<div class="empty-state">暂无有效赔率。上游尚未提供盘口或当前已停盘。</div>'}</section><section class="detail-section"><h3>本场专家推荐</h3>${data.expert_signals.map((s) => signalCard({ ...s, home_team: f.home_team, away_team: f.away_team, competition_name: f.competition_name, fixture_id: f.id })).join("") || '<p class="muted">暂无已绑定本场的专家推荐</p>'}</section><p class="data-footnote">当前未提供阵容、直播事件及球队历史资料，不生成推测信息。</p>`;
+      `<section class="detail-hero"><p><span class="sport-tag">${esc(sportLabel(f.sport))}</span> · ${esc(f.competition_name)} · ${stamp(f.kickoff_at)}</p><div class="detail-teams"><h3>${esc(f.home_team)}</h3><strong>${f.home_score === null || f.home_score === undefined ? "VS" : esc(f.home_score) + " : " + esc(f.away_score)}</strong><h3>${esc(f.away_team)}</h3></div><p>${esc(phases[f.phase] || f.match_state)} ${f.phase === "live" && f.clock_minute !== null ? esc(f.clock_minute ?? "") + "′" : ""}${halfScore} · 上游更新 ${stamp(f.source_updated_at)}</p><button class="small-button" id="refresh-detail">刷新本场数据</button></section><section class="detail-section"><h3>${esc(sportLabel(f.sport))}当前盘口</h3>${data.markets.length ? marketMarkup(data.markets, state.matchFilters) : '<div class="empty-state">暂无有效赔率。上游尚未提供盘口或当前已停盘。</div>'}</section><section class="detail-section"><h3>本场专家推荐</h3>${data.expert_signals.map((s) => signalCard({ ...s, sport: f.sport, home_team: f.home_team, away_team: f.away_team, competition_name: f.competition_name, fixture_id: f.id })).join("") || '<p class="muted">暂无已绑定本场的专家推荐</p>'}</section><p class="data-footnote">当前未提供阵容、直播事件及球队历史资料，不生成推测信息。</p>`;
     $("#refresh-detail").onclick = () => openMatch(id, { refresh: true });
+    const marketSection = $("#dialog-content .detail-section");
+    const renderMarkets = () => {
+      state.matchMarketCount = data.markets.length;
+      state.quotePrices = new Map(data.markets.map((q) => [q.quote_id, q.price]));
+      marketSection.innerHTML = '<h3>系统当前盘口</h3>' + (data.markets.length
+        ? marketMarkup(data.markets, state.matchFilters)
+        : '<div class="empty-state">暂无有效赔率。上游尚未提供盘口或当前已停盘。</div>') +
+        (data.next_market_cursor ? '<button class="small-button" id="match-markets-more">继续加载盘口</button>' : '');
+      if (data.markets.length) {
+        $("#market-period").onchange = filterMarkets;
+        $("#market-scope").onchange = filterMarkets;
+        filterMarkets();
+      }
+      const button = $("#match-markets-more");
+      if (button) button.onclick = async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        clearTimeout(state.detailTimer);
+        try {
+          const next = await api("/public/matches/" + encodeURIComponent(id) + "/markets?" +
+            params({ cursor: data.next_market_cursor }));
+          if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
+          const known = new Set(data.markets.map((q) => q.quote_id));
+          data.markets.push(...next.markets.filter((q) => !known.has(q.quote_id)));
+          data.next_market_cursor = next.next_market_cursor;
+          renderMarkets();
+        } catch (error) {
+          if (sequence === state.dialogSequence) toast(error.message + '，保留已加载盘口，可重试');
+        } finally {
+          if (state.activeMatch === id && sequence === state.dialogSequence) {
+            button.disabled = false;
+            state.detailTimer = setTimeout(() => {
+              if (!document.hidden) openMatch(id, { refresh: true });
+            }, 20000);
+          }
+        }
+      };
+    };
+    renderMarkets();
     if (data.markets.length) {
       $("#market-period").onchange = filterMarkets;
       $("#market-scope").onchange = filterMarkets;
@@ -636,14 +977,18 @@ async function openExpert(id) {
   const sequence = state.dialogSequence;
   try {
     const [data, trend] = await Promise.all([
-      api("/public/experts/" + encodeURIComponent(id) + "?days=30"),
-      api("/public/experts/" + encodeURIComponent(id) + "/trend?days=365"),
+      api("/public/experts/" + encodeURIComponent(id) + "?" + params(state.expertFilters)),
+      api("/public/experts/" + encodeURIComponent(id) + "/trend?" + params(state.expertFilters)),
     ]);
     if (sequence !== state.dialogSequence) return;
     const e = data.expert;
+    const sportLabel = state.expertFilters.sport === 'basketball' ? '篮球' : '足球';
+    const detailWindow = `${sportLabel} · 近${state.expertFilters.days}天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}`;
+    const qualityNote = `证据不足排除 ${esc(e.excluded_signals ?? 0)} 条（缺报价 ${esc(e.missing_quote_evidence ?? 0)}，结算证据无效 ${esc(e.invalid_settlement_evidence ?? 0)}，推荐意图纠错 ${esc(e.invalid_recommendation_intent ?? 0)}）。` +
+      (e.statistics_reset_at ? ` 本周期重新起算于 ${esc(stamp(e.statistics_reset_at))}，旧有效结算不再计入准确率及1单位收益；原始结算与真实账户收益保留。` : "");
     $("#dialog-title").textContent = e.display_nickname;
     $("#dialog-content").innerHTML =
-      `<section class="detail-section"><div class="expert-name"><span class="avatar">${esc(e.display_nickname.slice(0, 1))}</span><h2>${esc(e.display_nickname)}</h2></div><p class="muted">近30天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}</p><div class="metrics-grid"><div><small>已结算推荐</small><strong>${esc(e.settled_signals)}</strong></div><div><small>加权准确率</small><strong>${percent(e.accuracy)}</strong></div><div><small>1单位净收益</small><strong>${e.settled_signals ? signed(e.unit_net) : "样本不足"}</strong></div><div><small>有效本金 ROI</small><strong>${percent(e.unit_roi)}</strong></div></div><p class="muted">全赢 ${e.win ?? 0} · 半赢 ${e.half_win ?? 0} · 全输 ${e.loss ?? 0} · 半输 ${e.half_loss ?? 0} · 走盘 ${e.push ?? 0} · 作废 ${e.void ?? 0} · 待结算 ${e.pending ?? 0}</p><p class="form-note">平均每条净收益 ${e.settled_signals ? signed(e.average_unit_net) : "样本不足"}；准确率按赢/输有效份额加权，走盘与作废排除。统计基于最新赛果结算证据。</p></section><section class="detail-section"><h3>累计一单位净收益走势</h3>${chart(trend.items)}<p class="form-note">近365天，UTC日结算；无结算日不补收益。</p></section><section class="detail-section"><button class="primary-button" data-expert-messages="${esc(id)}">查看该专家全部发言与审核原文</button></section>`;
+      `<section class="detail-section"><div class="expert-name"><span class="avatar">${esc(e.display_nickname.slice(0, 1))}</span><h2>${esc(e.display_nickname)}</h2></div><p class="muted">${detailWindow}</p><div class="metrics-grid"><div><small>已结算推荐</small><strong>${esc(e.settled_signals)}</strong></div><div><small>加权准确率</small><strong>${percent(e.accuracy)}</strong></div><div><small>1单位净收益</small><strong>${e.settled_signals ? signed(e.unit_net) : "样本不足"}</strong></div><div><small>有效本金 ROI</small><strong>${percent(e.unit_roi)}</strong></div></div><p class="muted">全赢 ${e.win ?? 0} · 半赢 ${e.half_win ?? 0} · 全输 ${e.loss ?? 0} · 半输 ${e.half_loss ?? 0} · 走盘 ${e.push ?? 0} · 作废 ${e.void ?? 0} · 待结算 ${e.pending ?? 0}</p><p class="form-note">平均每条净收益 ${e.settled_signals ? signed(e.average_unit_net) : "样本不足"}；准确率按赢/输有效份额加权，走盘与作废排除。统计基于不可变系统报价及最新赛果结算证据。${qualityNote}</p></section><section class="detail-section"><h3>累计一单位净收益走势</h3>${chart(trend.items)}<p class="form-note">与所选统计窗口一致，按UTC结算日累计；无结算日不补收益。</p></section><section class="detail-section"><button class="primary-button" data-expert-messages="${esc(id)}">查看该专家全部发言与审核原文</button></section>`;
   } catch (error) {
     if (sequence !== state.dialogSequence) return;
     $("#dialog-content").innerHTML =
@@ -682,8 +1027,74 @@ async function openSignal(id) {
       `<div class="empty-state">${esc(error.message)}${error.status === 403 ? '<br><button data-page="membership" class="small-button">查看会员权益</button>' : ""}</div>`;
   }
 }
-function traceMarkup(traces) {
-  return `<section class="detail-section"><h3>Hermes 模型输入、原始输出与工具轨迹</h3>${traces.length ? traces.map((t) => `<details class="trace-block" ${/output|final|result/.test(t.trace_kind) ? "open" : ""}><summary>${esc(t.trace_kind || analysisState(t.state))} · ${stamp(t.created_at)}${t.last_error ? " · " + esc(t.last_error) : ""}</summary><pre>${jsonTrace(t.payload ?? t.last_error ?? "暂无轨迹内容")}</pre></details>`).join("") : '<p class="muted">尚无审核轨迹。消息仍保留供排查。</p>'}</section>`;
+function traceBlocks(traces) {
+  return traces.filter((t) => t.trace_kind !== "system_review_result").map((t) => `<details class="trace-block" ${/output|final|result/.test(t.trace_kind) ? "open" : ""}><summary>${esc(t.trace_kind || analysisState(t.state))} · ${stamp(t.created_at)}${t.last_error ? " · " + esc(t.last_error) : ""}</summary><pre>${jsonTrace(t.payload ?? t.last_error ?? "暂无轨迹内容")}</pre>${t.tool_response_url ? `<button type="button" class="small-button" data-tool-response="${esc(t.tool_response_url)}">读取完整工具返回</button><div class="tool-response-content"></div>` : ""}</details>`).join("");
+}
+function traceMarkup(traces = [], systemSummary = null, modelResult = null) {
+  const latest = systemSummary || traces.filter((t) => t.trace_kind === "system_review_result" && typeof t.payload?.content === "string").at(-1);
+  const priorReceipt = latest?.is_current_attempt === false;
+  const receiptState = { queued: "新审核正在排队", running: "新审核正在处理中", retry: "新审核等待重试", failed: "新审核未能完成", cancelled: "新审核已取消" }[latest?.state] || "本次审核尚无对应汇总";
+  const receipt = latest ? `<section class="detail-section system-review-result"><h3>${priorReceipt ? "上次已保存的审核结果" : "系统确认的审核结果"}</h3>${priorReceipt ? `<p class="notice receipt-status" role="status">${esc(receiptState)}。下方为先前审核保存的汇总，数量可能与上方已确认推荐不同；已接受推荐继续保留。</p>` : ""}<pre class="raw-text">${esc(latest.payload.content)}</pre><p class="form-note">此处只汇总系统已接受记录及工具拒绝原因；模型原始输出保留在下方。</p></section>` : "";
+  const modelContent = modelResult?.payload?.content;
+  const modelAnalysis = typeof modelContent === "string" && modelContent.trim()
+    ? `<section class="detail-section model-review-result"><h3>Hermes 最新分析</h3><pre class="raw-text">${esc(modelContent)}</pre><p class="form-note">模型分析供核查；实际推荐以系统确认结果为准。</p></section>` : "";
+  return receipt + modelAnalysis + `<section class="detail-section"><h3>Hermes 模型输入、原始输出与工具轨迹</h3><p class="form-note">原文按审核顺序分页保留；图片请查看授权原图，工具分片通过对应记录读取完整返回。</p><div id="message-traces">${traces.length ? traceBlocks(traces) : '<p class="muted">尚无审核轨迹。消息仍保留供排查。</p>'}</div><button type="button" class="small-button" id="message-traces-more" hidden>继续读取模型原文与轨迹</button><p id="message-traces-status" class="form-note" role="status"></p></section>`;
+}
+function bindMessageEvidence(data, id, context, sequence) {
+  const content = $("#dialog-content");
+  const root = (context === "admin" ? "/admin/telegram/messages/" : "/public/messages/") + encodeURIComponent(id);
+  let traceCursor = data.analysis_next_cursor || null;
+  let signalCursor = data.signals_next_cursor || null;
+  let signalCount = (data.signals || []).length;
+  const traceMore = $("#message-traces-more");
+  const signalMore = $("#message-signals-more");
+  traceMore.hidden = !traceCursor;
+  signalMore.hidden = !signalCursor;
+  $("#message-traces-status").textContent = traceCursor ? "还有审核记录，请继续读取；尚未加载的内容没有被省略或删除。" : "当前已保存的审核轨迹已全部加载。";
+  traceMore.onclick = async () => {
+    traceMore.disabled = true;
+    try {
+      const page = await api(root + "/traces?cursor=" + encodeURIComponent(traceCursor), { context });
+      if (sequence !== state.dialogSequence) return;
+      $("#message-traces").insertAdjacentHTML("beforeend", traceBlocks(page.items || []));
+      traceCursor = page.next_cursor || null;
+      traceMore.hidden = !traceCursor;
+      $("#message-traces-status").textContent = traceCursor ? "还有审核记录，可继续读取。" : "当前已保存的审核轨迹已全部加载。";
+    } catch (error) {
+      if (sequence === state.dialogSequence) $("#message-traces-status").textContent = error.message + "；原文保留，可重试或重新打开。";
+    } finally { traceMore.disabled = false; }
+  };
+  signalMore.onclick = async () => {
+    signalMore.disabled = true;
+    try {
+      const page = await api(root + "/signals?cursor=" + encodeURIComponent(signalCursor), { context });
+      if (sequence !== state.dialogSequence) return;
+      $("#message-signals").insertAdjacentHTML("beforeend", (page.items || []).map((s) => signalCard(s, context)).join(""));
+      signalCount += (page.items || []).length;
+      signalCursor = page.next_cursor || null;
+      signalMore.hidden = !signalCursor;
+      $("#message-signals-status").textContent = `已加载 ${signalCount} 条系统盘口绑定。${signalCursor ? "还有推荐，请继续读取。" : "当前推荐已全部加载。"}`;
+    } catch (error) {
+      if (sequence === state.dialogSequence) $("#message-signals-status").textContent = error.message + "；已加载推荐保留。";
+    } finally { signalMore.disabled = false; }
+  };
+  content.onclick = async (event) => {
+    if (sequence !== state.dialogSequence) return;
+    const button = event.target.closest("[data-tool-response]");
+    if (!button || button.disabled) return;
+    const url = button.dataset.toolResponse;
+    if (!url?.startsWith("/api/v1" + root + "/tools/")) return;
+    button.disabled = true;
+    const target = button.nextElementSibling;
+    try {
+      const response = await api(url.slice(7), { context });
+      if (sequence !== state.dialogSequence) return;
+      target.innerHTML = `<p class="form-note">完整返回已校验 · ${esc(response.snapshot_sha256)}</p><pre>${jsonTrace(response.result)}</pre>`;
+      button.textContent = "完整工具返回已加载";
+    } catch (error) {
+      if (sequence === state.dialogSequence) { target.textContent = error.message; button.disabled = false; }
+    }
+  };
 }
 async function openMessage(id, context = "user") {
   state.messageContext = context;
@@ -704,13 +1115,15 @@ async function openMessage(id, context = "user") {
     $("#dialog-title").textContent =
       (m.display_nickname || "专家") + " · 完整消息";
     $("#dialog-content").innerHTML =
-      `<section class="detail-section"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span>消息版本 ${esc(m.revision ?? 1)}</span><span>${context === "admin" ? "管理员读取" : "用户权益读取"}</span>${m.deleted_at ? '<span class="badge">原消息已删除</span>' : ""}</div><h3>Telegram 消息原文</h3><pre class="raw-text">${esc(m.raw_text || "（仅图片消息）")}</pre>${m.reply_context ? `<details class="trace-block"><summary>回复上下文</summary><pre>${jsonTrace(m.reply_context)}</pre></details>` : ""}<div class="media-gallery" id="message-media"></div>${m.media_state === "pending" ? '<p class="notice">图片仍待上传；审核可能尚未完成。</p>' : ""}</section><section class="detail-section"><h3>对应系统比赛、盘口与推荐买入</h3><p class="form-note">已接受 ${data.signals.length} 条系统盘口绑定。其他未解决意图及原因保留在下方审核结果中，不能作为有效推荐。</p>${data.signals.map((s) => signalCard(s, context)).join("") || '<p class="muted">尚未形成已接受的盘口绑定；这条消息不会计入收益或自动投注。</p>'}</section>${traceMarkup(data.analysis)}`;
+      `<section class="detail-section"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span>消息版本 ${esc(m.revision ?? 1)}</span><span>${context === "admin" ? "管理员读取" : "用户权益读取"}</span>${m.deleted_at ? '<span class="badge">原版本已失效</span>' : ""}</div><h3>Telegram 消息原文</h3><pre class="raw-text">${esc(m.raw_text || "（仅图片消息）")}</pre>${m.reply_context ? `<details class="trace-block"><summary>回复上下文</summary><pre>${jsonTrace(m.reply_context)}</pre></details>` : ""}<div class="media-gallery" id="message-media"></div>${m.media_state === "pending" ? '<p class="notice">图片仍待上传；审核可能尚未完成。</p>' : ""}</section><section class="detail-section"><h3>对应系统比赛、盘口与推荐买入</h3><p class="form-note" id="message-signals-status">已加载 ${data.signals.length} 条系统盘口绑定。${data.signals_next_cursor ? "还有推荐，请继续读取。" : "当前推荐已全部加载。"}其他未解决意图及原因保留在下方审核结果中，不能作为有效推荐。</p><div id="message-signals">${data.signals.map((s) => signalCard(s, context)).join("") || '<p class="muted">尚未形成已接受的盘口绑定；这条消息不会计入收益或自动投注。</p>'}</div><button type="button" class="small-button" id="message-signals-more" hidden>继续读取推荐买入</button></section>${traceMarkup(data.analysis, data.system_summary, data.latest_model_result)}`;
+    bindMessageEvidence(data, id, context, sequence);
     for (const [index, media] of (m.media_objects || []).entries()) {
       const gallery = $("#message-media");
       const url =
         media.url ||
-        `/api/v1/public/messages/${encodeURIComponent(id)}/media/${index}`;
-      if (!url.startsWith("/api/v1/public/messages/")) continue;
+        `/api/v1/${context === "admin" ? "admin/telegram" : "public"}/messages/${encodeURIComponent(id)}/media/${index}`;
+      const allowedRoot = `/api/v1/${context === "admin" ? "admin/telegram" : "public"}/messages/${encodeURIComponent(id)}/media/`;
+      if (!url.startsWith(allowedRoot) && !(context === "admin" && url.startsWith(`/api/v1/public/messages/${encodeURIComponent(id)}/media/`))) continue;
       const status = document.createElement("span");
       status.className = "muted";
       status.textContent = "图片加载中…";
@@ -737,7 +1150,27 @@ async function openMessage(id, context = "user") {
           const img = document.createElement("img");
           img.src = objectUrl;
           img.alt = "Telegram 原消息授权图片 " + (index + 1);
-          status.replaceWith(img);
+          const item = document.createElement("div");
+          item.className = "message-image";
+          const frame = document.createElement("div");
+          frame.className = "original-image-frame";
+          frame.id = "message-original-" + sequence + "-" + index;
+          const toggle = document.createElement("button");
+          toggle.type = "button";
+          toggle.className = "small-button original-image-toggle";
+          toggle.textContent = "放大查看原图";
+          toggle.setAttribute("aria-controls", frame.id);
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.addEventListener("click", () => {
+            const expanded = toggle.getAttribute("aria-expanded") !== "true";
+            toggle.setAttribute("aria-expanded", String(expanded));
+            toggle.textContent = expanded ? "收起原图" : "放大查看原图";
+            item.classList.toggle("is-expanded", expanded);
+            if (!expanded) frame.scrollTo(0, 0);
+          });
+          frame.append(img);
+          item.append(toggle, frame);
+          status.replaceWith(item);
         })
         .catch(() => (status.textContent = "图片暂不可读，请稍后重新打开消息"));
     }
@@ -795,59 +1228,111 @@ async function loadIdentities() {
     state.user?.user.display_name || "登录 / 注册";
   $("#user-logout").hidden = !state.user;
   $("#admin-logout").hidden = !state.admin;
+  accountHistory.identify(state.user?.user.id);
+  if (state.page === 'scores') { accountHistory.load(); loadManualBet(); }
+}
+function stopAccountPolling() {
+  clearTimeout(state.accountPollTimer);
+  state.accountPollGeneration++;
+  state.accountPollStartedAt = Date.now();
+}
+function renderAccountVerification(data) {
+  accountHistory.binding(data.account);
+  const tasks = (data.tasks || []).filter(task => task.kind !== 'history');
+  const current = tasks.find((task) => task.current_binding !== false);
+  const active = current && ["queued", "running"].includes(current.state);
+  const taskLabels = { queued: "已排队", running: "校验中", succeeded: "校验成功", failed: "校验失败", unknown: "结果未知", rejected: "授权被拒绝" };
+  const healthLabels = { healthy: "已通过校验", unverified: "未校验", expired: "授权已失效", rejected: "授权被拒绝", renewal_required: "需要重新授权" };
+  $("#account-health").textContent = data.account
+    ? (current?.recovery_action === "provider_identity_verification" ? "需要乐鱼身份验证" : current && current.state !== "succeeded" ? taskLabels[current.state] : healthLabels[data.account.health_state]) || "账户状态待核对"
+    : "未绑定";
+  const taskLine = (task) => `<p class="form-note">${esc({ verify: "账户校验", refresh: "账户刷新" }[task.kind] || task.kind)} · ${esc(taskLabels[task.state] || task.state)} · ${stamp(task.updated_at)}${task.current_binding === false ? " · 重新绑定前" : ""}${task.message ? `<br>${esc(task.message)}` : task.last_error ? `<br>${esc(task.last_error)}${task.provider_code ? " · " + esc(task.provider_code) : ""}` : ""}</p>`;
+  const history = tasks.filter((task) => task !== current);
+  const account = data.account;
+  $("#account-verification").innerHTML = account
+    ? `<p>${esc(account.account_label)} · 最近成功校验 ${account.last_verified_at ? stamp(account.last_verified_at) : "从未成功"}</p><p>可用余额 ${account.available_balance == null ? "尚未核验" : decimal(account.available_balance)} · 余额时间 ${account.balance_observed_at ? stamp(account.balance_observed_at) : "尚未取得"}</p>${current ? taskLine(current) : ""}${history.length ? `<details><summary>历史校验记录（${history.length}）</summary>${history.map(taskLine).join("")}</details>` : ""}`
+    : '<p class="muted">尚未绑定本人乐鱼账户。</p>';
+  const cooling = account?.renewal_retry_after && new Date(account.renewal_retry_after).getTime() > Date.now();
+  const authorizationForm = $('#leyu-device-authorization');
+  authorizationForm.hidden = !account || current?.recovery_action !== 'provider_identity_verification' || !!active || account.renewal_state === 'unknown';
+  authorizationForm.querySelector('button').disabled = !!cooling;
+  $("#verify-account").disabled = !account || !!active || !!cooling ||
+    (["rejected", "unknown"].includes(account.renewal_state) && !account.reverification_available) ||
+    (account.health_state === "rejected" && !account.reverification_available);
+  $("#verify-account").textContent = active ? "正在校验，请稍候" : cooling ? "登录冷却中" : account?.reverification_available ? "重新校验本人账户" : "排队无资金校验";
+  state.accountBound = !!account;
+  return !!active || !!cooling;
+}
+function scheduleAccountPolling(needed, generation, failures = 0) {
+  if (!needed || generation !== state.accountPollGeneration || state.page !== "account" || document.hidden) return;
+  if (Date.now() - state.accountPollStartedAt > 360000) {
+    $("#account-health").textContent = "校验尚未完成，请刷新账户";
+    return;
+  }
+  state.accountPollTimer = setTimeout(async () => {
+    try {
+      const data = await api("/accounts/leyu");
+      if (generation !== state.accountPollGeneration || state.page !== "account") return;
+      scheduleAccountPolling(renderAccountVerification(data), generation);
+    } catch (error) {
+      if (generation !== state.accountPollGeneration || state.page !== "account") return;
+      $("#account-health").textContent = "状态更新失败";
+      $$(".account-poll-error").forEach((element) => element.remove());
+      $("#account-verification").insertAdjacentHTML("beforeend", `<p class="form-note account-poll-error">${esc(error.message)}；${failures < 2 ? "稍后重试状态查询" : "请点击刷新账户重试"}。</p>`);
+      scheduleAccountPolling(failures < 2, generation, failures + 1);
+    }
+  }, failures ? 5000 : 2000);
 }
 async function loadAccount() {
+  stopAccountPolling();
+  const pollGeneration = state.accountPollGeneration;
+  const sequence = ++state.accountSequence;
   $$("input,button", $("#leyu-form")).forEach(
     (input) => (input.disabled = true),
   );
   $("#leyu-form").setAttribute("aria-busy", "true");
-  await loadIdentities();
-  const user = state.user;
-  $("#account-content").hidden = !user;
-  $("#user-logout").hidden = !user;
-  if (!user) {
-    $("#identity-panel").innerHTML =
-      '<div class="identity-card"><h2>欢迎来到球讯</h2><p>登录后管理会员权益、绑定本人乐鱼账户及查看订单。</p><button class="primary-button" data-login="login">用户登录 / 注册</button></div>';
-    return;
-  }
-  const m = user.membership;
-  $("#identity-panel").innerHTML =
-    `<div class="identity-card"><h2>${esc(user.user.display_name)}</h2><p>${esc(user.user.email)} · 普通用户</p><p>${m ? esc(m.name) + " · " + (m.ends_at ? "有效至 " + stamp(m.ends_at) : "长期有效") : "暂无有效会员权益"}</p><p>${
-      Object.entries(m?.entitlements || {})
-        .filter(([, v]) => v)
-        .map(([k]) => esc(entitlementName(k)))
-        .join(" / ") || "可浏览公开赛事与受限专家摘要"
-    }</p></div>`;
-  if (user.closure_requested_at)
-    $("#identity-panel").insertAdjacentHTML(
-      "beforeend",
-      `<p class="notice">注销申请提交于 ${stamp(user.closure_requested_at)}，当前仅保留对账与停止投注等操作。核对完成后请在注销分区再次确认；取消注销不会恢复自动投注。</p>`,
-    );
-  $("#profile-form").elements.display_name.value = user.user.display_name;
+  $("#betting-form").setAttribute("aria-busy", "true");
+  configureBetControls();
   try {
+    await loadIdentities();
+    if (sequence !== state.accountSequence) return;
+    const user = state.user;
+    $("#account-content").hidden = !user;
+    $("#user-logout").hidden = !user;
+    if (!user) {
+      $("#identity-panel").innerHTML =
+        '<div class="identity-card"><h2>欢迎来到球讯</h2><p>登录后管理会员权益、绑定本人乐鱼账户及查看订单。</p><button class="primary-button" data-login="login">用户登录 / 注册</button></div>';
+      return;
+    }
+    const m = user.membership;
+    $("#identity-panel").innerHTML =
+      `<div class="identity-card"><h2>${esc(user.user.display_name)}</h2><p>${esc(user.user.email)} · 普通用户</p><p>${m ? esc(m.name) + " · " + (m.ends_at ? "有效至 " + stamp(m.ends_at) : "长期有效") : "暂无有效会员权益"}</p><p>${
+        Object.entries(m?.entitlements || {})
+          .filter(([, v]) => v)
+          .map(([k]) => esc(entitlementName(k)))
+          .join(" / ") || "可浏览公开赛事与受限专家摘要"
+      }</p></div>`;
+    if (user.closure_requested_at)
+      $("#identity-panel").insertAdjacentHTML(
+        "beforeend",
+        `<p class="notice">注销申请提交于 ${stamp(user.closure_requested_at)}，当前仅保留对账与停止投注等操作。核对完成后请在注销分区再次确认；取消注销不会恢复自动投注。</p>`,
+      );
+    $("#profile-form").elements.display_name.value = user.user.display_name;
     const data = await api("/accounts/leyu");
-    $("#account-health").textContent = data.account
-      ? { healthy: "已通过校验", unverified: "未校验", expired: "授权已失效" }[
-          data.account.health_state
-        ] || data.account.health_state
-      : "未绑定";
+    if (sequence !== state.accountSequence) return;
+    scheduleAccountPolling(renderAccountVerification(data), pollGeneration);
     $("#leyu-form").elements.account_label.value =
       data.account?.account_label || "";
-    state.accountBound = !!data.account;
-    $("#account-verification").innerHTML = data.account
-      ? `<p>${esc(data.account.account_label)} · 最近校验 ${stamp(data.account.last_verified_at)}</p><p>可用余额 ${data.account.available_balance === null || data.account.available_balance === undefined ? "尚未核验" : decimal(data.account.available_balance)} · 余额时间 ${stamp(data.account.balance_observed_at)}</p>${(data.tasks || []).map((task) => `<p class="form-note">${esc({ verify: "账户校验", refresh: "账户刷新" }[task.kind] || task.kind)} · ${esc({ queued: "已排队", running: "校验中", succeeded: "校验成功", failed: "校验失败", unknown: "结果未知", rejected: "授权被拒绝" }[task.state] || task.state)}${task.last_error ? " · " + esc(task.last_error) : ""}</p>`).join("")}`
-      : '<p class="muted">尚未绑定本人乐鱼账户。</p>';
-    $("#verify-account").disabled = !data.account;
     const b = data.betting || {};
     $("#betting-status").textContent =
       b.auto_enabled && !b.emergency_stopped
-        ? "自动投注已启用；执行前仍会核验信号与敞口。"
+        ? `自动投注已启用（${b.expert_selection_mode === "profitable" ? "近30天全部盈利专家" : "手动专家名单"}）；执行前仍会核验专家资格、信号与敞口。`
         : "自动投注已关闭。紧急停止始终可用。";
     if (data.execution_capability?.live_enabled === false)
       $("#betting-status").textContent += " 当前实盘执行未开放。";
     if (data.execution_capability?.prematch === "unsupported")
       $("#betting-status").textContent +=
-        " 赛前自动投注暂未支持，赛前专家推荐仍可浏览。";
+        " 当前自动执行仅支持足球滚球；赛前及篮球专家推荐仍可浏览。";
     for (const name of [
       "stake_per_order",
       "max_per_order",
@@ -867,31 +1352,41 @@ async function loadAccount() {
       timezone.add(option);
     }
     timezone.value = timezoneValue;
+    $("#betting-form").elements.expert_selection_mode.value =
+      b.expert_selection_mode || "manual";
     $("#betting-form").elements.enabled.checked =
       !!b.auto_enabled && !b.emergency_stopped;
     $$("#bet-experts input").forEach(
       (x) => (x.checked = (b.allowed_experts || []).includes(x.value)),
     );
   } catch (error) {
+    if (sequence !== state.accountSequence) return;
     $("#account-health").textContent = "暂不可读";
     $("#betting-status").textContent =
       error.message + "；账户状态未被替换为未绑定。";
   } finally {
-    $$("input,button", $("#leyu-form")).forEach(
-      (input) => (input.disabled = false),
-    );
-    $("#leyu-form").setAttribute("aria-busy", "false");
+    if (sequence === state.accountSequence) {
+      $$("input,button", $("#leyu-form")).forEach(
+        (input) => (input.disabled = false),
+      );
+      $("#leyu-form").setAttribute("aria-busy", "false");
+      $("#betting-form").setAttribute("aria-busy", "false");
+      configureBetControls();
+    }
   }
-  configureBetControls();
+  if (sequence !== state.accountSequence) return;
   loadOrders();
 }
 function configureBetControls() {
   const form = $("#betting-form"),
-    enabled = form.elements.enabled.checked;
+    enabled = form.elements.enabled.checked,
+    loading = form.getAttribute("aria-busy") === "true";
   for (const input of $$("input,select", form)) {
-    if (input.name !== "enabled") input.disabled = !enabled;
+    input.disabled = loading || (input.name !== "enabled" && !enabled) ||
+      (input.name === "expert" && form.elements.expert_selection_mode.value === "profitable");
     if (input.type === "number") input.required = enabled;
   }
+  $("button", form).disabled = loading;
   form.elements.confirmed.required = enabled;
 }
 async function loadOrders(append = false) {
@@ -907,7 +1402,7 @@ async function loadOrders(append = false) {
       state.orders
         .map(
           (order) =>
-            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "接单结果未知，等待核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.home_team || order.fixture_id || "")}<br>${esc(order.display_nickname || "")} · ${esc(order.market_name || "")} ${esc(lineLabel(order))} ${esc(selection(order.selection))}<br>实际本金 ${decimal(order.stake)} · 成交赔率 ${decimal(order.price)} · 实际净收益 ${order.settled_net === null || order.settled_net === undefined ? "待结算" : signed(order.settled_net)}<br><span class="muted">${stamp(order.created_at)} · 订单 ${esc(order.provider_order_no || "未取得上游订单号")}<br>平台记录 ${esc(order.id)}</span></div>`,
+            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "接单结果未知，等待核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.home_team || order.fixture_id || "")}<br>${esc(order.display_nickname || "")} · ${esc(order.market_name || "")} ${esc(lineLabel(order))} ${esc(selection(order.selection))}<br>预留本金 ${decimal(order.stake)} · 预留赔率 ${decimal(order.price)}<br>官方成交本金 ${order.provider_stake == null ? "未知" : decimal(order.provider_stake)} · 成交赔率 ${order.provider_price == null ? "未知" : decimal(order.provider_price)} · 币种 ${esc(order.provider_currency || "未知")}<br>实际净收益 ${order.settled_net == null ? (order.state === "settled" ? "官方回执未提供" : "待结算") : signed(order.settled_net)} · 手续费 ${order.provider_fees == null ? "未知" : decimal(order.provider_fees)}<br><span class="muted">官方下单 ${order.provider_placed_at ? stamp(order.provider_placed_at) : "未知"} · 官方结算 ${order.settled_at ? stamp(order.settled_at) : "未知"}<br>${stamp(order.created_at)} · 订单 ${esc(order.provider_order_no || "未取得上游订单号")}<br>平台记录 ${esc(order.id)}</span></div>`,
         )
         .join("") || '<div class="empty-state">暂无真实订单</div>';
   } catch (error) {
@@ -915,8 +1410,76 @@ async function loadOrders(append = false) {
       `<div class="notice">${error.status === 404 ? "订单服务尚未开放" : esc(error.message)}，保留已读取记录，不补入模拟订单。</div>`;
   }
 }
+async function loadManualBet() {
+  const panel = $("#manual-bet-panel");
+  if (!panel) return;
+  if (!state.user) {
+    state.manualBet = null;
+    panel.hidden = true;
+    if (state.page === "scores" && state.matches.length) renderMatches();
+    return;
+  }
+  try {
+    const data = await api("/accounts/leyu/manual-betting");
+    state.manualBet = data;
+    panel.hidden = false;
+    const form = $("#manual-bet-form");
+    for (const name of [
+      "stake_per_order",
+      "daily_limit",
+      "open_exposure_limit",
+    ]) {
+      const input = form.elements[name];
+      if (document.activeElement !== input)
+        input.value = Number(data[name]) > 0 ? data[name] : "";
+    }
+    $("#manual-bet-status").textContent = data.emergency_stopped
+      ? "已紧急停止；保存金额时需再确认一次才会恢复手动下注。"
+      : !data.enabled
+      ? "尚未保存下注金额；保存后才显示实盘买入按钮。"
+      : !data.live_enabled
+        ? "金额已保存，但当前实盘执行未开放，买入会被拒绝。"
+        : !data.account_ready
+          ? "金额已保存，但本人乐鱼账户尚未通过校验，买入会被拒绝。"
+          : !data.entitlement
+            ? "金额已保存，但当前会员没有实盘交易权益，买入会被拒绝。"
+            : `已保存每单 ${decimal(data.stake_per_order)} 元；日限额按 ${data.daily_timezone} 计算；买入按当前盘口重新核验，赔率或盘口变化会被拒绝。`;
+  } catch {
+    state.manualBet = null;
+    panel.hidden = true;
+  }
+  if (state.page === "scores" && state.matches.length) renderMatches();
+}
+async function placeManualBet(signalId, button) {
+  const stake = state.manualBet?.stake_per_order;
+  if (!stake) {
+    toast("请先保存每单下注金额");
+    return;
+  }
+  const ok = await confirmAction(
+    `确认以 ${decimal(stake)} 元实盘买入该专家推荐？系统按当前盘口重新核验，赔率或盘口变化会被拒绝。`,
+  );
+  if (!ok) return;
+  button.disabled = true;
+  try {
+    const { order } = await api("/accounts/leyu/manual-betting/orders", {
+      method: "POST",
+      body: { signal_id: signalId },
+    });
+    toast(
+      order.state === "pending"
+        ? `已预留 ${decimal(order.stake)} 元 · 赔率 ${decimal(order.price)}，等待执行器提交；可在个人中心查看订单`
+        : `该推荐已存在订单（${order.state}），未重复下单`,
+    );
+    if (state.page === "scores") accountHistory.load();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
 function auth(tab = "login") {
-  const isAdmin = tab === "admin" || tab === "admin-recovery";
+  const isAdmin = tab === "admin";
   state.authTab = tab;
   $$("[data-auth-tab]").forEach((b) => {
     b.classList.toggle(
@@ -932,13 +1495,8 @@ function auth(tab = "login") {
       : "用户登录";
   $("#display-name-field").hidden = tab !== "register";
   $("#display-name-field input").required = tab === "register";
-  $("#totp-field").hidden = tab !== "admin";
-  $("#totp-field input").required = false;
-  $("#admin-recovery-field").hidden = tab !== "admin-recovery";
-  $("#admin-recovery-field input").required = tab === "admin-recovery";
-  $("#admin-recovery-toggle").hidden = !isAdmin;
-  $("#auth-identity-label span").textContent = tab === "admin" || tab === "admin-recovery" ? "管理员账号" : "邮箱";
-  $("#auth-form").elements.email.type = tab === "admin" || tab === "admin-recovery" ? "text" : "email";
+  $("#auth-identity-label span").textContent = isAdmin ? "管理员账号" : "邮箱";
+  $("#auth-form").elements.email.type = isAdmin ? "text" : "email";
   $("#auth-form").elements.password.minLength = tab === "register" ? 12 : tab === "admin" ? 6 : 1;
   $("#auth-form button").textContent = tab === "register" ? "注册" : "登录";
   $("#auth-message").textContent = "";
@@ -984,6 +1542,13 @@ function events() {
       route("scores", { replace: true });
       return;
     }
+    if (button.dataset.matchScope) {
+      if (!['recommended','all'].includes(button.dataset.matchScope) || button.dataset.matchScope === state.matchScope) return;
+      state.matchScope = button.dataset.matchScope;
+      state.matches = [];
+      route('scores');
+      return;
+    }
     if (button.dataset.sport) {
       state.sport = button.dataset.sport;
       state.matches = [];
@@ -1027,7 +1592,27 @@ function events() {
       return;
     }
     if (button.dataset.expert) {
+      if (state.page === 'scores') {
+        state.expertFilters = { ...state.expertFilters, sport: state.sport };
+        $('#expert-stats-filter [name=sport]').value = state.sport;
+      }
       openExpert(button.dataset.expert);
+      return;
+    }
+    if (button.dataset.expertSport) {
+      const sport = button.dataset.expertSport;
+      if (!validSport(sport) || sport === state.expertFilters.sport) return;
+      state.expertFilters = { ...state.expertFilters, sport };
+      const select = $('#expert-stats-filter [name=sport]');
+      if (select) select.value = sport;
+      state.signalSequence++;
+      state.signals = [];
+      state.signalCursor = null;
+      $('#signals-list').innerHTML = '<div class="empty-state">正在读取所选运动推荐…</div>';
+      $('#signals-more').hidden = true;
+      state.experts = [];
+      renderExperts();
+      route('experts');
       return;
     }
     if (button.dataset.message) {
@@ -1035,6 +1620,10 @@ function events() {
         button.dataset.message,
         button.dataset.context || state.messageContext,
       );
+      return;
+    }
+    if (button.dataset.betSignal) {
+      placeManualBet(button.dataset.betSignal, button);
       return;
     }
     if (button.dataset.signal) {
@@ -1061,6 +1650,19 @@ function events() {
       else loadExperts();
     }
   });
+  $('#expert-stats-filter').onsubmit = (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    state.expertFilters = {days: Number(form.get('days')), phase: form.get('phase'), market_kind: form.get('market_kind'), source_id: form.get('source_id'), sport: form.get('sport')};
+    state.signalSequence++;
+    state.signals = [];
+    state.signalCursor = null;
+    $('#signals-list').innerHTML = '<div class="empty-state">正在读取所选运动推荐…</div>';
+    $('#signals-more').hidden = true;
+    state.experts = [];
+    renderExperts();
+    route('experts', { replace: true });
+  };
   $("#account-entry").onclick = () => (state.user ? route("account") : auth());
   $("#date-prev").onclick = () => setDate(shiftDay(state.date, -1));
   $("#date-next").onclick = () => setDate(shiftDay(state.date, 1));
@@ -1118,6 +1720,34 @@ function events() {
   $("#refresh-messages").onclick = () => loadMessages();
   $("#messages-more").onclick = () => loadMessages(true);
   $("#refresh-orders").onclick = () => loadOrders();
+  $("#manual-bet-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      const rearm = Boolean(state.manualBet && state.manualBet.emergency_stopped);
+      if (
+        rearm &&
+        !(await confirmAction(
+          "紧急停止后恢复手动下注？确认后才会重新接受实盘买入。",
+        ))
+      )
+        return;
+      await api("/accounts/leyu/manual-betting", {
+        method: "PUT",
+        body: {
+          stake_per_order: form.elements.stake_per_order.value,
+          daily_limit: form.elements.daily_limit.value,
+          open_exposure_limit: form.elements.open_exposure_limit.value,
+          daily_timezone: state.manualBet?.daily_timezone || "Asia/Shanghai",
+          confirmation_phrase: rearm ? "I_UNDERSTAND" : "",
+        },
+      });
+      toast("下注金额已保存");
+      await loadManualBet();
+    } catch (error) {
+      toast(error.message);
+    }
+  };
   $("#orders-more").onclick = () => loadOrders(true);
   $("#refresh-account").onclick = () => loadAccount();
   $("#verify-account").onclick = async () => {
@@ -1127,6 +1757,22 @@ function events() {
       loadAccount();
     } catch (error) {
       toast(error.message);
+    }
+  };
+  $('#leyu-device-authorization').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const security_code = form.elements.security_code.value;
+    form.elements.security_code.value = '';
+    form.querySelector('button').disabled = true;
+    try {
+      await api('/accounts/leyu/device-authorization', { method: 'POST', body: { security_code } });
+      toast('授权安全码已提交，本次仅校验账户');
+      await loadAccount();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      form.querySelector('button').disabled = false;
     }
   };
   $("#stats-help").onclick = () =>
@@ -1141,18 +1787,13 @@ function events() {
       const fields = Object.fromEntries(new FormData(form));
       const body = { email: fields.email, password: fields.password };
       if (state.authTab === "register") body.display_name = fields.display_name;
-      if (state.authTab === "admin" && fields.totp_code) body.totp_code = fields.totp_code;
-      if (state.authTab === "admin-recovery")
-        body.recovery_code = fields.recovery_code;
       try {
         await api(
-          state.authTab === "admin-recovery"
-            ? "/admin/recovery-login"
-            : state.authTab === "admin"
-              ? "/admin/login"
-              : state.authTab === "register"
-                ? "/auth/register"
-                : "/auth/login",
+          state.authTab === "admin"
+            ? "/admin/login"
+            : state.authTab === "register"
+              ? "/auth/register"
+              : "/auth/login",
           {
             method: "POST",
             body,
@@ -1173,8 +1814,6 @@ function events() {
       } catch (error) {
         $("#auth-message").textContent = error.message;
         form.elements.password.value = "";
-        form.elements.totp_code.value = "";
-        form.elements.recovery_code.value = "";
       }
     });
   };
@@ -1182,6 +1821,7 @@ function events() {
     try {
       await api("/auth/logout", { method: "POST" });
       state.user = null;
+      accountHistory.identify(null);
       loadAccount();
       toast("已退出用户会话");
     } catch (error) {
@@ -1247,13 +1887,16 @@ function events() {
     }
   };
   $("#betting-form").elements.enabled.onchange = configureBetControls;
+  $("#betting-form").elements.expert_selection_mode.onchange = configureBetControls;
   $("#betting-form").onsubmit = (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     submit(form, async () => {
       const fd = new FormData(form);
       const enabled = fd.has("enabled");
-      if (enabled && !fd.getAll("expert").length)
+      const mode = fd.get("expert_selection_mode") || "manual";
+      const selectedExperts = $$("#bet-experts input:checked").map((input) => input.value);
+      if (enabled && mode === "manual" && !selectedExperts.length)
         throw new Error("至少选择一位允许跟随的专家");
       if (enabled && !fd.has("confirmed"))
         throw new Error("请先确认本人账户资金与投注风险");
@@ -1261,7 +1904,8 @@ function events() {
         enabled,
         ...(enabled ? { daily_timezone: fd.get("daily_timezone") } : {}),
         confirmation_phrase: enabled ? "I_UNDERSTAND" : "",
-        allowed_experts: fd.getAll("expert"),
+        expert_selection_mode: mode,
+        allowed_experts: selectedExperts,
       };
       for (const key of [
         "stake_per_order",
@@ -1302,19 +1946,28 @@ function events() {
 function setDetail(type, id) {
   const query = params({
     ...(state.page === "scores"
-      ? { date: state.date, phase: state.phase }
-      : {}),
+      ? { date: state.date, phase: state.phase, sport: state.sport, scope: state.matchScope }
+      : state.page === "experts" ? { sport: state.expertFilters.sport } : {}),
     [type]: id,
     ...(type === "message" && state.messageContext === "admin"
       ? { asadmin: "1" }
       : {}),
   });
   const hash = "#" + state.page + "?" + query;
-  if (location.hash !== hash) history.pushState({ detail: true }, "", hash);
+  if (location.hash !== hash) {
+    const [page, currentQuery] = location.hash.slice(1).split("?");
+    const current = new URLSearchParams(currentQuery || "");
+    // Canonicalizing a direct detail link must not create a second copy:
+    // closing that copy would navigate back to and reopen the same detail.
+    if (page === state.page && current.get(type) === id)
+      history.replaceState(history.state, "", hash);
+    else history.pushState({ detail: true }, "", hash);
+  }
 }
 function readRoute() {
   const [page, query] = location.hash.slice(1).split("?");
   const p = new URLSearchParams(query || "");
+  if (page === 'scores') state.matchScope = p.get('scope') === 'all' ? 'all' : 'recommended';
   if (validDate(p.get("date"))) state.date = p.get("date");
   if (
     ["all", "live", "scheduled", "finished", "cancelled"].includes(
@@ -1322,6 +1975,21 @@ function readRoute() {
     )
   )
     state.phase = p.get("phase");
+  if (validSport(p.get("sport"))) {
+    if (page === 'experts') {
+      if (state.expertFilters.sport !== p.get('sport')) {
+        state.expertFilters = { ...state.expertFilters, sport: p.get('sport') };
+        state.signalSequence++;
+        state.signals = [];
+        state.signalCursor = null;
+        state.experts = [];
+        $('#signals-list').innerHTML = '<div class="empty-state">正在读取所选运动推荐…</div>';
+        $('#signals-more').hidden = true;
+      }
+      $('#expert-stats-filter [name=sport]').value = p.get('sport');
+      renderExperts();
+    } else state.sport = p.get('sport');
+  }
   state.leagueIds = p
     .getAll("league_ids")
     .filter((value) => value && value.length <= 100)
@@ -1329,12 +1997,17 @@ function readRoute() {
   const type = ["match", "expert", "message"].find((key) => p.has(key));
   route(page || "scores", { replace: true, preserveHash: !!type });
   if (type === "match") openMatch(p.get(type));
-  else if (type === "expert") openExpert(p.get(type));
+  else if (type === "expert") {
+    if (state.page === 'scores') state.expertFilters = { ...state.expertFilters, sport: state.sport };
+    openExpert(p.get(type));
+  }
   else if (type === "message")
     openMessage(p.get(type), p.get("asadmin") === "1" ? "admin" : "user");
   else if ($("#content-dialog").open) $("#content-dialog").close();
 }
 $("#content-dialog").addEventListener("close", () => {
+  // Native close events are queued. A newer detail may already be open.
+  if ($("#content-dialog").open) return;
   clearTimeout(state.detailTimer);
   state.dialogSequence++;
   state.mediaUrls.forEach(URL.revokeObjectURL);
@@ -1353,15 +2026,16 @@ $("#content-dialog").addEventListener("close", () => {
               params({
                 date: state.date,
                 phase: state.phase,
+                sport: state.sport,
                 league_ids: state.leagueIds,
+                scope: state.matchScope,
               })
-            : ""),
+            : state.page === 'experts' ? '?' + params({ sport: state.expertFilters.sport }) : ""),
       );
   }
 });
 initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
 initIdentity({ state, dialog, auth, loadAccount });
-initMfa({ state, dialog });
 events();
 renderDates();
 loadIdentities().then(() => {
@@ -1373,3 +2047,10 @@ $("#header-clock").textContent = dayKey() + " 北京时间";
 setInterval(() => {
   if (!document.hidden && state.page === "scores") loadMatches();
 }, 30000);
+document.addEventListener("visibilitychange", () => {
+  stopAccountPolling();
+  if (!document.hidden && state.page === "account" && state.user) {
+    const generation = state.accountPollGeneration;
+    scheduleAccountPolling(true, generation);
+  }
+});

@@ -1,0 +1,150 @@
+{
+  "source_commit": "0bd55505f6303470ec33adf8c7d3da6ef6ec7017",
+  "scope": "development candidate, user-controlled profitable expert mode and auditable statistics reset",
+  "release_completed_at": "2026-11-09T10:45:33Z",
+  "statistics_reset_completed_at": "2026-11-09T10:47:40Z",
+  "api_image_id": "sha256:9c3dc139f8ab1564fdd6e87f69a00233af76293ec27d8ad20c10f3ccf1ffc209",
+  "web_image_id": "sha256:e397f9ab3c116a6199a7ebfaf86c9ed403f81721923809c0287b7b9cac676d61",
+  "release_checks": {
+    "only_api_review_worker_web_recreated": true,
+    "four_other_local_and_four_remote_containers_unchanged": true,
+    "model_governance_provider_and_profile_unchanged": true,
+    "environment_permissions_resources_and_mounts_unchanged": true,
+    "only_migration_030_added": true,
+    "owner_policies_and_global_live_setting_preserved": true,
+    "new_mode_not_enabled_on_behalf_of_users": true,
+    "statistics_reset_not_yet_applied": true,
+    "funded_test_orders": 0,
+    "historical_backfill": false
+  },
+  "local_complete_suite": {
+    "tests": 2001,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1375.222
+  },
+  "ci_verification": {
+    "commit": "0bd55505f6303470ec33adf8c7d3da6ef6ec7017",
+    "all_four_remote_jobs_success": true,
+    "remote_tests": 2001,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 926.727,
+    "frozen_source_hashes_verified": 1165,
+    "source_artifact_sha256": "8a3f170380877e5dfe613ca4c8fea9fafb0664f83fbcdd7361ec6601e5904aa7",
+    "profitable_browser_artifact_present": true,
+    "profitable_browser_artifact_sha256": "fa1b8ce295832d8be5d9fdfd3c85fc6db1d014e1bf15cc50597e92778ef61610"
+  },
+  "restored_backup_migration_reset_idempotency_revoke_verified": true,
+  "restore_application_source_identical_to_released_candidate": true,
+  "production_reset_proof": {
+    "only_reviewed_statistics_exclusions_added": true,
+    "affected_experts": 3,
+    "excluded_original_effective_signals": 580,
+    "all_affected_effective_count_zero_accuracy_null_unit_net_zero": true,
+    "unaffected_fixed_window_statistics_unchanged": true,
+    "one_batch_one_audit_exact_plan": true,
+    "repeat_same_batch_no_extra_audit": true,
+    "owner_policies_unchanged": true,
+    "original_primary_key_cohorts": {
+      "v2_expert_signals": {
+        "original_primary_keys": 683,
+        "original_missing": 0,
+        "original_full_row_changes": 0,
+        "natural_added_rows": 0
+      },
+      "v2_signal_settlements": {
+        "original_primary_keys": 921,
+        "original_missing": 0,
+        "original_full_row_changes": 0,
+        "natural_added_rows": 0
+      },
+      "v2_bet_orders": {
+        "original_primary_keys": 2,
+        "original_missing": 0,
+        "original_full_row_changes": 0,
+        "natural_added_rows": 0
+      },
+      "v2_quote_evidence": {
+        "original_primary_keys": 687,
+        "original_missing": 0,
+        "original_full_row_changes": 0,
+        "natural_added_rows": 0
+      },
+      "v2_fixture_results": {
+        "original_primary_keys": 336,
+        "original_missing": 0,
+        "original_full_row_changes": 0,
+        "natural_added_rows": 0
+      },
+      "v2_order_receipt_evidence": {
+        "original_primary_keys": 4,
+        "original_missing": 0,
+        "original_full_row_changes": 0,
+        "natural_added_rows": 0
+      }
+    },
+    "legitimate_settlement_projection_changes": 0,
+    "funded_tests": 0,
+    "historical_backfill": false,
+    "statistics_snapshot_as_of": "2026-11-09T10:46:28.539372+00:00",
+    "fingerprint": "f542f72102a7c54b6a4b2619089232c50500b062e63e7d996986eae08cd4ecfb"
+  },
+  "user_mode_selection": {
+    "existing_policies_remain_manual": true,
+    "owner_must_select_and_save_profitable": true,
+    "profitable_follows_all_qualifying_experts": true,
+    "window_days": 30,
+    "unit_net": ">0",
+    "effective_settled_signals": ">0"
+  },
+  "browser_real_api": {
+    "native_exit": 0,
+    "controller_exit": 0,
+    "cleanup_exit": 0,
+    "seconds": 49.968,
+    "passed_scenarios": 10,
+    "errors": [],
+    "fixture": {
+      "kind": "synthetic_no_provider",
+      "verified_jobs": 4,
+      "refresh_jobs": 1,
+      "receipts": 1,
+      "transaction_calls": 0,
+      "failures": []
+    },
+    "proof": {
+      "source": "isolated real UI/API/PG",
+      "saved_mode": "profitable",
+      "restored_mode": "manual",
+      "profitability_definition": {
+        "days": 30,
+        "time_basis": "latest_settlement_at; active_statistics_cycle",
+        "required_unit_net": ">0",
+        "required_effective_settled_signals": ">0",
+        "neutral_outcomes_excluded": [
+          "pending",
+          "push",
+          "void"
+        ]
+      },
+      "account_binding_preserved": true,
+      "four_amounts_timezone_and_manual_selections_preserved": true,
+      "baseline_revision": 16,
+      "restored_revision": 18,
+      "real_provider_calls": 0,
+      "production_writes": 0
+    },
+    "screenshot_sha256": {
+      "profitable-real-api-1440.png": "a8c70a2a645ff0abffee6e8c3b818868778b60ca7ab20ede0d1fb3663c108634",
+      "profitable-real-api-390.png": "1d9cb343c4f6bb49e6cbb9811beb1bedf50644001f66184cbcaee7580383ba83"
+    },
+    "private_result_sha256": "87f1597ed18b095c11f7bab74573ba8c93d585e1d45b45602434e6c118afd8fc"
+  },
+  "funded_test_orders": 0,
+  "historical_backfill": false,
+  "expert_post_to_accepted_bet_10_seconds_verified": false,
+  "monitoring_continues": true
+}

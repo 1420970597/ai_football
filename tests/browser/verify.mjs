@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 const base = "/work/web/app";
-const evidence = "/work/reports/jiebao-score-reference/images";
+const evidence = process.env.BROWSER_EVIDENCE_DIR || "/work/reports/jiebao-score-reference/images";
+await fs.mkdir(evidence, { recursive: true });
 const server = http.createServer(async (req, res) => {
   try {
     const pathname = new URL(req.url, "http://localhost").pathname;
@@ -19,7 +20,7 @@ const server = http.createServer(async (req, res) => {
         ? "text/javascript"
         : target.endsWith(".css")
           ? "text/css"
-          : "text/html",
+          : target.endsWith(".png") ? "image/png" : "text/html",
     });
     res.end(body);
   } catch {
@@ -92,6 +93,8 @@ const signal = {
   competition_name: "英格兰超级联赛",
   kickoff_at: "2026-10-26T11:00:00Z",
   phase: "live",
+  fixture_phase: "finished",
+  match_state: "finished",
   market_name: "亚洲让球",
   period: "full_time",
   line: "-0.25",
@@ -100,8 +103,8 @@ const signal = {
   quote_id: "q-system-1",
   quote_time: "2026-10-26T11:10:00Z",
   created_at: "2026-10-26T11:11:00Z",
-  outcome: "pending",
-  unit_net: null,
+  outcome: "win",
+  unit_net: 0.96,
 };
 const message = {
   id: mid,
@@ -162,15 +165,31 @@ const record = {
       payload: { summary: "已匹配两场比赛和两个盘口，接受2条推荐。" },
       created_at: "2026-10-26T11:11:02Z",
     },
+    {
+      trace_kind: "system_review_result",
+      payload: { language: "zh-CN", accepted_count: 2, content: '系统已接受 2 条推荐。利物浦 对 曼城；亚洲让球，主队 -0.25；系统赔率 1.96。<img src=x onerror="window.__xss=2">' },
+      created_at: "2026-10-26T11:11:03Z",
+    },
   ],
 };
 const results = [];
 let caught = [];
+function assertReadOnlyNavigation(log) {
+  const writes = log.filter(request => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method));
+  for (const request of writes) {
+    assert.equal(request.path, '/accounts/history/refresh', '阅读页面只能安排本人只读历史同步');
+    assert.equal(request.method, 'POST');
+    assert.deepEqual(request.body, {});
+    assert.equal(request.headers['x-session-context'], 'user');
+    assert.equal(request.headers['x-csrf-token'], 'user-test-csrf');
+  }
+}
 async function setup({
   mobile = false,
   dual = false,
   initialError = false,
   captureLoading = false,
+  signalWithdrawalReason = "",
 } = {}) {
   const context = await browser.newContext({
     viewport: mobile
@@ -195,8 +214,13 @@ async function setup({
     slow: captureLoading,
     tg: "idle",
     version: 7,
+    signalWithdrawalReason,
   };
   const page = await context.newPage();
+  let releaseLoading;
+  const loadingGate = captureLoading
+    ? new Promise((resolve) => { releaseLoading = resolve; })
+    : null;
   page.on("pageerror", (error) => caught.push(error.message));
   await page.route("**/api/v1/**", async (route) => {
     const req = route.request(),
@@ -250,8 +274,7 @@ async function setup({
     if (
       p === "/auth/login" ||
       p === "/auth/register" ||
-      p === "/admin/login" ||
-      p === "/admin/recovery-login"
+      p === "/admin/login"
     ) {
       if (p.startsWith("/admin/")) mode.admin = true;
       else mode.user = true;
@@ -265,7 +288,7 @@ async function setup({
         message: "邮件恢复未配置，请联系管理员人工核验后获取恢复码。",
       });
     if (p === "/auth/recovery/complete")
-      return reply({ reset: true, reauthentication_required: true });
+      return reply({ reset: true, auto_betting: false });
     if (p === "/auth/export")
       return reply({
         schema_version: 1,
@@ -300,94 +323,6 @@ async function setup({
         },
         201,
       );
-    if (p === "/admin/mfa/recovery-codes")
-      return reply({
-        codes: ["FIXTURE-MFA-RECOVERY-1", "FIXTURE-MFA-RECOVERY-2"],
-        message: "只显示一次",
-      });
-    if (p.endsWith("/reauthenticate")) {
-      mode.reauthRequired = false;
-      return reply({ expires_at: "2026-10-26T12:00:00Z" });
-    }
-    if (p === "/admin/mfa/status")
-      return reply({
-        configured: true,
-        configuration_state: "configured",
-        recovery_codes_remaining: 10,
-        pending: mode.mfaPending || null,
-      });
-    if (
-      mode.reauthRequired &&
-      p.startsWith("/admin/mfa/enrollment") &&
-      method !== "GET" &&
-      method !== "DELETE"
-    )
-      return reply(
-        {
-          detail: {
-            code: "reauthentication_required",
-            session_kind: "admin",
-            message: "敏感操作需要再次验证当前凭据",
-          },
-        },
-        403,
-      );
-    if (p === "/admin/mfa/enrollment") {
-      if (mode.mfaPending && !body.replace_existing)
-        return reply({ detail: "已有尚未确认的新验证器，原验证器仍有效" }, 409);
-      mode.mfaPending = {
-        enrollment_id: id,
-        expires_at: new Date(
-          Date.now() + (mode.expireMfa ? -1000 : 600000),
-        ).toISOString(),
-      };
-      return reply(
-        {
-          ...mode.mfaPending,
-          secret: "KRSXG5DSNFXGOIDB",
-          otpauth_uri:
-            "otpauth://totp/Test?secret=KRSXG5DSNFXGOIDB&issuer=Test",
-        },
-        201,
-      );
-    }
-    if (p.startsWith("/admin/mfa/enrollment/") && method === "DELETE") {
-      mode.mfaPending = null;
-      return reply({ cancelled: true, previous_factor_unchanged: true });
-    }
-    if (p.startsWith("/admin/mfa/enrollment/") && p.endsWith("/confirm")) {
-      if (mode.invalidMfa)
-        return reply(
-          { detail: "新验证器动态验证码无效，原验证器保持有效" },
-          401,
-        );
-      mode.mfaPending = null;
-      return reply({
-        configured: true,
-        already_confirmed: false,
-        recovery_codes: Array.from(
-          { length: 10 },
-          (_, i) => "FIXTURE-NEW-MFA-RECOVERY-" + i,
-        ),
-        other_sessions_revoked: true,
-        message: "新验证器已生效，其他管理会话和旧备用码已撤销。",
-      });
-    }
-    if (
-      mode.reauthRequired &&
-      method !== "GET" &&
-      (p === "/admin/settings" || p === "/accounts/leyu")
-    )
-      return reply(
-        {
-          detail: {
-            code: "reauthentication_required",
-            session_kind: p.startsWith("/admin") ? "admin" : "user",
-            message: "此操作需要再次验证身份",
-          },
-        },
-        403,
-      );
     if (p === "/auth/logout") {
       mode.user = false;
       return reply({ ok: true });
@@ -396,7 +331,27 @@ async function setup({
       mode.admin = false;
       return reply({ ok: true });
     }
+    if (p === "/public/match-summaries") {
+      const identifiers = url.searchParams.getAll("fixture_ids");
+      const delay = mode.summaryDelay || 0, failed = mode.summaryError;
+      const price = mode.summaryPrice || quote.price;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (failed) return reply({ detail: "隔离测试：盘口读取超时" }, 503);
+      return reply({ items: identifiers.map((identifier) => {
+        const fixture = identifier.startsWith("long-")
+          ? fixtures[Number(identifier.slice(5)) % fixtures.length]
+          : fixtures.find((f) => f.id === identifier);
+        return {fixture_id: identifier, phase: fixture.phase, markets: [{...quote, price}],
+          quote_fresh: ["live", "scheduled"].includes(fixture.phase), markets_status: "loaded"};
+      }), missing_fixture_ids: [], server_time: "2026-10-26T11:15:00Z" });
+    }
     if (p === "/public/matches") {
+      const result = (items, next_cursor, server_time) => ({
+        items: mode.asyncSummaries ? items.map((fixture) => ({...fixture, markets: [],
+          markets_status: "not_requested", quote_fresh: false})) : items,
+        ...(mode.asyncSummaries ? {markets_included: false} : {}), next_cursor, server_time,
+      });
+      if (loadingGate) await loadingGate;
       if (mode.slow) await new Promise((r) => setTimeout(r, 700));
       if (mode.error) return reply({ detail: "隔离测试：上游读取超时" }, 503);
       if (mode.long) {
@@ -407,21 +362,14 @@ async function setup({
         if (mode.removeFirst) all.shift();
         const start = Number(url.searchParams.get("cursor") || 0);
         const end = start + Number(url.searchParams.get("page_size") || 50);
-        return reply({
-          items: all.slice(start, end),
-          next_cursor: end < all.length ? String(end) : null,
-          server_time: "2026-10-26T11:15:00Z",
-        });
+        return reply(result(all.slice(start, end), end < all.length ? String(end) : null,
+          "2026-10-26T11:15:00Z"));
       }
-      return reply({
-        items: fixtures.filter(
+      return reply(result(fixtures.filter(
           (f) =>
             url.searchParams.get("phase") === "all" ||
             f.phase === url.searchParams.get("phase"),
-        ),
-        next_cursor: url.searchParams.has("cursor") ? null : "next-fixtures",
-        server_time: "2026-10-26T11:12:00Z",
-      });
+        ), url.searchParams.has("cursor") ? null : "next-fixtures", "2026-10-26T11:12:00Z"));
     }
     if (p === "/public/leagues")
       return reply({
@@ -456,6 +404,7 @@ async function setup({
       });
     if (p === "/public/experts")
       return reply({
+        source_options: [{id: '77777777-7777-4777-8777-777777777777', display_name: '测试专家来源'}],
         items: [
           expert,
           {
@@ -504,7 +453,17 @@ async function setup({
         to_utc: "2026-10-26T11:00:00Z",
       });
     if (p === "/public/signals")
-      return reply({ items: [signal], next_cursor: null, limited: !mode.user });
+      return reply({ items: [mode.signalWithdrawalReason ? { ...signal,
+        withdrawn_at: "2026-10-26T11:12:00Z", withdrawal_reason: mode.signalWithdrawalReason,
+        outcome: "pending", unit_net: null } : signal], next_cursor: null, limited: !mode.user });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}/traces`)
+      return reply({ items: [{ trace_kind: "model_output", payload: { content: "后页模型原文完整结尾" + "原文".repeat(4000) }, created_at: "2026-10-26T11:11:05Z" }], next_cursor: null });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}/signals`)
+      return reply({ items: [{ ...signal, id: "55555555-5555-4555-8555-555555555555", quote_id: "q-system-page-three" }], next_cursor: null });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}/tools/complete-fixture`)
+      return reply({ complete: true, snapshot_sha256: "fixture-sha256-verified", result: { items: [{ home_team: "完整工具候选", away_team: "工具结果末项" }], next_cursor: null } });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}`)
+      return reply({ ...record, analysis: [{ trace_kind: "mcp_search_matches", payload: { count: 100, response_snapshot: { chunk_count: 4 } }, tool_response_url: `/api/v1/public/messages/${mid}/tools/complete-fixture` }], analysis_next_cursor: "fixture-trace-next", signals_next_cursor: "fixture-signals-next", system_summary: record.analysis.at(-1), latest_model_result: { payload: { content: "最新模型分析：截图提到全场大 2.5 <script>unsafe()</script>" } } });
     if (
       mode.longMessage &&
       p.startsWith("/public/messages/") &&
@@ -544,6 +503,9 @@ async function setup({
         },
       });
     if (p === "/accounts/orders") return reply({ items: [] });
+    if (p === '/accounts/history' || p === '/accounts/history/refresh')
+      return mode.user ? reply({ status: 'completed', matches: [], association_complete: true })
+        : reply({ detail: '尚未登录' }, 401);
     if (p === "/admin/status")
       return reply({
         database: "healthy",
@@ -613,9 +575,10 @@ async function setup({
     }
     if (
       mode.tgSearch &&
-      ["/admin/telegram/admins", "/admin/telegram/dialogs"].includes(p)
+      ["/admin/telegram/admins", "/admin/telegram/dialogs", "/admin/telegram/members"].includes(p)
     ) {
-      const admins = p.endsWith("admins");
+      const members = p.endsWith("members");
+      const admins = p.endsWith("admins") || members;
       const query = url.searchParams.get("q") || "";
       const secondPage = url.searchParams.has("cursor");
       if (query === "slow")
@@ -631,6 +594,7 @@ async function setup({
                   sender_id: secondPage ? "67890" : "12345",
                   nickname: secondPage ? "后页老师" : query || "林老师 TG",
                   username: "expert_fixture",
+                  admin_kind: members ? "member" : "administrator",
                 },
               ]
             : [
@@ -657,7 +621,7 @@ async function setup({
       });
     if (p === "/admin/telegram/messages")
       return reply({ items: [message], next_cursor: null });
-    if (p.startsWith("/admin/telegram/messages/")) return reply(record);
+    if (p.startsWith("/admin/telegram/messages/")) return reply({ ...record, message: { ...message, media_objects: [{ url: `/api/v1/admin/telegram/messages/${mid}/media/0` }] } });
     if (p === "/admin/users")
       return reply({
         items: [
@@ -677,11 +641,17 @@ async function setup({
         schema: "verified",
         hermes: { gateway: "reachable", provider: "unverified" },
         storage: "unconfigured",
+        collector: {sources: {websocket: {quote_source_lag_ms_p95: 5100.5, quote_source_lag_samples: 18, quote_source_lag_window_size: 25, quote_source_lag_unknown_count: 3, quote_source_lag_invalid_count: 1, quote_source_lag_future_count: 1, quote_source_lag_too_old_count: 2, quote_delivery_age_ms_p95: 6200, quote_delivery_age_samples: 15}}},
         review_queue: { count: 5000, capped: true },
         pending_media: { count: 2, capped: false },
         unknown_orders: { count: 1, capped: false },
         unresolved_reviews: { count: 3, capped: false },
         stale_quotes: { count: 4, capped: false },
+        tasks: [
+          {key:'telegram_session',label:'Telegram 授权',state:'action_required',target:'telegram',detail:'请检查授权状态并按页面提示恢复'},
+          {key:'unknown_orders',label:'未知订单',state:'action_required',target:'orders',detail:'核对官方订单回执；结果未知时禁止重复提交',count:{count:1,capped:false}},
+          {key:'migration_failures',label:'失败迁移记录',state:'unverified',target:'system',detail:'需核对部署迁移日志'},
+        ],
         freshness: {},
       });
     if (p === "/admin/orders")
@@ -709,12 +679,18 @@ async function setup({
     if (p === "/admin/audit") return reply({ items: [] });
     return reply({ ok: true, state: "unverified", message: "隔离测试已保存" });
   });
-  await page.goto("http://127.0.0.1:8080");
+  // Legacy score-table scenarios exercise the explicit all-fixtures view.
+  // The expert-only default is covered by homepage-expert-matches.mjs.
+  await page.goto("http://127.0.0.1:8080/#scores?scope=all");
   if (captureLoading) {
-    await page.waitForSelector(".skeleton-row");
-    await page.screenshot({
-      path: evidence + "/candidate-mobile-loading-fixture.png",
-    });
+    try {
+      await page.waitForSelector("#matches-state .skeleton-row");
+      await page.screenshot({
+        path: evidence + "/candidate-mobile-loading-fixture.png",
+      });
+    } finally {
+      releaseLoading();
+    }
   }
   await page.waitForSelector(
     initialError ? "#matches-state [data-retry]" : ".match-row",
@@ -733,6 +709,7 @@ if (process.argv.includes("--a11y")) {
   process.exit(process.exitCode || 0);
 }
 async function test(name, action) {
+  if (process.env.BROWSER_TEST_FILTER && !name.includes(process.env.BROWSER_TEST_FILTER)) return;
   try {
     await action();
     results.push({ name, status: "passed" });
@@ -745,6 +722,14 @@ async function test(name, action) {
 await test("桌面比分密度、状态查询、日期与详情", async () => {
   const { page, context, log } = await setup();
   assert.equal(await page.locator(".match-row").count(), 16);
+  await page.waitForFunction(() => [...document.querySelectorAll('.match-vs-icon')].length > 0 &&
+    [...document.querySelectorAll('.match-vs-icon')].every(image => image.complete && image.naturalWidth > 0));
+  assert.equal(await page.locator('.match-row:has(.match-phase.scheduled) .match-vs-icon').count(), 12);
+  assert.equal(await page.locator('.match-row:has(.match-phase.live) .match-vs-icon').count(), 0);
+  const noticeAsset = await page.request.get('http://127.0.0.1:8080/assets/cc-reference/home_announcement_icon.png');
+  assert.equal(noticeAsset.status(), 200);
+  assert.equal(noticeAsset.headers()['content-type'], 'image/png');
+  assert.deepEqual([...(await noticeAsset.body()).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   assert.ok(
     (await page
       .locator(".match-row")
@@ -822,15 +807,47 @@ await test("手机无横向溢出、关注与弹层", async () => {
   });
   await context.close();
 });
+await test("专家统计筛选与详情趋势使用同一结算窗口", async () => {
+  const { page, context, log } = await setup({ dual: true });
+  await page.locator('.main-nav [data-page=experts]').click();
+  await page.waitForSelector('#expert-stats-filter [name=source_id] option[value="77777777-7777-4777-8777-777777777777"]', {state:'attached'});
+  await page.locator('#expert-stats-filter [name=days]').selectOption('7');
+  await page.locator('#expert-stats-filter [name=phase]').selectOption('scheduled');
+  await page.locator('#expert-stats-filter [name=market_kind]').selectOption('handicap');
+  await page.locator('#expert-stats-filter [name=source_id]').selectOption('77777777-7777-4777-8777-777777777777');
+  await page.locator('#expert-stats-filter button').click();
+  await page.waitForFunction(() => document.querySelector('#experts-list')?.textContent.includes('近7天'));
+  await page.locator('#experts-list [data-expert]').first().click();
+  await page.waitForSelector('.yield-chart');
+  assert.match(await page.locator('#dialog-content').innerText(), /近7天/);
+  assert.match(await page.locator('#dialog-content').innerText(), /证据不足排除/);
+  const scoped = log.filter(r => r.path.startsWith('/public/experts') && !r.path.endsWith('/messages')).slice(-3);
+  assert.equal(scoped.length, 3);
+  for (const request of scoped) {
+    const query = new URLSearchParams(request.query);
+    assert.equal(query.get('days'), '7');
+    assert.equal(query.get('phase'), 'scheduled');
+    assert.equal(query.get('market_kind'), 'handicap');
+    assert.equal(query.get('source_id'), '77777777-7777-4777-8777-777777777777');
+  }
+  await context.close();
+});
 await test("完整原文、两条系统买入、工具证据与图片", async () => {
   const { page, context } = await setup({ dual: true });
   await page.locator('.main-nav [data-page="experts"]').click();
   await page.locator('[data-expert-tab="signals"]').click();
+  await page.waitForSelector("#signals-list .signal-card");
+  const settledSignal = await page.locator("#signals-list .signal-card").first().innerText();
+  assert.match(settledSignal, /比赛：完场/);
+  assert.match(settledSignal, /推荐：滚球/);
+  assert.match(settledSignal, /全赢/);
   await page.locator("#signals-list [data-message]").click();
   await page.waitForSelector(".media-gallery img");
   assert.equal(await page.locator("#dialog-content .signal-card").count(), 2);
   assert.match(await page.locator("#dialog-content").innerText(), /q-system-2/);
   assert.match(await page.locator("#dialog-content").innerText(), /已匹配两场/);
+  assert.match(await page.locator(".system-review-result").innerText(), /系统已接受 2 条推荐/);
+  assert.equal(await page.locator(".system-review-result img").count(), 0);
   assert.equal(await page.evaluate(() => window.__xss), undefined);
   assert.equal(await page.locator(".raw-text img").count(), 0);
   await page.screenshot({
@@ -840,9 +857,73 @@ await test("完整原文、两条系统买入、工具证据与图片", async ()
   await page.locator('.section-tabs [data-page="messages"]').click();
   await page.locator("#message-expert").selectOption(id);
   await page.waitForSelector(".message-card");
+  await page.waitForSelector(".message-thumbnail img");
+  assert.equal(await page.locator(".message-thumbnail img").evaluate((image) => image.naturalWidth > 0), true);
+  await page.locator(".message-thumbnail").first().click();
+  await page.waitForSelector(".media-gallery img");
+  await page.keyboard.press("Escape");
   assert.match(await page.locator("#messages-list").innerText(), /未解决/);
   assert.equal(await page.locator("#messages-more").isVisible(), true);
   await page.locator("#messages-more").click();
+  await context.close();
+});
+await test("授权原图可鼠标键盘展开收起且重开复位", async () => {
+  const { page, context } = await setup({ dual: true, mobile: true });
+  await page.locator('.mobile-bottom [data-page="experts"]').click();
+  await page.locator('[data-expert-tab="signals"]').click();
+  await page.locator("#signals-list [data-message]").first().click();
+  const toggle = page.locator("#message-media .original-image-toggle").first();
+  await toggle.waitFor();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  const image = page.locator("#message-media img").first();
+  const original = await image.getAttribute("src");
+  await toggle.click();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(await image.getAttribute("src"), original);
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(await page.locator("#content-dialog").evaluate((e) => e.scrollWidth > e.clientWidth), false);
+  await page.keyboard.press("Escape");
+  await page.locator("#signals-list [data-message]").first().click();
+  await toggle.waitFor();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  await context.close();
+});
+await test("原文增量加载、最新系统回执及完整工具返回", async () => {
+  const { page, context, mode, log } = await setup({ dual: true, mobile: true });
+  mode.pagedEvidence = true;
+  await page.locator('.mobile-bottom [data-page=experts]').click();
+  await page.locator('[data-expert-tab=signals]').click();
+  await page.locator('#signals-list [data-message]').first().click();
+  await page.waitForSelector('.system-review-result');
+  assert.match(await page.locator('.system-review-result').innerText(), /系统已接受 2 条推荐/);
+  assert.match(await page.locator('.model-review-result').innerText(), /最新模型分析：截图提到全场大 2.5/);
+  assert.equal(await page.locator('.model-review-result script').count(), 0);
+  assert.equal(log.some((request) => request.path.endsWith('/tools/complete-fixture')), false);
+  assert.equal(await page.locator('#message-traces-more').isVisible(), true);
+  assert.equal(await page.locator('#message-signals-more').isVisible(), true);
+  await page.locator('#message-traces-more').click();
+  await page.waitForFunction(() => document.querySelector('#message-traces-status')?.textContent.includes('已全部加载'));
+  assert.match(await page.locator('#message-traces').innerText(), /后页模型原文完整结尾/);
+  assert.ok((await page.locator('#message-traces').innerText()).length > 8000);
+  await page.locator('#message-signals-more').click();
+  await page.waitForFunction(() => document.querySelector('#message-signals-status')?.textContent.includes('已加载 3 条'));
+  assert.equal(await page.locator('#message-signals .signal-card').count(), 3);
+  await page.locator('[data-tool-response]').evaluate((button) => { button.closest('details').open = true; });
+  await page.locator('[data-tool-response]').click();
+  await page.waitForFunction(() => document.querySelector('.tool-response-content')?.textContent.includes('工具结果末项'));
+  assert.match(await page.locator('.tool-response-content').innerText(), /fixture-sha256-verified/);
+  for (const request of log.filter((request) => /[/]messages[/].*[/](traces|signals|tools)[/?]?/.test(request.path)))
+    assert.equal(request.headers['x-session-context'], 'user');
+  assert.equal(await page.locator('.system-review-result').count(), 1);
+  await page.screenshot({ path: evidence + '/candidate-mobile-evidence-pagination-fixture.png' });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !location.hash.includes('message='));
+  await page.goto(`http://127.0.0.1:8080/#messages?message=${mid}&asadmin=1`);
+  await page.waitForSelector('#message-media img');
+  assert.match(await page.locator('#dialog-content').innerText(), /管理员读取/);
+  assert.equal(log.findLast((request) => request.path === `/admin/telegram/messages/${mid}/media/0`).headers['x-session-context'], 'admin');
   await context.close();
 });
 await test("采集中转热配置可保存与清空，保留原业务域名", async () => {
@@ -1021,7 +1102,7 @@ await test("游客权益拒绝、会员未配置支付、注册校验", async ()
     "12",
   );
   await page.locator('[data-auth-tab="admin"]').click();
-  assert.equal(await page.locator("#totp-field").isVisible(), true);
+  assert.equal(await page.locator("#totp-field").count(), 0);
   await context.close();
 });
 await test("初始失败与无赛事状态、请求竞态不覆盖新筛选", async () => {
@@ -1044,6 +1125,275 @@ await test("初始失败与无赛事状态、请求竞态不覆盖新筛选", as
   assert.match(await page.locator(".score-tabs .active").innerText(), /滚球/);
   await context.close();
 });
+await test("比赛状态切换等待和失败时不能保留其他状态的旧行", async () => {
+  const { page, context, mode } = await setup();
+  assert.ok(await page.locator('.match-row').count());
+  mode.slow = true;
+  await page.locator('.score-tabs [data-phase=finished]').click();
+  assert.equal(await page.locator('.match-row').count(), 0);
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 1);
+  assert.equal(await page.locator('.match-phase').innerText(), '完场');
+  mode.error = true;
+  await page.locator('.score-tabs [data-phase=live]').click();
+  assert.equal(await page.locator('.match-row').count(), 0);
+  await page.waitForFunction(() => document.querySelector('#matches-state').textContent.includes('读取超时'));
+  assert.equal(await page.locator('.match-row').count(), 0);
+  assert.match(page.url(), /phase=live/);
+  await context.close();
+});
+for (const mobile of [false, true]) {
+  await test(`盘口失败仍显示正确比赛状态与真实比分 / ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode, log} = await setup({mobile});
+    mode.asyncSummaries = true;
+    mode.summaryError = true;
+    await page.locator('.score-tabs [data-phase=finished]').click();
+    await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 1 &&
+      document.querySelector('.match-odds').textContent.includes('暂时不可用'));
+    assert.equal(await page.locator('.match-phase').innerText(), '完场');
+    assert.match(await page.locator('#matches-notice').innerText(), /比分和状态已更新/);
+    assert.equal(await page.locator('#matches-state').isVisible(), false);
+    assert.equal(await page.locator('body').evaluate((e) => e.scrollWidth > innerWidth), false);
+    assert.ok(log.some((r) => r.path === '/public/matches' && r.query.includes('include_markets=false')));
+    assert.equal(log.filter((r) => r.path === '/public/match-summaries').length, 1);
+    await context.close();
+  });
+}
+await test("盘口晚响应不能覆盖新筛选，离页取消后台读取", async () => {
+  const {page, context, mode, log} = await setup();
+  mode.asyncSummaries = true;
+  mode.summaryDelay = 700;
+  mode.summaryPrice = '9.99';
+  const firstSummary = page.waitForRequest((r) => new URL(r.url()).pathname.endsWith('/public/match-summaries'));
+  await page.locator('.score-tabs [data-phase=finished]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 1 &&
+    document.querySelector('.match-odds').textContent.includes('加载中'));
+  await firstSummary;
+  mode.summaryDelay = 0;
+  mode.summaryPrice = '2.01';
+  await page.locator('.score-tabs [data-phase=live]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 3 &&
+    [...document.querySelectorAll('.match-odds')].every((e) => e.textContent.includes('2.01')));
+  await page.waitForTimeout(800);
+  assert.equal(await page.locator('.match-phase:not(.live)').count(), 0);
+  assert.equal(await page.locator('.match-odds').filter({hasText:'9.99'}).count(), 0);
+  mode.summaryDelay = 700;
+  await page.locator('#refresh-matches').click();
+  await page.waitForFunction(() => document.querySelector('.match-odds').textContent.includes('加载中'));
+  await page.locator('.main-nav [data-page=experts]').click();
+  const before = log.filter((r) => r.path === '/public/match-summaries').length;
+  await page.waitForTimeout(800);
+  assert.equal(await page.locator('#view-experts').isVisible(), true);
+  assert.equal(log.filter((r) => r.path === '/public/match-summaries').length, before);
+  await context.close();
+});
+await test("异步盘口分批上限50且多页刷新保持完整顺序", async () => {
+  const {page, context, mode, log} = await setup();
+  mode.asyncSummaries = true;
+  mode.long = true;
+  await page.locator('#refresh-matches').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 50 &&
+    !document.querySelector('#service-state').textContent.includes('加载中'));
+  await page.locator('#load-more').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 100 &&
+    !document.querySelector('#service-state').textContent.includes('加载中'));
+  const before = log.length;
+  const lastBatch = page.waitForResponse((r) => {
+    const url = new URL(r.url());
+    return url.pathname.endsWith('/public/match-summaries') &&
+      url.searchParams.getAll('fixture_ids')[0] === 'long-50';
+  });
+  await page.locator('#refresh-matches').click();
+  await lastBatch;
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 100 &&
+    !document.querySelector('#service-state').textContent.includes('加载中'));
+  await page.waitForFunction(() => [...document.querySelectorAll('.match-odds')].every((e) => !e.textContent.includes('加载中')));
+  const batches = log.slice(before).filter((r) => r.path === '/public/match-summaries');
+  assert.equal(batches.length, 2);
+  assert.ok(log.filter((r) => r.path === '/public/match-summaries').every((r) =>
+    new URLSearchParams(r.query).getAll('fixture_ids').length <= 50));
+  assert.deepEqual(await page.locator('.match-row').evaluateAll((rows) => rows.map((r) => r.dataset.fixture)),
+    Array.from({length:100}, (_, i) => 'long-' + i));
+  await context.close();
+});
+for (const mobile of [false, true]) {
+  await test(`Telegram目录迟到的来源加载不得覆盖成员搜索 ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode, log} = await setup({dual: true, mobile});
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    try {
+      mode.tgSearch = true;
+      await page.goto('http://127.0.0.1:8080/#admin?asadmin=1');
+      await page.locator('[data-admin-tab=telegram]').click();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      await page.route(`**/api/v1/admin/sources/${id}/experts`, async route => {
+        started();
+        await held;
+        await route.fulfill({status: 200, contentType: 'application/json',
+          body: JSON.stringify({items: [{...expert, platform_sender_id: '12345'}]})});
+      });
+      await page.route('**/api/v1/admin/telegram/admins?*', route => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({state: 'available', items: []})}));
+      await page.locator('#source-select').selectOption(id);
+      await entered;
+      await page.locator('#tg-directory-scope').selectOption('members');
+      await page.waitForFunction(() => document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      await page.locator('#tg-admin-search').fill('普通老师');
+      await page.locator('#tg-admin-search-form button').first().click();
+      await page.locator('#source-admins [data-author="12345"]').waitFor();
+      const before = log.filter(x => x.path === '/admin/telegram/members').length;
+      release();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      assert.equal(await page.locator('#source-admins [data-author="12345"]').count(), 1);
+      assert.match(await page.locator('#source-admins').innerText(), /普通成员/);
+      assert.equal(await page.locator('#tg-admin-search').inputValue(), '普通老师');
+      assert.equal(log.filter(x => x.path === '/admin/telegram/members').length, before);
+    } finally {
+      release();
+      await context.close();
+    }
+  });
+  await test(`Telegram目录迟到的同源旧请求不得覆盖新一轮来源 ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode} = await setup({dual: true, mobile});
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    try {
+      mode.tgSearch = true;
+      await page.goto('http://127.0.0.1:8080/#admin?asadmin=1');
+      await page.locator('[data-admin-tab=telegram]').click();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      let requests = 0;
+      await page.route(`**/api/v1/admin/sources/${id}/experts`, async route => {
+        const first = ++requests === 1;
+        if (first) { started(); await held; }
+        await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({items: [
+          {...expert, display_nickname: first ? '较早作者' : '最新作者', platform_sender_id: '12345'}]})});
+      });
+      await page.locator('#source-select').selectOption(id);
+      await entered;
+      await page.locator('#source-select').selectOption(id);
+      await page.waitForFunction(() => document.querySelector('#trusted-experts').textContent.includes('最新作者') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      release();
+      await page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/admin/sources/${id}/experts`);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.match(await page.locator('#trusted-experts').innerText(), /最新作者/);
+      assert.doesNotMatch(await page.locator('#trusted-experts').innerText(), /较早作者/);
+    } finally {
+      release();
+      await context.close();
+    }
+  });
+}
+for (const mobile of [false, true]) for (const failOldRequest of [false, true]) {
+  await test(`Telegram目录迟到的跨源返回${failOldRequest ? "失败" : "成功"}不覆盖当前作者 ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode} = await setup({dual: true, mobile});
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    try {
+      mode.tgSearch = true;
+      await page.route('**/api/v1/admin/sources', route => route.fulfill({status: 200,
+        contentType: 'application/json', body: JSON.stringify({items: [
+          {id, platform_chat_id: '-1001234567', display_name: '原来源', enabled: true, allow_media: true},
+          {id: mid, platform_chat_id: '-1009876543', display_name: '另一来源', enabled: true, allow_media: true}]})}));
+      await page.goto('http://127.0.0.1:8080/#admin?asadmin=1');
+      await page.locator('[data-admin-tab=telegram]').click();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      let requests = 0;
+      await page.route(`**/api/v1/admin/sources/${id}/experts`, async route => {
+        const first = ++requests === 1;
+        if (first) { started(); await held; }
+        await route.fulfill({status: first && failOldRequest ? 503 : 200, contentType: 'application/json',
+          body: JSON.stringify(first && failOldRequest ? {detail: '较早来源读取失败'} : {items: [
+            {...expert, display_nickname: first ? '较早作者' : '最新作者', platform_sender_id: '12345'}]})});
+      });
+      await page.locator('#source-select').selectOption(id);
+      await entered;
+      await page.locator('#source-select').selectOption(mid);
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      await page.locator('#source-select').selectOption(id);
+      await page.waitForFunction(() => document.querySelector('#trusted-experts').textContent.includes('最新作者') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      const lateResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/admin/sources/${id}/experts`);
+      release();
+      await lateResponse;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.match(await page.locator('#trusted-experts').innerText(), /最新作者/);
+      assert.doesNotMatch(await page.locator('#trusted-experts').innerText(), /较早/);
+    } finally {
+      release();
+      await context.close();
+    }
+  });
+}
+await test("普通成员搜索可选为监控作者且读取管理员仍调用原接口", async () => {
+  const { page, context, mode, log } = await setup({dual:true});
+  mode.tgSearch = true;
+  await page.locator('.utility-bar [data-page=admin]').click();
+  await page.waitForSelector('#admin-content:not([hidden])');
+  await page.locator('[data-admin-tab=telegram]').click();
+  await page.locator('#source-select').waitFor();
+  await page.locator('#source-select').selectOption(id);
+  await page.locator('#tg-admin-search').fill('普通老师');
+  await page.locator('#tg-admin-search-form button[type=submit],#tg-admin-search-form button:not([type])').first().click();
+  await page.waitForFunction(() => document.querySelector('#source-admins').textContent.includes('普通成员'));
+  assert.ok(log.some(r=>r.path==='/admin/telegram/members' && r.query.includes(encodeURIComponent('普通老师'))));
+  await page.locator('#source-admins [data-author]').first().click();
+  assert.equal(await page.locator('#expert-source-form [name=sender_id]').inputValue(), '12345');
+  assert.equal(await page.locator('#expert-source-form [name=nickname]').inputValue(), '普通老师');
+  await page.locator('#expert-source-form button').click();
+  await page.waitForTimeout(100);
+  const trusted = log.filter(r=>r.path.endsWith('/experts') && r.method==='POST').at(-1);
+  assert.equal(trusted.body.sender_id, '12345');
+  assert.equal(trusted.body.nickname, '普通老师');
+  await page.locator('#tg-admins').click();
+  await page.waitForFunction(() => document.querySelector('#source-admins').textContent.includes('管理员'));
+  assert.equal(log.filter(r=>r.path.startsWith('/admin/telegram/') && ['admins','members'].some(x=>r.path.endsWith(x))).at(-1).path, '/admin/telegram/admins');
+  await context.close();
+});
+for (const width of [1440, 390]) {
+  for (const [pageName, type, value, ready] of [
+    ["scores", "match", "match-0", "#market-period"],
+    ["experts", "expert", id, ".metrics-grid"],
+    ["messages", "message", mid, ".raw-text"],
+  ]) {
+    await test(`详情直达规范化不新增历史且稳定关闭 ${type} / ${width}`, async () => {
+      const { page, context, log } = await setup({ dual: true, mobile: width === 390 });
+      try {
+        const before = await page.evaluate(() => history.length);
+        await page.goto(`http://127.0.0.1:8080/#${pageName}?${type}=${value}`);
+        await page.locator(`#content-dialog[open] ${ready}`).first().waitFor();
+        assert.equal(await page.evaluate(() => history.length), before + 1);
+        assert.notEqual(await page.evaluate(() => history.state?.detail), true);
+        const opened = await page.evaluate(() => history.length);
+        await page.reload();
+        await page.locator(`#content-dialog[open] ${ready}`).first().waitFor();
+        assert.equal(await page.evaluate(() => history.length), opened);
+        if (width === 390) await page.keyboard.press("Escape");
+        else await page.locator("#content-dialog [data-close-dialog]").click();
+        await page.waitForFunction(() => !document.querySelector("#content-dialog").open &&
+          !["match", "expert", "message"].some(key =>
+            new URLSearchParams(location.hash.split("?")[1] || "").has(key)));
+        await page.waitForTimeout(300);
+        assert.equal(await page.locator("#content-dialog").evaluate(e => e.open), false);
+        assert.equal(await page.evaluate(() => history.length), opened);
+        assertReadOnlyNavigation(log);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
 await test("详情深链、前进后退、主附线筛选与保留筛选刷新", async () => {
   const { page, context } = await setup({ dual: true });
   await page.locator(".detail-button").first().click();
@@ -1112,6 +1462,12 @@ await test("初次错误、加载与离线五状态", async () => {
     document
       .querySelector("#matches-notice")
       .textContent.includes("网络已断开"),
+  );
+  await first.page.locator('.score-tabs [data-phase="live"]').click();
+  assert.equal(await first.page.locator(".match-row").count(), 0);
+  assert.match(
+    await first.page.locator("#matches-notice").innerText(),
+    /筛选已更新.*恢复连接后重新读取赛事/,
   );
   await first.context.close();
   const loading = await setup({ mobile: true, captureLoading: true });
@@ -1228,65 +1584,29 @@ await test("推荐定位准确报价并标示价格变化", async () => {
   );
   await context.close();
 });
-await test("敏感操作再次验证保留原输入并隔离身份", async () => {
-  const { page, context, mode, log } = await setup({ dual: true });
-  await page.locator(".utility-bar [data-page=admin]").click();
-  await page.locator("[data-admin-tab=leyu]").click();
-  await page
-    .locator("#leyu-settings [name=leyu_request_id]")
-    .fill("keep-input-after-reauth");
-  mode.reauthRequired = true;
-  await page.locator("#leyu-settings button").click();
-  await page.waitForSelector("#reauth-dialog[open]");
-  assert.equal(await page.locator("#reauth-totp").isVisible(), true);
-  assert.equal(
-    await page.locator("#leyu-settings [name=leyu_request_id]").inputValue(),
-    "keep-input-after-reauth",
-  );
-  await page.locator("#reauth-form [name=password]").fill("test-only-password");
-  await page.locator("#reauth-form [name=totp_code]").fill("123456");
-  await page.locator("#reauth-form button[type=submit]").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#reauth-dialog").open,
-  );
-  const verification = log.find((r) => r.path === "/admin/reauthenticate");
-  assert.equal(verification.headers["x-session-context"], "admin");
-  assert.equal(verification.headers["x-csrf-token"], "admin-test-csrf");
-  assert.equal(
-    log.filter((r) => r.path === "/admin/settings" && r.method !== "GET")
-      .length,
-    1,
-  );
-  await page.locator("#leyu-settings button").click();
-  await page.waitForTimeout(100);
-  assert.equal(
-    log.filter((r) => r.path === "/admin/settings" && r.method !== "GET")
-      .length,
-    2,
-  );
+await test("本人乐鱼绑定与管理员登录不触发二次验证", async () => {
+  const { page, context, log } = await setup({ dual: true });
+  assert.equal(await page.locator("#reauth-dialog, #totp-field, #admin-recovery-field").count(), 0);
   await page.locator("#account-entry").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#leyu-form input").disabled,
-  );
-  await page.locator("#leyu-form [name=account_label]").fill("本人备注待提交");
-  await page.locator("#leyu-form [name=username]").fill("user-only-name");
-  await page.locator("#leyu-form [name=password]").fill("user-only-password");
-  mode.reauthRequired = true;
+  await page.waitForFunction(() => !document.querySelector("#leyu-form input").disabled);
+  await page.locator("#leyu-form [name=account_label]").fill("本人校验样本");
+  await page.locator("#leyu-form [name=username]").fill("fixture-user");
+  await page.locator("#leyu-form [name=password]").fill("fixture-password");
   await page.locator("#leyu-form button.primary-button").click();
-  await page.waitForSelector("#reauth-dialog[open]");
-  assert.equal(await page.locator("#reauth-totp").isVisible(), false);
-  assert.equal(
-    await page.locator("#leyu-form [name=account_label]").inputValue(),
-    "本人备注待提交",
-  );
-  await page.locator("#reauth-form [name=password]").fill("user-password-test");
-  await page.locator("#reauth-form button[type=submit]").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#reauth-dialog").open,
-  );
-  const userVerification = log.find((r) => r.path === "/auth/reauthenticate");
-  assert.equal(userVerification.headers["x-session-context"], "user");
-  assert.equal(userVerification.headers["x-csrf-token"], "user-test-csrf");
+  await page.waitForTimeout(100);
+  assert.equal(log.some((request) => request.path === "/accounts/leyu" && request.method === "PUT"), true);
+  assert.equal(log.some((request) => request.path.endsWith("/reauthenticate")), false);
+  assert.equal(log.some((request) => request.path.startsWith("/admin/mfa/")), false);
+  await page.locator(".utility-bar [data-page=admin]").click();
+  assert.equal(await page.locator("#mfa-start, #generate-mfa-recovery").count(), 0);
+  await page.locator("#admin-logout").click();
+  await page.locator("#admin-identity [data-login=admin]").click();
+  await page.locator("#auth-form [name=email]").fill("admin@example.test");
+  await page.locator("#auth-form [name=password]").fill("test-only-admin-password");
+  await page.locator("#auth-form button").click();
+  await page.waitForSelector("#admin-content:not([hidden])");
+  const login = log.findLast((request) => request.path === "/admin/login");
+  assert.deepEqual(Object.keys(login.body).sort(), ["email", "password"]);
   await context.close();
 });
 await test("多页赛事刷新保留加载深度与滚动并移除消失赛事", async () => {
@@ -1398,7 +1718,6 @@ await test("本人导出与待对账注销取消不恢复投注许可", async ()
   await page.waitForFunction(() =>
     document.querySelector("#closure-status").textContent.includes("尚未申请"),
   );
-  await page.locator("#closure-form [name=password]").fill("test-password");
   await page
     .locator("#closure-form [name=confirmation_phrase]")
     .fill("注销我的球讯账户");
@@ -1410,9 +1729,6 @@ await test("本人导出与待对账注销取消不恢复投注许可", async ()
     /再次核对/,
   );
   await page.locator("#closure-cancel").click();
-  await page
-    .locator("#cancel-closure-form [name=password]")
-    .fill("test-password");
   await page.locator("#cancel-closure-form button").click();
   await page.waitForFunction(
     () => !document.querySelector("#content-dialog").open,
@@ -1441,28 +1757,24 @@ await test("管理员恢复码只显示一次与只读待办订单", async () =>
     await page.locator("#admin-diagnostics").innerText(),
     /模型提供方尚未验证/,
   );
-  await page.locator("[data-admin-tab=orders]").click();
+  assert.match(await page.locator('#admin-action-tasks').innerText(), /失败迁移记录 · 未核验/);
+  assert.match(await page.locator('#quote-latency-metrics').innerText(), /盘口源->接收 P95 5100.5ms/);
+  assert.match(await page.locator('#quote-latency-metrics').innerText(), /未知\/无效\/未来\/过旧 3\/1\/1\/2/);
+  assert.match(await page.locator('#quote-latency-metrics').innerText(), /投递成功不等于每条报价通过/);
+  await page.locator('#admin-action-tasks [data-admin-task-target=telegram]').click();
+  assert.equal(await page.locator('#admin-telegram').isVisible(), true);
+  await page.locator('.admin-tabs [data-admin-tab=overview]').click();
+  await page.locator('#admin-action-tasks [data-admin-task-target=orders]').click();
   await page.waitForSelector("#admin-orders-list .admin-record");
   assert.match(
     await page.locator("#admin-orders-list").innerText(),
     /结果未知/,
   );
   assert.equal(await page.locator("#admin-orders-list button").count(), 0);
-  await page.locator("[data-admin-tab=system]").click();
-  await page
-    .locator("#generate-mfa-recovery")
-    .evaluate((el) => (el.closest("details").open = true));
-  await page.locator("#generate-mfa-recovery").click();
-  await page.locator("#confirm-yes").click();
-  await page.waitForSelector("[data-once-secret]");
-  assert.match(
-    await page.locator("[data-once-secret]").innerText(),
-    /FIXTURE-MFA/,
-  );
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(
-    () => !document.querySelector("[data-once-secret]"),
-  );
+  const orderText = await page.locator("#admin-orders-list").innerText();
+  assert.match(orderText, /预留赔率 1\.96/);
+  assert.match(orderText, /官方成交本金 未知 · 成交赔率 未知/);
+  assert.match(orderText, /官方结算 未知/);
   await page.locator("[data-admin-tab=membership]").click();
   await page
     .locator("#user-search-form")
@@ -1515,140 +1827,13 @@ await test("手机长文、相册、回复及昵称变更保持完整阅读", as
   });
   await context.close();
 });
-await test("管理员换机保留原因子、再次验证上下文与新备用码", async () => {
-  const { page, context, mode, log } = await setup({ dual: true });
-  await page.locator(".utility-bar [data-page=admin]").click();
-  await page.locator("[data-admin-tab=system]").click();
-  await page
-    .locator("#mfa-start")
-    .evaluate((element) => (element.closest("details").open = true));
-  await page.locator("#mfa-start").click();
-  await page.waitForSelector("#mfa-secret");
-  assert.equal(await page.locator("#mfa-qr svg").count(), 1);
-  assert.match(
-    await page.locator("#mfa-secret").innerText(),
-    /KRSXG5DSNFXGOIDB/,
-  );
-  assert.equal(
-    await page.evaluate(() =>
-      JSON.stringify(localStorage).includes("KRSXG5DSNFXGOIDB"),
-    ),
-    false,
-  );
-  mode.invalidMfa = true;
-  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("111111");
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForFunction(() =>
-    document
-      .querySelector("#mfa-message")
-      .textContent.includes("原验证器保持有效"),
-  );
-  assert.equal(await page.locator("#mfa-secret").count(), 1);
-  mode.invalidMfa = false;
-  mode.reauthRequired = true;
-  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("222222");
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForSelector("#reauth-dialog[open]");
-  await page
-    .locator("#reauth-form [name=password]")
-    .fill("fixture-old-admin-password");
-  await page.locator("#reauth-form [name=totp_code]").fill("123456");
-  await page.locator("#reauth-form button").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#reauth-dialog").open,
-  );
-  assert.equal(await page.locator("#mfa-secret").count(), 1);
-  assert.equal(
-    log.filter((request) => request.path.endsWith("/confirm")).length,
-    2,
-  );
-  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("333333");
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForSelector("[data-once-secret] pre");
-  assert.equal(
-    (await page.locator("[data-once-secret] pre").innerText()).split("\n")
-      .length,
-    10,
-  );
-  assert.equal(await page.locator("#mfa-secret").count(), 0);
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(
-    () => !document.querySelector("[data-once-secret]"),
-  );
-  const writes = log.filter(
-    (request) =>
-      request.path.startsWith("/admin/mfa/enrollment") &&
-      request.method !== "GET",
-  );
-  assert.ok(
-    writes.every(
-      (request) =>
-        request.headers["x-session-context"] === "admin" &&
-        request.headers["x-csrf-token"] === "admin-test-csrf",
-    ),
-  );
-  await context.close();
-});
-await test("管理员换机关闭清密钥、继续登记、明确替换、过期取消", async () => {
-  const { page, context, mode, log } = await setup({
-    dual: true,
-    mobile: true,
-  });
+await test("手机管理员系统设置无二次验证入口", async () => {
+  const { page, context, log } = await setup({ dual: true, mobile: true });
   await page.locator(".mobile-bottom [data-page=account]").click();
   await page.locator("#account-admin-entry").click();
   await page.locator("[data-admin-tab=system]").click();
-  await page
-    .locator("#mfa-start")
-    .evaluate((element) => (element.closest("details").open = true));
-  await page.locator("#mfa-start").click();
-  await page.waitForSelector("#mfa-secret");
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(() => !document.querySelector("#mfa-secret"));
-  await page.locator("[data-mfa-continue]").click();
-  assert.equal(await page.locator("#mfa-secret").count(), 0);
-  assert.match(
-    await page.locator("#dialog-content").innerText(),
-    /密钥只在首次发起时返回/,
-  );
-  mode.expireMfa = true;
-  await page.locator("#dialog-content [data-mfa-replace]").click();
-  await page.locator("#confirm-yes").click();
-  await page.waitForFunction(() =>
-    document.querySelector("#mfa-expiry").textContent.includes("登记已过期"),
-  );
-  assert.equal(await page.locator("#mfa-secret").innerText(), "");
-  assert.equal(
-    await page.locator("#mfa-enrollment-form button").isDisabled(),
-    true,
-  );
-  assert.equal(
-    await page
-      .locator("#content-dialog")
-      .evaluate((element) => element.scrollWidth > element.clientWidth),
-    false,
-  );
-  mode.reauthRequired = true;
-  await page.locator("#dialog-content [data-mfa-cancel]").click();
-  await page.locator("#confirm-yes").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#content-dialog").open,
-  );
-  assert.equal(
-    await page.locator("#reauth-dialog").evaluate((element) => element.open),
-    false,
-  );
-  assert.equal(
-    log.filter((request) => request.path === "/admin/mfa/enrollment").at(-1)
-      .body.replace_existing,
-    true,
-  );
-  assert.ok(
-    log.some(
-      (request) =>
-        request.path.startsWith("/admin/mfa/enrollment/") &&
-        request.method === "DELETE",
-    ),
-  );
+  assert.equal(await page.locator("#mfa-start, #generate-mfa-recovery, #reauth-dialog").count(), 0);
+  assert.equal(log.some((request) => request.path.startsWith("/admin/mfa/") || request.path.endsWith("/reauthenticate")), false);
   await context.close();
 });
 await test("Telegram目录及管理员搜索重置游标、空结果、清空与请求乱序", async () => {
@@ -1664,6 +1849,7 @@ await test("Telegram目录及管理员搜索重置游标、空结果、清空与
     () => document.querySelector("#source-select").value,
   );
   for (const kind of ["dialog", "admin"]) {
+    if (kind === "admin") await page.locator('#tg-directory-scope').selectOption('admins');
     const endpoint = kind === "dialog" ? "dialogs" : "admins";
     const result = page.locator(
       kind === "dialog" ? "#tg-dialog-list" : "#source-admins",
@@ -1704,12 +1890,124 @@ await test("Telegram目录及管理员搜索重置游标、空结果、清空与
   });
   await context.close();
 });
+await test("手机多盘口与长队名保持分行且不遮挡比赛按钮", async () => {
+  const original = fixtures[0];
+  fixtures[0] = { ...original, home_team: "格鲁吉亚第比利斯迪纳摩青年队", away_team: "圣彼得堡泽尼特预备队",
+    markets: Array.from({ length: 4 }, (_, index) => ({ ...quote, quote_id: "mobile-" + index, line: "-10.25", price: "123.45" })) };
+  const { page, context } = await setup({ mobile: true });
+  try {
+    for (const width of [360, 390, 720]) {
+      await page.setViewportSize({ width, height: 844 });
+      const geometry = await page.locator('.match-row').first().evaluate(row => {
+        const box = element => element.getBoundingClientRect();
+        const odds = box(row.querySelector('.match-odds'));
+        const buttons = [...row.querySelectorAll('.team-button, .score-button')].map(box);
+        const bounds = box(row);
+        return { oddsTop: odds.top, oddsBottom: odds.bottom, buttonBottom: Math.max(...buttons.map(x => x.bottom)),
+          rowBottom: bounds.bottom, rowOverflow: row.scrollWidth > row.clientWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.ok(geometry.oddsTop >= geometry.buttonBottom, JSON.stringify({ width, geometry }));
+      assert.ok(geometry.oddsBottom <= geometry.rowBottom, JSON.stringify({ width, geometry }));
+      assert.equal(geometry.rowOverflow, false);
+      assert.equal(geometry.pageOverflow, false);
+    }
+    await page.locator('.team-home').first().click();
+    await page.waitForSelector('#content-dialog[open] .detail-hero');
+  } finally {
+    fixtures[0] = original;
+    await context.close();
+  }
+});
+for (const width of [1440, 390]) {
+  for (const [reason, expected] of [
+    ["source_edited", "原消息已编辑，原版本推荐已撤回"],
+    ["source_deleted", "原消息已删除，该推荐已撤回"],
+    ["source_disabled", "该推荐已撤回"],
+    ["review_source_period_intent_conflict", "已撤销：推荐期间无法核验"],
+    ["review_source_line_intent_conflict", "已撤销：推荐盘口线与来源证据不一致"],
+    ["review_source_selection_intent_conflict", "已撤销：推荐方向与来源证据不一致"],
+    ["review_source_period_not_supported", "已撤销：来源未明确推荐期间"],
+    ["review_source_selection_not_supported", "已撤销：来源未选择该推荐项"],
+  ]) {
+    await test(`撤回推荐状态 ${reason} / ${width}`, async () => {
+      const { page, context, log } = await setup({ dual: true, signalWithdrawalReason: reason });
+      try {
+        await page.setViewportSize({ width, height: 960 });
+        await page.locator('[data-page=experts]:visible').first().click();
+        await page.locator('[data-expert-tab=signals]').click();
+        const card = page.locator('#signals-list .signal-card').first();
+        await card.waitFor();
+        const text = await card.innerText();
+        assert.ok(text.includes(expected));
+        if (reason.startsWith("review_source_")) assert.match(text, /已排除收益统计/);
+        if (["review_source_line_intent_conflict", "review_source_selection_intent_conflict"].includes(reason))
+          assert.doesNotMatch(text, /推荐期间无法核验|期间纠错/);
+        if (reason === "review_source_line_intent_conflict") assert.match(text, /盘口线纠错，已排除统计/);
+        if (reason === "review_source_selection_intent_conflict") assert.match(text, /方向纠错，已排除统计/);
+        if (reason === "review_source_period_not_supported") {
+          assert.match(text, /期间证据不足，已排除统计/);
+          assert.doesNotMatch(text, /方向纠错|盘口线纠错|选择证据不足/);
+        }
+        if (reason === "review_source_selection_not_supported") {
+          assert.match(text, /选择证据不足，已排除统计/);
+          assert.doesNotMatch(text, /方向纠错|盘口线纠错|期间纠错|推荐方向与来源/);
+        }
+        assert.doesNotMatch(text, /等待赛果结算/);
+        assert.doesNotMatch(text, /待结算/);
+        assert.match(text, /系统赔率 1\.96/);
+        assert.match(text, /比赛：完场/);
+        assert.match(text, /推荐：滚球/);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        assertReadOnlyNavigation(log);
+        if (reason === "source_edited")
+          await page.screenshot({ path: `${evidence}/withdrawn-source-edited-${width}.png` });
+        if (["review_source_line_intent_conflict", "review_source_selection_intent_conflict", "review_source_period_not_supported", "review_source_selection_not_supported"].includes(reason))
+          await page.screenshot({ path: `${evidence}/withdrawn-${reason}-${width}.png` });
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
+for (const width of [1440, 390]) {
+  await test(`消息旧版本失效标识 / ${width}`, async () => {
+    const previousDeletedAt = message.deleted_at;
+    message.deleted_at = "2026-10-26T11:12:00Z";
+    const { page, context, log } = await setup({ dual: true });
+    try {
+      await page.setViewportSize({ width, height: 960 });
+      await page.locator('[data-page=experts]:visible').first().click();
+      await page.locator('.section-tabs [data-page=messages]').click();
+      await page.locator('#message-expert').selectOption(id);
+      const card = page.locator('.message-card').first();
+      await card.waitFor();
+      assert.match(await card.innerText(), /原版本已失效/);
+      assert.doesNotMatch(await card.innerText(), /原消息已删除/);
+      await card.locator('.text-link[data-message]').click();
+      const detail = page.locator('#content-dialog[open]');
+      await detail.locator('.raw-text').first().waitFor();
+      assert.match(await detail.locator('.message-meta').innerText(), /原版本已失效/);
+      assert.doesNotMatch(await detail.locator('.message-meta').innerText(), /原消息已删除/);
+      assert.equal(await detail.locator('.raw-text').first().innerText(), message.raw_text);
+      await detail.locator('#message-media img').first().waitFor();
+      assert.equal(await detail.locator('#message-media img').count(), 1);
+      assert.match(await detail.locator('#message-signals').innerText(), /系统赔率 1\.96/);
+      assert.equal(await detail.evaluate(e => e.scrollWidth > e.clientWidth), false);
+      assertReadOnlyNavigation(log);
+      await page.screenshot({ path: `${evidence}/invalid-message-version-${width}.png` });
+    } finally {
+      if (previousDeletedAt === undefined) delete message.deleted_at;
+      else message.deleted_at = previousDeletedAt;
+      await context.close();
+    }
+  });
+}
 assert.deepEqual(caught, []);
 await fs.writeFile(
-  "/work/tests/browser/results.json",
+  process.env.BROWSER_RESULTS || "/work/tests/browser/results.json",
   JSON.stringify(
     {
-      date: "2026-10-26",
+      date: new Date().toISOString(),
       environment: "isolated Docker / mock API / no real credentials or bets",
       results,
       browser_errors: caught,

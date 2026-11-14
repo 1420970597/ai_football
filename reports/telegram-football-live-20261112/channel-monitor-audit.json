@@ -1,0 +1,56 @@
+{
+  "checked_at_utc": "2026-11-12T11:19:13.298761+00:00",
+  "read_only": true,
+  "supported_with_explicit_channel_identity_trust": true,
+  "broadcast_missing_sender_requires_post_flag": true,
+  "ordinary_group_missing_sender_is_rejected": true,
+  "individual_behind_channel_is_not_inferred": true,
+  "enabled_sources": 11,
+  "sources_trusting_own_channel_identity": 2,
+  "sources_without_trusted_author": 3,
+  "normalized_channel_identity_event_versions_last_72h": 79,
+  "raw_sender_missing_proven_by_production_event_count": false,
+  "review_jobs": [
+    {
+      "state": "failed",
+      "category": "source_edited",
+      "count": 18,
+      "latest": "2026-11-12 08:58:07.861342+00:00"
+    },
+    {
+      "state": "succeeded",
+      "category": "",
+      "count": 11,
+      "latest": "2026-11-12 09:27:07.255448+00:00"
+    },
+    {
+      "state": "unresolved",
+      "category": "",
+      "count": 37,
+      "latest": "2026-11-12 08:58:50.493575+00:00"
+    }
+  ],
+  "test_result": {
+    "tests": 87,
+    "elapsed_seconds": 7.664,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "exit_code": 0,
+    "runner_committed_source_verified": false,
+    "runner_source_flag_limitation": "运行器原标记false，工作树含未跟踪.omc；责任源码另与冻结清单和Git已提交文件核对，不能把原标记改为true。",
+    "evidence_sha256": "24dd45abfd5d95c34efa910fa40fc69ffcbe31c4b02eddf989026c378406ed5e",
+    "command": "TEST_SUBNET=10.93.89.0/28 sh infra/test/run.sh tests.test_telegram_collector tests.test_telegram_sources tests.test_telegram_directory",
+    "source_worktree_commit": "49ba719db293471e9cdd9b5b22b496e2087c4e96"
+  },
+  "limitations": [
+    "归一身份事件版本不是去重帖子，也不能证明每条原始sender_id为空。",
+    "专门作者7天回补仅正数个人ID，负数频道身份不享该专门补齐；主来源检查点及实时/近期对账仍适用。",
+    "unresolved不是成功推荐，source_edited是旧审核因编辑失效。"
+  ],
+  "business_changes": 0,
+  "production_writes": 0,
+  "new_sources_added": 0,
+  "telegram_joins": 0,
+  "money_tests": 0
+}

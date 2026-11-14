@@ -1,9 +1,13 @@
-"""足球专家一单位结算。输入证据不足时返回 pending，禁止猜测滚球规则。"""
+"""专家一单位结算。按体育和期间验证证据，禁止猜测滚球或加时规则。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+import re
+
+from basketball_scores import SCORE_RULE_REFERENCE, validate_no_overtime_evidence
+from execution_scope import execution_market_supported
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
@@ -29,6 +33,10 @@ def _score(value) -> int | None:
 
 
 def _period_scores(period: str, result: dict) -> tuple[int, int] | None:
+    for key in ('home', 'away'):
+        full, half = _score(result.get(key)), _score(result.get('half_' + key))
+        if full is not None and half is not None and half > full:
+            return None
     if period == "first_half":
         home, away = _score(result.get("half_home")), _score(result.get("half_away"))
     elif period in {"full_time", "second_half"}:
@@ -44,6 +52,8 @@ def _period_scores(period: str, result: dict) -> tuple[int, int] | None:
 
 
 def settle(signal: dict, result: dict) -> Settlement:
+    if signal.get('sport') == 'basketball':
+        return _settle_basketball(signal, result)
     if signal.get("sport", "football") != "football":
         return pending("sport_requires_provider_settlement")
     if result.get("status") == "void":
@@ -52,8 +62,14 @@ def settle(signal: dict, result: dict) -> Settlement:
         return pending("result_not_confirmed")
     try:
         price = Decimal(str(signal["price"]))
-        line = Decimal(str(signal.get("line", "0")))
-        if not price.is_finite() or price <= ONE or not line.is_finite():
+        kind = signal.get('kind')
+        raw_line = signal.get('line')
+        if isinstance(raw_line, bool):
+            return pending("invalid_price_or_line")
+        line = None if kind == 'winner' and raw_line is None else Decimal(str(raw_line))
+        if (not price.is_finite() or price <= ONE or
+                kind == 'winner' and line not in (None, ZERO) or
+                kind != 'winner' and (line is None or not line.is_finite())):
             return pending("invalid_price_or_line")
     except (KeyError, InvalidOperation, ValueError):
         return pending("invalid_price_or_line")
@@ -61,6 +77,7 @@ def settle(signal: dict, result: dict) -> Settlement:
     if scores is None:
         return pending("period_score_missing_or_inconsistent")
     basis = signal.get("score_basis", "unknown")
+    zero_equivalent = False
     if signal.get("phase") == "scheduled" and basis == "unknown":
         basis = "full_period"
     if basis == "remaining_period":
@@ -71,21 +88,98 @@ def settle(signal: dict, result: dict) -> Settlement:
         if min(scores) < 0:
             return pending("baseline_exceeds_official_result")
     elif basis != "full_period":
-        return pending("live_market_score_rule_unknown")
+        # Explicit zero in this period makes full and remaining scores equal.
+        # Keep the original unknown rule; missing period scores are not zero.
+        baseline = _period_scores(signal.get("period", "full_time"), signal.get("score_baseline") or {})
+        if signal.get("phase") != "live" or basis != "unknown" or baseline is None:
+            return pending("live_market_score_rule_unknown")
+        if baseline == (0, 0):
+            zero_equivalent = True
+        else:
+            # Do not choose a provider rule or rewrite the immutable unknown
+            # basis. A result is provable only when BOTH supported meanings
+            # yield the same outcome, net return and effective stake.
+            variants = [settle(dict(signal, score_basis=explicit), result)
+                        for explicit in ('full_period', 'remaining_period')]
+            full, remaining = variants
+            if (full.outcome != 'pending' and remaining.outcome != 'pending'
+                and (full.outcome, full.unit_net, full.effective_stake)
+                == (remaining.outcome, remaining.unit_net, remaining.effective_stake)):
+                return Settlement(full.outcome, full.unit_net, full.effective_stake,
+                                  full.reason + ':score_basis_outcome_equivalent')
+            return pending("live_market_score_rule_unknown")
+    reason_suffix = ":zero_baseline_score_equivalent" if zero_equivalent else ""
+    return _settle_market(signal, price, line, scores, reason_suffix)
+
+
+def _settle_basketball(signal: dict, result: dict) -> Settlement:
+    if not execution_market_supported('basketball', str(signal.get('market_id')), signal.get('kind'), signal.get('period')):
+        return pending('basketball_market_or_period_unverified')
+    if result.get('status') == 'void':
+        return Settlement('void', ZERO, ZERO, 'provider_confirmed_void')
+    if result.get('status') != 'confirmed':
+        return pending('result_not_confirmed')
+    proof = result.get('evidence')
+    if (not isinstance(proof, dict)
+            or re.fullmatch(r'leyu_native_detail:[0-9]+', str(result.get('provider_reference', ''))) is None
+            or result['provider_reference'] != 'leyu_native_detail:' + str(proof.get('mid', ''))):
+        return pending('basketball_final_period_evidence_missing')
+    try:
+        validate_no_overtime_evidence(result.get('home'), result.get('away'),
+                                      result.get('half_home'), result.get('half_away'), result.get('evidence'))
+        price = Decimal(str(signal['price']))
+        raw_line = signal.get('line')
+        line = None if signal.get('kind') == 'winner' and raw_line is None else Decimal(str(raw_line))
+        if (isinstance(raw_line, bool) or not price.is_finite() or price <= ONE
+                or signal.get('kind') == 'winner' and line not in (None, ZERO)
+                or signal.get('kind') != 'winner' and (line is None or not line.is_finite() or line * 2 != (line * 2).to_integral_value())):
+            return pending('invalid_price_or_line')
+    except (InvalidOperation, KeyError):
+        return pending('invalid_price_or_line')
+    except ValueError as exc:
+        return pending(str(exc))
+    if signal.get('phase') not in {'scheduled', 'live'} or signal.get('score_basis', 'unknown') not in {'unknown', 'full_period'}:
+        return pending('basketball_score_rule_unverified')
+    if signal.get('kind') == 'winner' and signal.get('selection') not in {'home', 'away'}:
+        return pending('unsupported_selection')
+    if signal.get('kind') == 'winner' and result['home'] == result['away']:
+        return pending('basketball_tied_winner_rule_unverified')
+    # These are verified native FULL_TIME markets. Use their complete score,
+    # independently of the football remaining-period live handicap policy.
+    value = _settle_market(signal, price, line, (result['home'], result['away']), '')
+    if value.outcome == 'pending':
+        return value
+    reason = 'two_way_winner' if signal.get('kind') == 'winner' else value.reason
+    return Settlement(value.outcome, value.unit_net, value.effective_stake, SCORE_RULE_REFERENCE + ':' + reason)
+
+
+def _settle_market(signal, price, line, scores, reason_suffix):
     home, away = map(Decimal, scores)
     kind, selection = signal.get("kind"), signal.get("selection")
+    line_basis = signal.get('line_basis', 'selection')
+    if line_basis not in {'selection', 'provider_home'}:
+        return pending('line_basis_unknown')
+    if line_basis == 'provider_home':
+        if kind != 'handicap' or selection not in {'home', 'away'}:
+            return pending('line_basis_not_applicable')
+        if selection == 'away':
+            line = -line
+        reason_suffix += ':provider_home_line'
     if kind == "winner":
         if selection not in {"home", "away", "draw"}:
             return pending("unsupported_selection")
         won = (home > away and selection == "home") or (away > home and selection == "away") or (home == away and selection == "draw")
-        return Settlement("win" if won else "loss", price - ONE if won else -ONE, ONE, "three_way_winner")
-    if kind not in {"handicap", "total"}:
+        return Settlement("win" if won else "loss", price - ONE if won else -ONE, ONE, "three_way_winner" + reason_suffix)
+    if kind not in {"handicap", "total", "team_total"}:
         return pending("unsupported_market")
+    team_side = signal.get('team_side')
+    if kind == 'team_total' and team_side not in {'home', 'away'}:
+        return pending('team_total_side_unknown')
     if (line * 4) != (line * 4).to_integral_value():
         return pending("unsupported_line_increment")
-    if kind == "handicap" and selection not in {"home", "away"} or kind == "total" and selection not in {"over", "under"}:
+    if kind == "handicap" and selection not in {"home", "away"} or kind in {"total", "team_total"} and selection not in {"over", "under"}:
         return pending("unsupported_selection")
-    if kind == "total" and line < 0:
+    if kind in {"total", "team_total"} and line < 0:
         return pending("invalid_total_line")
     # line 是所选方的让受让，不能把客队线再次反号。
     lower = (line / HALF).to_integral_value(rounding=ROUND_FLOOR) * HALF
@@ -95,7 +189,8 @@ def settle(signal: dict, result: dict) -> Settlement:
         if kind == "handicap":
             margin = (home - away if selection == "home" else away - home) + part
         else:
-            margin = home + away - part
+            goals = home if team_side == 'home' else away
+            margin = (goals if kind == 'team_total' else home + away) - part
             if selection == "under":
                 margin = -margin
         returns.append(price - ONE if margin > 0 else -ONE if margin < 0 else ZERO)
@@ -107,4 +202,5 @@ def settle(signal: dict, result: dict) -> Settlement:
         outcome = "half_win" if net > 0 else "half_loss"
     else:
         outcome = "win" if net > 0 else "loss"
-    return Settlement(outcome, net, active, "asian_split" if len(lines) == 2 else "asian_line")
+    reason = "asian_split" if len(lines) == 2 else "asian_line"
+    return Settlement(outcome, net, active, reason + reason_suffix)

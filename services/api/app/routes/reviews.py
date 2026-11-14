@@ -1,21 +1,44 @@
 from __future__ import annotations
 
-import base64
+import asyncio
 import hashlib
-import hmac
 import json
+import unicodedata
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
-from pydantic import AwareDatetime, BaseModel, Field, model_validator
+import httpx
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from .. import database
-from ..review_state import active_job, authorize, fresh_quote, quote_context, trace
+from ..review_policy import REALTIME_WINDOW_SECONDS
+from ..competition_names import normalize_competition_name
+from ..handicap_lines import line_terms
+from ..review_line_intent import line_intent_rejection, line_intent_context
+from ..review_state import authorize, fresh_quote, quote_context, quote_context_changed_fields
+from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
+from ..runtime_settings import quote_max_age_from_rows
+from ..quote_observation import confirmation_for, confirmations_for
+from ..team_matching import normalize_team_name, with_verified_aliases
+from ..review_candidates import snapshot_candidates
+from ..review_cursors import encode_cursor, decode_cursor
+from ..review_search_scope import continuation_scope, scope_key
+from ..signal_persistence import persist_signals
+from ..review_resolution import resolve_candidates
+from ..review_market_query import market_filters, handicap_query_guidance
+from ..team_totals import team_total_terms
+from ..review_period_intent import (period_intent_rejection, verified_early_first_half_context,
+                                   premarket_period_rejection, evidence_period_rejection, period_intent_key)
+from quote_witness import known_quote_snapshot
 
 router = APIRouter(prefix="/internal/mcp")
+
+# Reserve one database command budget before reusing a precise observation.
+# The final write still validates its actual age against the unchanged policy.
+QUOTE_CONFIRMATION_WRITE_HEADROOM_SECONDS = 5
 
 
 class AttemptInput(BaseModel):
@@ -24,20 +47,38 @@ class AttemptInput(BaseModel):
 
 
 class SearchInput(AttemptInput):
-    team_query: str = Field(min_length=2, max_length=120)
-    phase: str = Field(default="all", pattern="^(all|live|scheduled)$")
+    team_query: str = Field(max_length=120)
+    phase: str = Field(default="all", pattern="^(all|live|scheduled|finished|cancelled)$")
     competition_query: str | None = Field(default=None, max_length=120)
+    sport: str | None = Field(default=None, min_length=1, max_length=20, pattern=r'^[a-z][a-z0-9_]{0,19}$')
     from_utc: AwareDatetime | None = None
     to_utc: AwareDatetime | None = None
     cursor: str | None = Field(default=None, max_length=1000)
-    page_size: int = Field(default=50, ge=1, le=100)
+    page_size: int = Field(default=100, ge=1, le=100)
+    team_a: str | None = Field(default=None, min_length=2, max_length=160)
+    team_b: str | None = Field(default=None, min_length=2, max_length=160)
+
+    @field_validator('sport', mode='before')
+    @classmethod
+    def normalize_sport(cls, value):
+        return value.strip().lower() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def valid_window(self):
         if self.from_utc and self.to_utc and self.from_utc > self.to_utc:
             raise ValueError("start must precede end")
-        if not self.team_query.strip():
-            raise ValueError("team name is required")
+        if self.team_query.strip():
+            if len(self.team_query) < 2:
+                raise ValueError("team name must contain at least two characters")
+        elif (len(normalize_competition_name(self.competition_query or '', self.sport)) < 2 or not self.sport
+              or not self.from_utc or not self.to_utc
+              or not timedelta(0) < self.to_utc-self.from_utc <= timedelta(days=7)):
+            raise ValueError("league-only search requires competition, sport and a positive window of at most seven days")
+        if (self.team_a is None) != (self.team_b is None):
+            raise ValueError('both team identities are required for inline resolution')
+        if self.team_a is not None and (not normalize_team_name(self.team_a) or not normalize_team_name(self.team_b)
+                or normalize_team_name(self.team_a) == normalize_team_name(self.team_b)):
+            raise ValueError('two distinct team identities are required')
         return self
 
 
@@ -52,6 +93,37 @@ class ResolveInput(AttemptInput):
 
 class MarketInput(AttemptInput):
     fixture_id: str = Field(min_length=1, max_length=160)
+    market_kind: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
+    period: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
+    line: Decimal | None = Field(default=None, max_digits=8, decimal_places=3)
+    selection: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
+    market_query: str | None = Field(default=None, max_length=120)
+    source_periods: list[Literal['full_time','first_half','second_half']] | None = Field(default=None,max_length=3)
+
+    @field_validator('market_kind', mode='before')
+    @classmethod
+    def normalize_market_kind_alias(cls, value):
+        if value in ('over_under', 'totals', 'total_goals'):
+            return 'total'
+        return 'handicap' if value == 'asian_handicap' else value
+
+    @field_validator('period', mode='before')
+    @classmethod
+    def normalize_full_period_alias(cls, value):
+        if not isinstance(value, str):
+            return value
+        return {'full_match': 'full_time', 'full': 'full_time', 'match': 'full_time',
+                '1h': 'first_half', '2h': 'second_half',
+                '全场': 'full_time', '上半场': 'first_half',
+                '下半场': 'second_half'}.get(value, value)
+
+    @field_validator('market_query', mode='before')
+    @classmethod
+    def normalize_market_query(cls, value):
+        if not isinstance(value, str):
+            return value
+        normalized = ' '.join(unicodedata.normalize('NFKC', value).casefold().split())
+        return normalized or None
 
 
 class PickInput(BaseModel):
@@ -65,61 +137,102 @@ class RecordInput(AttemptInput):
     signals: list[PickInput] = Field(min_length=1, max_length=32)
 
 
+def _market_matches(quote, filters):
+    for field in ('market_kind', 'period', 'selection'):
+        expected = filters[field]
+        if expected is not None and quote.get(field) != expected:
+            return False
+    line = filters['line']
+    if line is not None:
+        actual = quote.get('line')
+        if actual is None or Decimal(str(actual)) != line:
+            return False
+    query = filters['market_query']
+    if query is not None:
+        name = unicodedata.normalize('NFKC', str(quote.get('market_name') or '')).casefold()
+        kind = str(quote.get('market_kind') or '').casefold()
+        if query not in f'{name} {kind}':
+            return False
+    return True
+
+
+def _market_filter_sql(fixture_id: str, filters: dict):
+    clauses = ['q.fixture_id=$1']
+    values = [fixture_id]
+    for field in ('market_kind', 'period', 'selection'):
+        value = filters[field]
+        if value is not None:
+            values.append(value)
+            clauses.append(f'q.{field}=${len(values)}')
+    if filters['line'] is not None:
+        values.append(filters['line'])
+        clauses.append(f'q.line=${len(values)}::numeric')
+    return ' AND '.join(clauses), values
+
+
 def _key(request: Request) -> bytes:
     return request.app.state.settings.mcp_internal_token.encode()
 
 
 def _cursor(request: Request, review_id, attempt_id, search_key: str, position: int) -> str:
-    body = json.dumps([str(review_id), str(attempt_id), search_key, position], separators=(",", ":")).encode()
-    signature = hmac.new(_key(request), body, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(body + signature).decode().rstrip("=")
+    return encode_cursor(_key(request), review_id, attempt_id, search_key, position)
 
 
 def _position(request: Request, body: SearchInput, search_key: str) -> int:
     if body.cursor is None:
         return 0
     try:
-        raw = base64.b64decode(body.cursor + "=" * (-len(body.cursor) % 4), altchars=b"-_", validate=True)
-        encoded, signature = raw[:-32], raw[-32:]
-        if not hmac.compare_digest(signature, hmac.new(_key(request), encoded, hashlib.sha256).digest()):
-            raise ValueError
-        review_id, attempt_id, key, position = json.loads(encoded)
-        if (review_id, attempt_id, key) != (str(body.review_id), str(body.attempt_id), search_key) or not isinstance(position, int) or position < 1:
-            raise ValueError
-        return position
+        return decode_cursor(_key(request), body.review_id, body.attempt_id, search_key, body.cursor)
     except (ValueError, TypeError, UnicodeError):
         raise HTTPException(status_code=400, detail="invalid or cross-query cursor") from None
 
 
 @router.post("/search_matches")
+@tool_evidence('mcp_search_matches')
 async def search_matches(body: SearchInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
-    scope = {"team": body.team_query.strip().casefold(), "phase": body.phase, "competition": (body.competition_query or "").strip().casefold(),
+    scope = {"team": body.team_query.strip().casefold(), "phase": body.phase, "competition": (body.competition_query or "").strip().casefold(), "sport": body.sport,
              "from": body.from_utc.astimezone(timezone.utc).isoformat() if body.from_utc else None,
              "to": body.to_utc.astimezone(timezone.utc).isoformat() if body.to_utc else None}
-    search_key = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    search_key = scope_key(scope)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            await active_job(conn, body.review_id, body.attempt_id)
-            search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 FOR UPDATE", body.review_id, search_key)
+            await active_tool_job(conn, body.review_id, body.attempt_id)
+            search = None
+            candidate_total = None
+            if body.cursor:
+                # Lock the actual continuation first; never acquire two query
+                # locks in opposite orders when a caller changes its filters.
+                search = await conn.fetchrow(
+                    "SELECT * FROM v2_match_searches WHERE job_id=$1 AND attempt_id=$2 "
+                    "AND expected_cursor=$3 FOR UPDATE", body.review_id, body.attempt_id, body.cursor)
+                if search and search['search_key'] != search_key:
+                    recorded = await conn.fetchval(
+                        "SELECT payload->'scope' FROM v2_analysis_traces WHERE job_id=$1 "
+                        "AND trace_kind='mcp_search_matches' AND payload->>'status'='succeeded' "
+                        "AND payload->>'attempt_id'=$2 AND payload->>'search_key'=$3 "
+                        "AND payload ? 'scope' ORDER BY sequence_no DESC LIMIT 1",
+                        body.review_id, str(body.attempt_id), search['search_key'])
+                    try:
+                        scope = continuation_scope(scope, recorded, search['search_key'])
+                    except ValueError as exc:
+                        raise HTTPException(409, detail=str(exc)) from None
+                    search_key = search['search_key']
+            if search is None:
+                search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 FOR UPDATE", body.review_id, search_key)
             if not search:
                 if body.cursor:
                     raise HTTPException(status_code=409, detail="search has not started")
-                await conn.execute(
+                search = await conn.fetchrow(
                     "INSERT INTO v2_match_searches(job_id,search_key,team_query,phase,competition_query,from_utc,to_utc,attempt_id) "
-                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8)", body.review_id, search_key, scope["team"], body.phase, scope["competition"], body.from_utc, body.to_utc, body.attempt_id,
+                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *", body.review_id, search_key, scope["team"], body.phase, scope["competition"], body.from_utc, body.to_utc, body.attempt_id,
                 )
                 # 一次 INSERT SELECT 形成完整候选快照，之后按不可变序号遍历，避免更新和新增造成漏场。
-                await conn.execute(
-                    "INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
-                    "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id),to_jsonb(f) FROM v2_fixtures f "
-                    "WHERE f.phase IN ('live','scheduled') AND ($3='all' OR f.phase=$3) "
-                    "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 OR $5=ANY(f.home_aliases) OR $5=ANY(f.away_aliases)) "
-                    "AND ($6='' OR lower(f.competition_name) LIKE '%'||$6||'%') "
-                    "AND ($7::timestamptz IS NULL OR f.kickoff_at >= $7) AND ($8::timestamptz IS NULL OR f.kickoff_at <= $8)",
-                    body.review_id, search_key, body.phase, "%" + scope["team"] + "%", scope["team"], scope["competition"], body.from_utc, body.to_utc,
+                candidate_total = await snapshot_candidates(
+                    conn, review_id=body.review_id, search_key=search_key, phase=body.phase,
+                    team_query=body.team_query, competition=scope['competition'], sport=body.sport,
+                    from_utc=body.from_utc, to_utc=body.to_utc,
                 )
-                search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)
             if search["attempt_id"] != body.attempt_id:
                 raise HTTPException(status_code=409, detail="search belongs to an earlier attempt")
             if body.cursor != search["expected_cursor"] and not (body.cursor is None and search["page_count"] == 0):
@@ -128,128 +241,417 @@ async def search_matches(body: SearchInput, request: Request):
                 raise HTTPException(status_code=409, detail="search already complete; use resolution tool")
             position = _position(request, body, search_key)
             rows = await conn.fetch(
-                "SELECT position,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2 "
+                "SELECT position,fixture_id,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2 "
                 "AND position>$3 ORDER BY position LIMIT $4", body.review_id, search_key, position, body.page_size + 1,
             )
             has_more = len(rows) > body.page_size
             page = rows[:body.page_size]
             cursor = _cursor(request, body.review_id, body.attempt_id, search_key, page[-1]["position"]) if has_more else None
-            total = await conn.fetchval("SELECT count(*) FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)
+            total = candidate_total if candidate_total is not None else search["total_candidates"]
             await conn.execute(
                 "UPDATE v2_match_searches SET expected_cursor=$3,complete=$4,page_count=page_count+1,total_candidates=$5,updated_at=now() WHERE job_id=$1 AND search_key=$2",
                 body.review_id, search_key, cursor, not has_more, total,
             )
-            result = {"search_key": search_key, "items": [row["candidate_data"] for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
-            await trace(conn, body.review_id, "mcp_search_matches", {"attempt_id": str(body.attempt_id), "scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more})
-            return result
+            result = {"search_key": search_key, "items": [with_verified_aliases(row["candidate_data"]) for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
+            if body.team_a is not None:
+                result['resolution'] = {'resolved': False, 'reason': 'search_not_complete'}
+                if not has_more:
+                    candidates = page if position == 0 else await conn.fetch(
+                        'SELECT fixture_id,candidate_data FROM v2_match_search_candidates '
+                        'WHERE job_id=$1 AND search_key=$2', body.review_id, search_key)
+                    # League/time/phase constraints already belong to this
+                    # immutable snapshot, including continued search scope.
+                    intent = ResolveInput(review_id=body.review_id, attempt_id=body.attempt_id,
+                        search_key=search_key, team_a=body.team_a, team_b=body.team_b)
+                    result['resolution'] = await resolve_candidates(conn, intent, candidates)
+            if not has_more and total == 0 and body.competition_query:
+                # A source league label may include a youth suffix absent from
+                # the provider's league name. Request an independent team
+                # search; never silently relax this immutable search scope.
+                result['next_search_guidance'] = {
+                    'condition': 'competition_filtered_search_complete_but_empty',
+                    'action': 'search_source_team_without_competition_filter',
+                    'required_scope': ['team_query', 'sport', 'phase', 'from_utc', 'to_utc'],
+                    'does_not_confirm_identity': True,
+                    **({'team_query': body.team_query} if body.team_query.strip() else {}),
+                }
+            elif (not has_more and body.team_query.strip()
+                    and not result.get('resolution', {}).get('resolved')):
+                if result.get('resolution', {}).get('reason') == 'ambiguous_fixture':
+                    result['next_search_guidance'] = {
+                        'condition': 'source_pair_found_but_not_unique',
+                        'action': 'resolve_match_with_source_competition_and_time',
+                        'required_scope': ['search_key', 'team_a', 'team_b', 'competition', 'from_utc', 'to_utc'],
+                        'does_not_confirm_identity': True,
+                    }
+                else:
+                    result['next_search_guidance'] = {
+                        'condition': 'source_pair_not_found_and_league_readable',
+                        'action': 'search_complete_league_candidates', 'team_query': '',
+                        'required_scope': ['competition_query', 'sport', 'from_utc', 'to_utc'],
+                        'max_window_days': 7, 'does_not_confirm_identity': True,
+                    }
+            return await tool_success(conn, body, result, {"scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more})
 
 
 @router.post("/resolve_match")
+@tool_evidence('mcp_resolve_match')
 async def resolve_match(body: ResolveInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            await active_job(conn, body.review_id, body.attempt_id)
-            complete = await conn.fetchval("SELECT complete FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 AND attempt_id=$3", body.review_id, body.search_key, body.attempt_id)
-            if not complete:
+            await active_tool_job(conn, body.review_id, body.attempt_id)
+            snapshot = await conn.fetch(
+                'SELECT s.complete,c.fixture_id,c.candidate_data FROM v2_match_searches s '
+                'LEFT JOIN v2_match_search_candidates c ON s.complete AND c.job_id=s.job_id AND c.search_key=s.search_key '
+                'WHERE s.job_id=$1 AND s.search_key=$2 AND s.attempt_id=$3',
+                body.review_id, body.search_key, body.attempt_id)
+            if not snapshot or not snapshot[0]['complete']:
                 raise HTTPException(status_code=409, detail="all candidate pages must be read first")
-            rows = await conn.fetch("SELECT fixture_id,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, body.search_key)
-            matches = []
-            a, b = body.team_a.strip().casefold(), body.team_b.strip().casefold()
-            if a == b:
-                raise HTTPException(status_code=422, detail="two distinct team identities are required")
-            for row in rows:
-                fixture = row["candidate_data"]
-                home = {str(v).casefold() for v in [fixture["home_team"], *fixture.get("home_aliases", [])]}
-                away = {str(v).casefold() for v in [fixture["away_team"], *fixture.get("away_aliases", [])]}
-                if not ((a in home and b in away) or (b in home and a in away)):
-                    continue
-                if body.competition and body.competition.strip().casefold() != fixture["competition_name"].casefold():
-                    continue
-                kickoff = datetime.fromisoformat(fixture["kickoff_at"])
-                if body.from_utc and kickoff < body.from_utc or body.to_utc and kickoff > body.to_utc:
-                    continue
-                matches.append(row)
-            if len(matches) != 1:
-                result = {"resolved": False, "reason": "no_unique_fixture", "candidate_count": len(matches)}
-            else:
-                fixture = matches[0]
-                evidence = jsonable_encoder(body.model_dump(exclude={"review_id", "attempt_id"}))
-                await conn.execute(
-                    "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
-                    body.review_id, body.attempt_id, fixture["fixture_id"], body.search_key, evidence,
-                )
-                result = {"resolved": True, "fixture": fixture["candidate_data"]}
-            await trace(conn, body.review_id, "mcp_resolve_match", jsonable_encoder(body.model_dump()) | {"result": result})
-            return result
+            # A completed zero-candidate search still has its search witness;
+            # the LEFT JOIN's empty candidate must not enter team resolution.
+            rows = [row for row in snapshot if row['fixture_id'] is not None]
+            result = await resolve_candidates(conn, body, rows)
+            return await tool_success(conn, body, result, {'result': {'resolved': result['resolved'], 'candidate_count': result.get('candidate_count')}})
+
+
+async def _market_snapshot(conn, body, settings, filters):
+    where, values = _market_filter_sql(body.fixture_id, filters)
+    values.extend((body.review_id, body.attempt_id, MAX_MARKETS + 1))
+    review_parameter, attempt_parameter, limit_parameter = range(len(values)-2, len(values)+1)
+    values.append({'algorithm':'premarket-source-intent-v1',
+                   **{key:str(value)if isinstance(value,Decimal)else value
+                      for key,value in filters.items()},
+                   **({'source_periods':body.source_periods or []}
+                      if 'source_periods' in body.model_fields_set else {})})
+    # One statement observes the current binding, fixture and complete quote
+    # inventory together. Composite rows preserve native Decimal/UTC values;
+    # the anchor also preserves explicit errors when no active fixture exists.
+    rows = await conn.fetch(
+        'WITH declared AS (UPDATE v2_review_fixture_bindings SET evidence=evidence || '
+        "jsonb_build_object('source_market_intent',$" + str(len(values)) + '::jsonb) '
+        'WHERE job_id=$' + str(review_parameter) + ' AND attempt_id=$' + str(attempt_parameter) +
+        " AND fixture_id=$1 AND NOT evidence ? 'source_market_intent' RETURNING fixture_id) "
+        'SELECT f AS fixture,EXISTS(SELECT 1 FROM v2_review_fixture_bindings b '
+        'WHERE b.job_id=$' + str(review_parameter) + ' AND b.attempt_id=$' + str(attempt_parameter) +
+        ' AND b.fixture_id=$1) AS review_fixture_bound,inventory.total_quotes,policy AS quote_age_policy,q.* '
+        "FROM (VALUES(1)) anchor(value) LEFT JOIN v2_fixtures f ON f.id=$1 AND f.phase IN ('scheduled','live') "
+        "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds' "
+        'LEFT JOIN LATERAL (SELECT count(*)::integer AS total_quotes '
+        'FROM v2_current_quotes WHERE fixture_id=f.id) inventory ON TRUE '
+        'LEFT JOIN LATERAL (SELECT q.* FROM v2_current_quotes q WHERE q.fixture_id=f.id AND ' + where +
+        ' ORDER BY q.period,q.market_id,q.line,q.selection LIMIT $' + str(limit_parameter) + ') q ON TRUE',
+        *values,
+    )
+    if not rows[0]['review_fixture_bound']:
+        raise HTTPException(409, detail='fixture must be uniquely resolved first')
+    if rows[0]['fixture'] is None:
+        raise HTTPException(409, detail='fixture is no longer active')
+    fixture = dict(rows[0]['fixture'])
+    total_quotes = rows[0]['total_quotes']
+    candidates = [{key: value for key, value in row.items()
+                   if key not in {'fixture', 'review_fixture_bound', 'total_quotes', 'quote_age_policy'}}
+                  for row in rows if row['id'] is not None]
+    if len(candidates) > MAX_MARKETS:
+        raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
+    quotes = [quote for quote in candidates if _market_matches(quote, filters)]
+    policy = rows[0]['quote_age_policy']
+    max_age = quote_max_age_from_rows(settings, [] if policy is None else [policy])
+    return fixture, total_quotes, quotes, max_age
+
+
+async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh):
+    confirmations = confirmations_for(refresh.get('_observation'), quotes, fixture, max_age)
+    if quotes:
+        await conn.executemany(
+            "INSERT INTO v2_review_market_reads(job_id,attempt_id,quote_id,source_updated_at,price,quote_context) VALUES($1,$2,$3,$4,$5,$6) "
+            "ON CONFLICT(job_id,attempt_id,quote_id) DO UPDATE SET source_updated_at=EXCLUDED.source_updated_at,price=EXCLUDED.price,quote_context=EXCLUDED.quote_context,created_at=now()",
+            [(body.review_id, body.attempt_id, q['id'], q['source_updated_at'], q['price'],
+              quote_context(q, fixture) | ({'current_confirmation': confirmations[q['id']]} if confirmations[q['id']] else {})) for q in quotes],
+        )
+    refresh.pop('_observation', None)
+    market_filter = {key: str(value) if key == 'line' and value is not None else value
+                     for key, value in filters.items() if value is not None}
+    coverage = {'total_quotes': total_quotes, 'matched_quotes': len(quotes),
+                'returned_quotes': len(quotes), 'complete_for_filter': True}
+    result = {'fixture': dict(fixture), 'markets': [dict(q) | {'quote_id': str(q['id']),
+              'fresh': fresh_quote(q, max_age), 'confirmed_current': bool(confirmations[q['id']]),
+              'can_record': fresh_quote(q, max_age) or bool(confirmations[q['id']]),
+              'team_side': team_total_terms(q, fixture['id']).get('team_side')} for q in quotes],
+              'refresh': refresh, 'market_filter': market_filter, 'market_coverage': coverage}
+    return await tool_success(conn, body, result, {'fixture_id': body.fixture_id,
+        'quote_ids': [str(q['id']) for q in quotes], 'refresh': refresh,
+        'market_filter': market_filter, 'market_coverage': coverage})
+
+
+async def _request_market_refresh(fixture_id: str, source_match_id: str, request: Request, *,
+                                  known_snapshot=None) -> dict:
+    """I/O only, after this call's transaction validated the bound active fixture.
+
+    Callers must revalidate the attempt and quote after I/O before recording.
+    Never retain a connection, permission witness or observation across calls.
+    """
+    settings = request.app.state.settings
+    url = getattr(settings, 'market_refresh_url', '')
+    if not url:
+        return {'attempted': False, 'reason': 'refresh_unconfigured'}
+    payload = {'fixture_id': fixture_id, 'source_match_id': source_match_id}
+    if known_snapshot is not None:
+        payload['known_snapshot'] = known_snapshot
+    try:
+        async with asyncio.timeout(9):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(8.5, connect=2), trust_env=False, follow_redirects=False) as client:
+                response = await client.post(url, headers={'Authorization': 'Bearer ' + settings.collector_token},
+                    json=payload)
+                response.raise_for_status()
+                value = response.json()
+        if not isinstance(value, dict) or type(value.get('accepted')) is not bool:
+            return {'attempted': True, 'accepted': False, 'reason': 'refresh_invalid_response'}
+        reason = str(value.get('reason', ''))
+        if not reason or not all(char.isascii() and (char.isalnum() or char == '_') for char in reason) or len(reason) > 80:
+            reason = 'refresh_completed' if value['accepted'] else 'refresh_unavailable'
+        current_only = (known_snapshot is not None and reason in {
+                         'observed_unchanged', 'observed_current_projection_unconfirmed'}
+                     and value['accepted'] is False and value.get('written') is False
+                     and value.get('snapshot_committed') is False and value.get('current_only') is True)
+        return {'attempted': True, 'accepted': value['accepted'], 'reason': reason,
+                '_observation': value.get('current_observation')
+                    if value.get('snapshot_committed') is True or current_only else None}
+    except (httpx.HTTPError, ValueError, TimeoutError):
+        # A refresh is optional evidence gathering, never a reason to mark old
+        # prices fresh or replay an unknown upstream operation automatically.
+        return {'attempted': True, 'accepted': False, 'reason': 'refresh_unavailable'}
 
 
 @router.post("/list_match_markets")
+@tool_evidence('mcp_list_match_markets')
 async def list_match_markets(body: MarketInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
+    guidance = handicap_query_guidance(body)
+    if guidance:
+        raise HTTPException(422, detail=guidance)
+    settings = request.app.state.settings
+    filters = market_filters(body)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            await active_job(conn, body.review_id, body.attempt_id)
-            bound = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1 AND attempt_id=$2 AND fixture_id=$3)", body.review_id, body.attempt_id, body.fixture_id)
-            if not bound:
-                raise HTTPException(status_code=409, detail="fixture must be uniquely resolved first")
-            fixture = await conn.fetchrow("SELECT * FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
-            if not fixture:
-                raise HTTPException(status_code=409, detail="fixture is no longer active")
-            quotes = await conn.fetch("SELECT * FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY period,market_id,line,selection", body.fixture_id)
-            if quotes:
-                await conn.executemany(
-                    "INSERT INTO v2_review_market_reads(job_id,attempt_id,quote_id,source_updated_at,price,quote_context) VALUES($1,$2,$3,$4,$5,$6) "
-                    "ON CONFLICT(job_id,attempt_id,quote_id) DO UPDATE SET source_updated_at=EXCLUDED.source_updated_at,price=EXCLUDED.price,quote_context=EXCLUDED.quote_context,created_at=now()",
-                    [(body.review_id, body.attempt_id, q["id"], q["source_updated_at"], q["price"], quote_context(q, fixture)) for q in quotes],
-                )
-            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, request.app.state.settings.quote_max_age_seconds)} for q in quotes]}
-            await trace(conn, body.review_id, "mcp_list_match_markets", {"attempt_id": str(body.attempt_id), "fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes]})
-            return result
+            job = await active_tool_job(conn, body.review_id, body.attempt_id)
+            fixture, total_quotes, quotes, max_age = await _market_snapshot(conn, body, settings, filters)
+            age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
+            reason = None
+            if not getattr(settings, 'market_refresh_url', ''):
+                reason = 'refresh_unconfigured'
+            elif job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS:
+                reason = 'historical_review_not_current'
+            elif quotes and all(fresh_quote(quote, max_age) for quote in quotes):
+                reason = 'quotes_already_fresh'
+            elif (not quotes and total_quotes and any(value is not None for value in filters.values())
+                  and not (fixture['sport'] == 'football' and filters['market_kind'] == 'team_total')):
+                reason = 'no_quotes_for_filter'
+            if reason:
+                return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age,
+                                                 filters, {'attempted': False, 'reason': reason})
+            source_match_id = fixture['source_id']
+            known_snapshot = known_quote_snapshot(fixture, quotes)
+    # Nothing from the preflight transaction authorizes the post-I/O result.
+    # Release its connection and locks, then reread every eligibility witness.
+    refresh = await _request_market_refresh(body.fixture_id, source_match_id, request,
+                                            known_snapshot=known_snapshot)
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            await active_tool_job(conn, body.review_id, body.attempt_id)
+            fixture, total_quotes, quotes, max_age = await _market_snapshot(conn, body, settings, filters)
+            return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh)
+
+
+async def _record_current_signals(conn, body, request, observations):
+    """Caller owns the transaction; revalidate current state before writes."""
+    accepted, rejected = [], []
+    job = await active_tool_job(conn, body.review_id, body.attempt_id)
+    message_age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
+    current_message = 0 <= message_age <= REALTIME_WINDOW_SECONDS
+    if job['review_mode'] == 'historical_replay' or not current_message:
+        reason = ('message_timestamp_in_future' if message_age < 0
+                  else 'historical_review_not_current')
+        result = {"expert": job["display_nickname"], "accepted": [],
+                  "rejected": [{"index": index, "reason": reason}
+                               for index, _ in enumerate(body.signals)]}
+        return await tool_success(conn, body, result, {"review_mode": job['review_mode'], **result,
+            'message_age_seconds': round(message_age, 3)})
+    # Projection/result ingestion locks fixtures before updating quotes.
+    # Lock every selected bound fixture in that same global order before
+    # touching a quote; a joined q,f lock can acquire q first and deadlock.
+    # Read the current policy in this same statement, including an empty
+    # fixture selection. Never cache a preflight policy across external I/O.
+    fixtures_and_policy = await conn.fetch(
+        'WITH locked AS MATERIALIZED ('
+        'SELECT f.id FROM v2_fixtures f JOIN v2_review_fixture_bindings b ON b.fixture_id=f.id '
+        'WHERE b.job_id=$1 AND b.attempt_id=$2 AND f.id=ANY($3::text[]) '
+        'ORDER BY f.source_id FOR SHARE OF f), locked_bindings AS MATERIALIZED ('
+        'SELECT b.fixture_id AS id FROM v2_review_fixture_bindings b JOIN locked ON locked.id=b.fixture_id '
+        'WHERE b.job_id=$1 AND b.attempt_id=$2 ORDER BY b.fixture_id FOR UPDATE OF b) '
+        'SELECT locked_bindings.id,policy AS quote_age_policy FROM (VALUES(1)) anchor(value) '
+        'LEFT JOIN locked_bindings ON TRUE '
+        "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds'",
+        body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
+    )
+    policy = fixtures_and_policy[0]['quote_age_policy']
+    max_quote_age = quote_max_age_from_rows(request.app.state.settings, [] if policy is None else [policy])
+    # Read only requested (fixture, quote) pairs, once in stable order.
+    # Keep fixture-before-quote locking while avoiding N remote reads
+    # under the fixture locks. Each intent is still validated below.
+    quotes = await conn.fetch(
+            "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,"
+            "f.sport AS fixture_sport,f.match_state AS fixture_match_state,f.clock_minute AS fixture_clock_minute,"
+            "f.received_at AS fixture_received_at,c.candidate_data AS intent_candidate,"
+            "b.evidence->'source_market_intent' AS source_market_intent,"
+            "(SELECT COALESCE(jsonb_agg(prior.evidence->'source_period_denials'),'[]'::jsonb) "
+            "FROM v2_review_fixture_bindings prior WHERE prior.job_id=b.job_id "
+            "AND prior.fixture_id=b.fixture_id AND prior.evidence ? 'source_period_denials') AS prior_source_period_denials,"
+            "r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
+            "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
+            "LEFT JOIN v2_match_searches search ON search.job_id=b.job_id AND search.search_key=b.search_key AND search.attempt_id=$2 AND search.complete "
+            "LEFT JOIN v2_match_search_candidates c ON c.job_id=search.job_id AND c.search_key=search.search_key AND c.fixture_id=q.fixture_id "
+            "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
+            "JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted "
+            "ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id "
+            "ORDER BY q.fixture_id,q.id FOR SHARE OF q",
+            body.review_id, body.attempt_id,
+            [pick.fixture_id for pick in body.signals], [pick.quote_id for pick in body.signals],
+    )
+    by_quote = {(quote['fixture_id'], quote['id']): quote for quote in quotes}
+    batch_period_denials = {}
+    for pick in body.signals:
+        quote = by_quote.get((pick.fixture_id,pick.quote_id))
+        if quote and evidence_period_rejection(pick.evidence_text,quote):
+            batch_period_denials.setdefault(pick.fixture_id,{})[period_intent_key(quote)] = 'source_period_intent_ambiguous'
+    stored_period_denials = set()
+    valid = []
+    for index, pick in enumerate(body.signals):
+        # Bind intent and score context, then snapshot current price.
+        quote = by_quote.get((pick.fixture_id, pick.quote_id))
+        reason = None
+        confirmation = None
+        period_rejection = None
+        line_rejection = None
+        evidence_period_reason = None
+        if quote:
+            quote = dict(quote)
+            quote['prior_source_period_denials'] = [*(quote.get('prior_source_period_denials') or []),
+                                                    batch_period_denials.get(pick.fixture_id,{})]
+            fixture = dict(quote) | {'id': quote['fixture_id']}
+            confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
+            confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
+            period_rejection = period_intent_rejection(job['raw_text'], quote, posted_at=job['posted_at'])
+            period_rejection = period_rejection or premarket_period_rejection(
+                job['raw_text'],quote,quote['source_market_intent'],has_visual_source=bool(job['media_objects']),
+                posted_at=job['posted_at'])
+            evidence_period_reason = evidence_period_rejection(pick.evidence_text,quote)
+            period_rejection = period_rejection or evidence_period_reason
+            line_rejection = line_intent_rejection(pick.evidence_text, quote)
+        if not quote:
+            reason = "quote_not_read_or_changed"
+        elif {k: v for k, v in quote['read_context'].items() if k != 'current_confirmation'} != quote_context(quote, quote):
+            reason = 'quote_or_score_context_changed'
+        elif quote["phase"] not in {"scheduled", "live"}:
+            reason = "fixture_not_active"
+        elif quote['market_kind'] == 'team_total' and not team_total_terms(quote, quote['fixture_id']):
+            reason = 'team_total_native_identity_unknown'
+        elif period_rejection:
+            reason = period_rejection
+        elif line_rejection:
+            reason = line_rejection
+        elif not fresh_quote(quote, max_quote_age) and not confirmation:
+            reason = "quote_inactive_unknown_or_stale"
+        if reason:
+            if (evidence_period_reason or period_rejection=='source_period_unverified_before_market_read') and reason in {
+                    'source_period_intent_ambiguous','source_period_unverified_before_market_read'}:
+                # Keep the first read declaration intact. This separate denial
+                # survives rewording and retries of this exact source job/pick.
+                denial_key = period_intent_key(quote)
+                if (pick.fixture_id,denial_key) not in stored_period_denials:
+                    await conn.execute(
+                        "UPDATE v2_review_fixture_bindings SET evidence=jsonb_set(evidence,'{source_period_denials}',"
+                        "COALESCE(evidence->'source_period_denials','{}'::jsonb)||$4::jsonb,true) "
+                        "WHERE job_id=$1 AND attempt_id=$2 AND fixture_id=$3",
+                        body.review_id,body.attempt_id,pick.fixture_id,
+                        {denial_key:'source_period_intent_ambiguous'})
+                    stored_period_denials.add((pick.fixture_id,denial_key))
+            rejection = {"index": index, "reason": reason}
+            if reason in {'source_line_intent_conflict', 'source_selection_intent_conflict'}:
+                diagnostic = line_intent_context(pick.evidence_text, quote)
+                if diagnostic:
+                    rejection['intent_context'] = diagnostic
+            if reason == 'quote_or_score_context_changed':
+                rejection['context_changed_fields'] = quote_context_changed_fields(
+                    quote['read_context'], quote_context(quote, quote))
+            rejected.append(rejection)
+            continue
+        quote['source_period_context'] = verified_early_first_half_context(
+            job['raw_text'], quote, posted_at=job['posted_at'])
+        valid.append((index, quote, pick, confirmation))
+    saved = await persist_signals(conn, job=job, attempt_id=body.attempt_id,
+                                 entries=[(quote, pick, confirmation) for _, quote, pick, confirmation in valid])
+    for (index, quote, _, _), result in zip(valid, saved):
+        accepted.append({"index": index, "signal_id": str(result['id']), "duplicate": result['duplicate'], "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(result['price']), **line_terms(quote), **team_total_terms(quote, quote['fixture_id'])})
+    result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
+    return await tool_success(conn, body, result, result)
 
 
 @router.post("/record_expert_signals")
+@tool_evidence('mcp_record_expert_signals')
 async def record_expert_signals(body: RecordInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
-    accepted, rejected = [], []
+    observations = {}
+    # A long model turn must not turn a previously valid read into a permanent
+    # rejection. Recheck only the selected, already-read and bound fixtures.
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            job = await active_job(conn, body.review_id, body.attempt_id)
-            for index, pick in enumerate(body.signals):
-                quote = await conn.fetchrow(
-                    "SELECT q.*,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context FROM v2_current_quotes q "
-                    "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
-                    "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
-                    "WHERE q.id=$3 AND q.fixture_id=$4 AND q.price IS NOT DISTINCT FROM r.price AND q.source_updated_at IS NOT DISTINCT FROM r.source_updated_at FOR SHARE OF q,f",
-                    body.review_id, body.attempt_id, pick.quote_id, pick.fixture_id,
-                )
-                reason = None
-                if not quote:
-                    reason = "quote_not_read_or_changed"
-                elif quote['read_context'] != quote_context(quote, quote):
-                    reason = 'quote_or_score_context_changed'
-                elif quote["phase"] not in {"scheduled", "live"}:
-                    reason = "fixture_not_active"
-                elif not fresh_quote(quote, request.app.state.settings.quote_max_age_seconds):
-                    reason = "quote_inactive_unknown_or_stale"
-                if reason:
-                    rejected.append({"index": index, "reason": reason})
-                    continue
-                baseline = {"home": quote["home_score"], "away": quote["away_score"], "half_home": quote["half_home_score"], "half_away": quote["half_away_score"]}
-                new_id = uuid.uuid4()
-                result = await conn.fetchrow(
-                    "INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,evidence_text,score_baseline,score_basis) "
-                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(message_id,fixture_id,market_id,period,line,selection) DO NOTHING RETURNING id",
-                    new_id, job["message_id"], job["expert_id"], quote["fixture_id"], quote["phase"], quote["market_id"], quote["market_name"], quote["period"], quote["market_kind"], quote["line"], quote["selection"], quote["price"], quote["source_updated_at"], pick.confidence, pick.evidence_text, baseline, quote["score_basis"],
-                )
-                if result:
-                    await conn.execute(
-                        "INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'expert_signal',$9,$10,$11,$12)",
-                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"]}, baseline,
-                    )
-                else:
-                    new_id = await conn.fetchval("SELECT id FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND line=$5 AND selection=$6", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"])
-                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]), "selection": quote["selection"], "price": str(quote["price"])})
-            result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
-            await trace(conn, body.review_id, "mcp_record_expert_signals", {"attempt_id": str(body.attempt_id), **result})
-            return result
+            job = await active_tool_job(conn, body.review_id, body.attempt_id)
+            if job['review_mode'] == 'real_time' and 0 <= (datetime.now(timezone.utc)-job['posted_at']).total_seconds() <= REALTIME_WINDOW_SECONDS:
+                snapshot = await conn.fetch(
+                    'SELECT policy AS quote_age_policy,selected.* FROM (VALUES(1)) anchor(value) '
+                    "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds' "
+                    'LEFT JOIN LATERAL ('
+                    'SELECT q.*,f.id AS fixture_identity,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context '
+                    'FROM v2_current_quotes q JOIN v2_fixtures f ON f.id=q.fixture_id '
+                    'JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 '
+                    'JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 '
+                    'JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted '
+                    'ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id) selected ON TRUE',
+                    body.review_id, body.attempt_id,
+                    [p.fixture_id for p in body.signals], [p.quote_id for p in body.signals])
+                # Include the current policy even when no requested pair is
+                # readable. Keep its encrypted row out of refresh witnesses.
+                policy = snapshot[0]['quote_age_policy']
+                max_age = quote_max_age_from_rows(request.app.state.settings, [] if policy is None else [policy])
+                rows = [{key: value for key, value in row.items() if key != 'quote_age_policy'}
+                        for row in snapshot if row['id'] is not None]
+                reusable_age = max(0, max_age-QUOTE_CONFIRMATION_WRITE_HEADROOM_SECONDS)
+                stale_fixtures = {q['fixture_id']: q['source_id'] for q in rows if q['phase'] in {'scheduled', 'live'} and q['status'] == 'active' and not fresh_quote(q, reusable_age) and not confirmation_for(
+                    q['read_context'].get('current_confirmation'), q, dict(q) | {'id': q['fixture_identity']}, reusable_age)}
+            else:
+                stale_fixtures = {}
+            if not stale_fixtures:
+                # No external I/O separates validation from writing. Keep the
+                # current transaction, and let the shared finalizer reread all
+                # eligibility and quote witnesses before acquiring write locks.
+                return await _record_current_signals(conn, body, request, observations)
+            known_snapshots = {}
+            for fixture_id in stale_fixtures:
+                selected = [quote for quote in rows if quote['fixture_id'] == fixture_id]
+                known_snapshots[fixture_id] = known_quote_snapshot(selected[0], selected)
+    # Shared collector budget still coalesces and limits provider calls. Do not
+    # hold the database transaction during I/O or extend a terminated lease.
+    for fixture_id in sorted(stale_fixtures):
+        if len(observations) >= 4:
+            break
+        # The preceding transaction already checked this exact requested pair,
+        # its read receipt, current binding and active phase. Repeating that
+        # transaction before the same I/O adds WAN round trips without making
+        # the final post-I/O validation any stronger.
+        refreshed = await _request_market_refresh(fixture_id, stale_fixtures[fixture_id], request,
+                                                   known_snapshot=known_snapshots[fixture_id])
+        observations[fixture_id] = refreshed.get('_observation')
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            return await _record_current_signals(conn, body, request, observations)

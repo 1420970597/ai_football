@@ -1,0 +1,561 @@
+{
+  "observed_at": "2026-11-09T00:28:54.888971+00:00",
+  "production_writes_by_audits": 0,
+  "mcp_source_commit": "238b1d04829cf37cf3ccaa1ef21badc8a17d6c2c",
+  "windows": [
+    {
+      "id": "E1840",
+      "window_start": "2026-11-08T23:36:29.267710+00:00",
+      "window_end": "2026-11-09T00:06:30.356085+00:00",
+      "elapsed_seconds": 1801.088375,
+      "native_exits": {
+        "e1840-independent-native": 0,
+        "e1840-market-native": 0,
+        "e1840-official-scan": 0,
+        "e1840-official-reconcile": 0,
+        "e1840-natural-audit": 0,
+        "e1840-completion-audit": 0,
+        "e1841-observer-native": 0,
+        "e1841-observer-controller": 0
+      },
+      "official_source_count": 6,
+      "all_official_source_scans_complete": true,
+      "official_raw_posts": 23,
+      "normalized_posts": 20,
+      "matched_posts": 20,
+      "missing_posts": 0,
+      "message_states": {
+        "created_versions": 196,
+        "published_posts": 20,
+        "older_posts_revised": 176,
+        "published_ready": 15,
+        "published_pending": 0,
+        "published_unsupported": 5
+      },
+      "reviews": {
+        "eligible": 15,
+        "missing_jobs": 0,
+        "archived_with_suppression_receipt": 0,
+        "in_progress": 0,
+        "with_receipt": 15,
+        "missing_receipt": 0
+      },
+      "manual_complete_text_review_count": 15,
+      "complete_text_revision_media_identity_equal_to_manual_review": true,
+      "manually_viewed_unique_authorized_images": 12,
+      "accepted_signals": 2,
+      "reply_context_absent_verified": true,
+      "ingestion_latency": {
+        "event_versions": 20,
+        "avg_ms": "3325.6",
+        "p95_ms": "5586.9",
+        "within_3s": 10,
+        "older_backlog_versions_received": 178
+      },
+      "event_to_conclusion_ms": [
+        54010.183,
+        63992.179,
+        9058.554,
+        22862.671,
+        11918.805,
+        18375.17,
+        10561.72,
+        19044.682,
+        12864.559,
+        26073.722,
+        18643.386,
+        17917.997,
+        50984.208,
+        37086.55,
+        10233.355
+      ],
+      "conclusion_latency_is_not_ingestion_latency": true,
+      "all_quotes_fresh": false,
+      "last_fresh_quote_count": 0,
+      "last_quote_freshness": "stale"
+    },
+    {
+      "id": "E1910",
+      "window_start": "2026-11-08T23:55:16.255162+00:00",
+      "window_end": "2026-11-09T00:25:17.594044+00:00",
+      "elapsed_seconds": 1801.338882,
+      "native_exits": {
+        "e1910-independent-native": 0,
+        "e1910-market-native": 0,
+        "e1910-official-scan": 0,
+        "e1910-official-reconcile": 0,
+        "e1910-natural-audit": 0,
+        "e1910-completion-audit": 0,
+        "e1911-observer-native": 0,
+        "e1911-observer-controller": 0
+      },
+      "official_source_count": 6,
+      "all_official_source_scans_complete": true,
+      "official_raw_posts": 21,
+      "normalized_posts": 18,
+      "matched_posts": 18,
+      "missing_posts": 0,
+      "message_states": {
+        "created_versions": 188,
+        "published_posts": 18,
+        "older_posts_revised": 170,
+        "published_ready": 13,
+        "published_pending": 0,
+        "published_unsupported": 5
+      },
+      "reviews": {
+        "eligible": 13,
+        "missing_jobs": 0,
+        "archived_with_suppression_receipt": 0,
+        "in_progress": 0,
+        "with_receipt": 13,
+        "missing_receipt": 0
+      },
+      "manual_complete_text_review_count": 13,
+      "complete_text_revision_media_identity_equal_to_manual_review": true,
+      "manually_viewed_unique_authorized_images": 10,
+      "accepted_signals": 1,
+      "reply_context_absent_verified": true,
+      "ingestion_latency": {
+        "event_versions": 18,
+        "avg_ms": "3118.8",
+        "p95_ms": "5686.9",
+        "within_3s": 10,
+        "older_backlog_versions_received": 170
+      },
+      "event_to_conclusion_ms": [
+        9058.554,
+        22862.671,
+        11918.805,
+        18375.17,
+        10561.72,
+        19044.682,
+        12864.559,
+        26073.722,
+        18643.386,
+        17917.997,
+        50984.208,
+        37086.55,
+        10233.355
+      ],
+      "conclusion_latency_is_not_ingestion_latency": true,
+      "all_quotes_fresh": false,
+      "last_fresh_quote_count": 38,
+      "last_quote_freshness": "partial"
+    }
+  ],
+  "windows_overlap_not_independent_samples": true,
+  "e1840_straddles_mcp_release": true,
+  "e1910_is_complete_post_mcp_release_window": true,
+  "post_release_positive": {
+    "fixture_id": "leyu:5786036",
+    "period": "first_half",
+    "line": "0.5",
+    "selection": "over",
+    "original_price": "2.08",
+    "system_accepted_price": "2.14",
+    "original_price_not_a_matching_gate": true,
+    "original_and_attempt_quote_and_current_receipt_verified": true,
+    "real_browser": {
+      "results": [
+        {
+          "width": 1440,
+          "alias": 11,
+          "status": "passed",
+          "signal_count": 1,
+          "period": "first_half",
+          "line": "0.500",
+          "selection": "over",
+          "original_sha256": "fcabd77d737c76b323ac745907cacc17b9ebc3a656655f2d8951edf0aee2b3cb",
+          "actual_get_hash_verified": true,
+          "mouse_and_keyboard": true,
+          "native_image_pan": true,
+          "original_and_system_binding_visible": true,
+          "production_writes": 0
+        },
+        {
+          "width": 390,
+          "alias": 11,
+          "status": "passed",
+          "signal_count": 1,
+          "period": "first_half",
+          "line": "0.500",
+          "selection": "over",
+          "original_sha256": "fcabd77d737c76b323ac745907cacc17b9ebc3a656655f2d8951edf0aee2b3cb",
+          "actual_get_hash_verified": true,
+          "mouse_and_keyboard": true,
+          "native_image_pan": true,
+          "original_and_system_binding_visible": true,
+          "production_writes": 0
+        }
+      ],
+      "response_injection": false,
+      "production_writes": 0
+    },
+    "manually_viewed_screenshots_sha256": {
+      "original-11-1440.png": "f7265a3665c16f0998f2dc0e744852756da816367d8c465de02fec060f3f7814",
+      "original-11-390.png": "3379696c103ab36cb9e17f3f7a9f3c47f6c3ea184b473b7689a3a7330e16d49d",
+      "original-odds-11-1440.png": "bd510b505d9e7d4c01d19931d7d11caf80567b4b3b3d86a44fa5bf421ed66808",
+      "original-odds-11-390.png": "4845393cd968b0c68e3fc29a5eb21bebee8900fc429974335824277da384d8af"
+    }
+  },
+  "not_recorded_real_recommendations": {
+    "read_only": true,
+    "production_writes": 0,
+    "messages": [
+      {
+        "alias_in_e1840": 1,
+        "state": "succeeded",
+        "signals": 1,
+        "actual_read_response_snapshots": [
+          {
+            "filter": {
+              "line": "223.5",
+              "market_kind": "total",
+              "period": "full_time",
+              "selection": "over"
+            },
+            "coverage": {
+              "complete_for_filter": true,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "total_quotes": 102
+            },
+            "refresh": {
+              "accepted": true,
+              "attempted": true,
+              "reason": "written"
+            },
+            "markets": [
+              {
+                "market_kind": "total",
+                "period": "full_time",
+                "line": "223.500",
+                "selection": "over",
+                "status": "active",
+                "fresh": false,
+                "confirmed_current": true,
+                "can_record": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "alias_in_e1840": 2,
+        "state": "unresolved",
+        "signals": 0,
+        "actual_read_response_snapshots": [
+          {
+            "filter": {
+              "line": "4.75",
+              "market_kind": "total",
+              "period": "full_time",
+              "selection": "over"
+            },
+            "coverage": {
+              "complete_for_filter": true,
+              "matched_quotes": 0,
+              "returned_quotes": 0,
+              "total_quotes": 22
+            },
+            "refresh": {
+              "attempted": false,
+              "reason": "no_quotes_for_filter"
+            },
+            "markets": []
+          },
+          {
+            "filter": {
+              "market_kind": "total",
+              "period": "full_time"
+            },
+            "coverage": {
+              "complete_for_filter": true,
+              "matched_quotes": 4,
+              "returned_quotes": 4,
+              "total_quotes": 22
+            },
+            "refresh": {
+              "accepted": true,
+              "attempted": true,
+              "reason": "written"
+            },
+            "markets": [
+              {
+                "market_kind": "total",
+                "period": "full_time",
+                "line": "3.750",
+                "selection": "over",
+                "status": "active",
+                "fresh": false,
+                "confirmed_current": true,
+                "can_record": true
+              },
+              {
+                "market_kind": "total",
+                "period": "full_time",
+                "line": "3.750",
+                "selection": "under",
+                "status": "active",
+                "fresh": false,
+                "confirmed_current": true,
+                "can_record": true
+              },
+              {
+                "market_kind": "total",
+                "period": "full_time",
+                "line": "4.000",
+                "selection": "over",
+                "status": "active",
+                "fresh": false,
+                "confirmed_current": true,
+                "can_record": true
+              },
+              {
+                "market_kind": "total",
+                "period": "full_time",
+                "line": "4.000",
+                "selection": "under",
+                "status": "active",
+                "fresh": false,
+                "confirmed_current": true,
+                "can_record": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "alias_in_e1840": 14,
+        "state": "unresolved",
+        "signals": 0,
+        "actual_read_response_snapshots": [
+          {
+            "filter": {
+              "line": "2.75",
+              "market_kind": "total",
+              "period": "full_time",
+              "selection": "under"
+            },
+            "coverage": {
+              "complete_for_filter": true,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "total_quotes": 344
+            },
+            "refresh": {
+              "accepted": true,
+              "attempted": true,
+              "reason": "written"
+            },
+            "markets": [
+              {
+                "market_kind": "total",
+                "period": "full_time",
+                "line": "2.750",
+                "selection": "under",
+                "status": "closed",
+                "fresh": false,
+                "confirmed_current": false,
+                "can_record": false
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "current_upstream_state_not_reconstructed_from_old_screenshot": true
+  },
+  "not_recorded_reasons": [
+    {
+      "window": "E1840",
+      "period": "full_time",
+      "wanted_line": "4.75",
+      "selection": "over",
+      "actual_read_lines": [
+        "3.75",
+        "4.0"
+      ],
+      "exact_line_missing": true,
+      "different_line_substitution": false
+    },
+    {
+      "window": "E1910",
+      "period": "full_time",
+      "wanted_line": "2.75",
+      "selection": "under",
+      "actual_tool_quote_status": "closed",
+      "can_record": false,
+      "upstream_historical_state_independently_reconstructed": false
+    }
+  ],
+  "unsupported_media_metadata": {
+    "read_only": true,
+    "production_writes": 0,
+    "messages": [
+      {
+        "alias": 1,
+        "state": "unsupported",
+        "allow_media": true,
+        "text_present": false,
+        "text_length": 0,
+        "media_count": 1,
+        "media": [
+          {
+            "mime_type": "video/mp4",
+            "width": 222,
+            "height": 228
+          }
+        ],
+        "last_error_category": null
+      },
+      {
+        "alias": 2,
+        "state": "unsupported",
+        "allow_media": true,
+        "text_present": false,
+        "text_length": 0,
+        "media_count": 1,
+        "media": [
+          {
+            "mime_type": "video/webm",
+            "width": 512,
+            "height": 453
+          }
+        ],
+        "last_error_category": null
+      },
+      {
+        "alias": 3,
+        "state": "unsupported",
+        "allow_media": true,
+        "text_present": false,
+        "text_length": 0,
+        "media_count": 1,
+        "media": [
+          {
+            "mime_type": "video/webm",
+            "width": 512,
+            "height": 453
+          }
+        ],
+        "last_error_category": null
+      },
+      {
+        "alias": 4,
+        "state": "unsupported",
+        "allow_media": true,
+        "text_present": false,
+        "text_length": 0,
+        "media_count": 1,
+        "media": [
+          {
+            "mime_type": "video/webm",
+            "width": 512,
+            "height": 453
+          }
+        ],
+        "last_error_category": null
+      },
+      {
+        "alias": 5,
+        "state": "unsupported",
+        "allow_media": true,
+        "text_present": false,
+        "text_length": 0,
+        "media_count": 1,
+        "media": [
+          {
+            "mime_type": "video/mp4",
+            "width": 222,
+            "height": 228
+          }
+        ],
+        "last_error_category": null
+      }
+    ]
+  },
+  "unsupported_video_semantic_review_performed": false,
+  "unsupported_video_not_counted_as_successful_model_review": true,
+  "observed_upload_stage_latency": {
+    "read_only": true,
+    "production_writes": 0,
+    "since": "2026-11-08T23:55:10Z",
+    "matching_lines": 410,
+    "retained_recent_sample_limit": 2048,
+    "outcomes": {
+      "response": 410
+    },
+    "response_statuses": {
+      "200": 410
+    },
+    "all_uploads": {
+      "lock": {
+        "samples": 410,
+        "p50_ms": 0.0,
+        "p95_ms": 2756.5,
+        "max_ms": 5547.5
+      },
+      "http": {
+        "samples": 410,
+        "p50_ms": 2070.9,
+        "p95_ms": 2997.0,
+        "max_ms": 4503.0
+      },
+      "total": {
+        "samples": 410,
+        "p50_ms": 2713.7,
+        "p95_ms": 4884.3,
+        "max_ms": 7845.0
+      }
+    },
+    "single_fixture_uploads": {
+      "lock": {
+        "samples": 127,
+        "p50_ms": 0.0,
+        "p95_ms": 2756.5,
+        "max_ms": 3601.5
+      },
+      "http": {
+        "samples": 127,
+        "p50_ms": 1849.4,
+        "p95_ms": 2761.7,
+        "max_ms": 3361.2
+      },
+      "total": {
+        "samples": 127,
+        "p50_ms": 2353.6,
+        "p95_ms": 4623.5,
+        "max_ms": 5720.9
+      }
+    },
+    "multi_fixture_uploads": {
+      "lock": {
+        "samples": 283,
+        "p50_ms": 0.1,
+        "p95_ms": 2717.0,
+        "max_ms": 5547.5
+      },
+      "http": {
+        "samples": 283,
+        "p50_ms": 2167.1,
+        "p95_ms": 3082.4,
+        "max_ms": 4503.0
+      },
+      "total": {
+        "samples": 283,
+        "p50_ms": 2916.1,
+        "p95_ms": 4953.0,
+        "max_ms": 7845.0
+      }
+    },
+    "groups_do_not_identify_poll_versus_ws": true
+  },
+  "runtime_live_order_opt_in_verified_true": true,
+  "live_order_switch_changed": false,
+  "new_api_candidate_not_deployed_by_this_evidence": true,
+  "all_expert_features_completely_normal_claim": false,
+  "three_second_end_to_end_acceptance": false,
+  "stable_production_latency_improvement_proven": false
+}

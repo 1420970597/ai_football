@@ -1,0 +1,379 @@
+{
+  "observed_at_utc": "2026-10-27T17:42:20.890496+00:00",
+  "read_only": true,
+  "quote_max_age_seconds": 15,
+  "posted_year_state": [
+    {
+      "posted_year": 2021,
+      "state": "unresolved",
+      "count": 66
+    },
+    {
+      "posted_year": 2023,
+      "state": "failed",
+      "count": 9
+    },
+    {
+      "posted_year": 2023,
+      "state": "queued",
+      "count": 245
+    },
+    {
+      "posted_year": 2023,
+      "state": "retry",
+      "count": 1
+    },
+    {
+      "posted_year": 2023,
+      "state": "unresolved",
+      "count": 68
+    },
+    {
+      "posted_year": 2025,
+      "state": "failed",
+      "count": 4
+    },
+    {
+      "posted_year": 2025,
+      "state": "queued",
+      "count": 129
+    },
+    {
+      "posted_year": 2025,
+      "state": "retry",
+      "count": 1
+    },
+    {
+      "posted_year": 2025,
+      "state": "running",
+      "count": 1
+    },
+    {
+      "posted_year": 2025,
+      "state": "unresolved",
+      "count": 84
+    },
+    {
+      "posted_year": 2026,
+      "state": "failed",
+      "count": 8
+    },
+    {
+      "posted_year": 2026,
+      "state": "queued",
+      "count": 1
+    },
+    {
+      "posted_year": 2026,
+      "state": "unresolved",
+      "count": 28
+    }
+  ],
+  "queue_pairs": [
+    {
+      "source_hash": "78b3c1241281",
+      "expert_hash": "ce03a20feb9e",
+      "count": 247,
+      "recent_messages": 1,
+      "oldest_message": "2023-01-16 18:16:51+00:00",
+      "newest_message": "2026-10-27 15:58:44+00:00"
+    },
+    {
+      "source_hash": "a204f25ed934",
+      "expert_hash": "6948e572bded",
+      "count": 131,
+      "recent_messages": 0,
+      "oldest_message": "2025-09-27 00:11:32+00:00",
+      "newest_message": "2025-09-28 03:29:53+00:00"
+    }
+  ],
+  "quote_population": [
+    {
+      "phase": "cancelled",
+      "status": "closed",
+      "source_time_quality": "known",
+      "count": 600,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 1229.96,
+      "max_source_age_s": 36329.93
+    },
+    {
+      "phase": "finished",
+      "status": "closed",
+      "source_time_quality": "known",
+      "count": 58427,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 217.59,
+      "max_source_age_s": 31384.81
+    },
+    {
+      "phase": "live",
+      "status": "active",
+      "source_time_quality": "known",
+      "count": 2081,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 18.06,
+      "max_source_age_s": 18400.01
+    },
+    {
+      "phase": "live",
+      "status": "closed",
+      "source_time_quality": "known",
+      "count": 33210,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 108.25,
+      "max_source_age_s": 80861.44
+    },
+    {
+      "phase": "live",
+      "status": "suspended",
+      "source_time_quality": "known",
+      "count": 2216,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 18.27,
+      "max_source_age_s": 18210.88
+    },
+    {
+      "phase": "scheduled",
+      "status": "active",
+      "source_time_quality": "known",
+      "count": 44829,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 83.93,
+      "max_source_age_s": 178770.86
+    },
+    {
+      "phase": "scheduled",
+      "status": "closed",
+      "source_time_quality": "known",
+      "count": 8890,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 461.06,
+      "max_source_age_s": 91569.85
+    },
+    {
+      "phase": "scheduled",
+      "status": "suspended",
+      "source_time_quality": "known",
+      "count": 5660,
+      "unknown_time": 0,
+      "source_within_max_age": 0,
+      "min_source_age_s": 17.3,
+      "max_source_age_s": 274440.68
+    }
+  ],
+  "market_read_snapshot": [
+    {
+      "state": "unresolved",
+      "quotes_read": 700,
+      "unknown_source_time": 0,
+      "already_stale_at_read": 700,
+      "future_source_time": 0,
+      "min_source_age_at_read_s": 165.2,
+      "max_source_age_at_read_s": 62841.58
+    },
+    {
+      "state": "retry",
+      "quotes_read": 238,
+      "unknown_source_time": 0,
+      "already_stale_at_read": 238,
+      "future_source_time": 0,
+      "min_source_age_at_read_s": 2184.05,
+      "max_source_age_at_read_s": 22759.13
+    }
+  ],
+  "record_attempts": [
+    {
+      "job_hash": "73ea17ebaebe",
+      "recorded_at": "2026-10-27 15:52:53.462760+00:00",
+      "posted_at": "2023-01-16 14:31:54+00:00",
+      "accepted": 0,
+      "rejected": [
+        "quote_inactive_unknown_or_stale"
+      ],
+      "read_quote_count": 38,
+      "source_unknown_at_read": 0,
+      "source_already_stale_at_read": 38,
+      "read_to_record_min_s": 254.168448,
+      "read_to_record_max_s": 254.168448,
+      "current_status_counts": {
+        "active": 38
+      }
+    },
+    {
+      "job_hash": "922c295ba42f",
+      "recorded_at": "2026-10-27 16:22:30.083661+00:00",
+      "posted_at": "2026-10-27 16:13:17+00:00",
+      "accepted": 0,
+      "rejected": [
+        "quote_inactive_unknown_or_stale"
+      ],
+      "read_quote_count": 40,
+      "source_unknown_at_read": 0,
+      "source_already_stale_at_read": 40,
+      "read_to_record_min_s": -5.52182,
+      "read_to_record_max_s": -5.52182,
+      "current_status_counts": {
+        "active": 14,
+        "closed": 26
+      }
+    },
+    {
+      "job_hash": "6d791e32396e",
+      "recorded_at": "2026-10-27 16:24:28.286905+00:00",
+      "posted_at": "2026-10-27 16:13:28+00:00",
+      "accepted": 0,
+      "rejected": [
+        "quote_not_read_or_changed"
+      ],
+      "read_quote_count": 40,
+      "source_unknown_at_read": 0,
+      "source_already_stale_at_read": 40,
+      "read_to_record_min_s": -4.843936,
+      "read_to_record_max_s": -4.843936,
+      "current_status_counts": {
+        "active": 14,
+        "closed": 26
+      }
+    },
+    {
+      "job_hash": "6d791e32396e",
+      "recorded_at": "2026-10-27 16:24:39.928753+00:00",
+      "posted_at": "2026-10-27 16:13:28+00:00",
+      "accepted": 0,
+      "rejected": [
+        "quote_inactive_unknown_or_stale"
+      ],
+      "read_quote_count": 40,
+      "source_unknown_at_read": 0,
+      "source_already_stale_at_read": 40,
+      "read_to_record_min_s": 6.797912,
+      "read_to_record_max_s": 6.797912,
+      "current_status_counts": {
+        "active": 14,
+        "closed": 26
+      }
+    },
+    {
+      "job_hash": "3bc50502b4bf",
+      "recorded_at": "2026-10-27 17:14:52.633914+00:00",
+      "posted_at": "2026-10-27 15:53:25+00:00",
+      "accepted": 0,
+      "rejected": [
+        "quote_inactive_unknown_or_stale"
+      ],
+      "read_quote_count": 44,
+      "source_unknown_at_read": 0,
+      "source_already_stale_at_read": 44,
+      "read_to_record_min_s": -10.397876,
+      "read_to_record_max_s": -10.397876,
+      "current_status_counts": {
+        "active": 38,
+        "closed": 6
+      }
+    }
+  ],
+  "model_summary_keyword_counts": {
+    "heuristic_only_not_authoritative": true,
+    "counts": {
+      "historical_or_outdated": 63,
+      "no_fixture": 246,
+      "not_unique": 40,
+      "quote_or_market": 17,
+      "not_recommendation": 32
+    }
+  },
+  "completion_groups": {
+    "older_than_24h": {
+      "count": 218,
+      "with_images": 60,
+      "explicit_live_keyword": 0,
+      "explicit_prematch_keyword": 0,
+      "elapsed_ms_sum": 7404333.29
+    },
+    "within_24h": {
+      "count": 28,
+      "with_images": 5,
+      "explicit_live_keyword": 0,
+      "explicit_prematch_keyword": 0,
+      "elapsed_ms_sum": 525557.523
+    }
+  },
+  "sample_intent_keywords": [
+    {
+      "job_hash": "5bc7c8119e18",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "f7442e2ff4d6",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "30643b0a60c4",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "e46e5924c555",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "528eec95d44b",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "8ce5999c3cce",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "0da482255a3e",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "aa8ba28a2daa",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "972de71b6c01",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    },
+    {
+      "job_hash": "e8c1ecc55978",
+      "live_keyword": false,
+      "prematch_keyword": false,
+      "phase_conclusion": "unknown_without_unique_system_fixture"
+    }
+  ],
+  "pagination_incomplete_jobs": [
+    {
+      "state": "unresolved",
+      "searches": 4,
+      "max_candidates": 55,
+      "max_pages": 1
+    }
+  ]
+}

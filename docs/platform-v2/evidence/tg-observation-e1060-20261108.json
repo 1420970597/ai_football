@@ -1,0 +1,78 @@
+{
+  "schema": "safe-continuous-observation-v1",
+  "recorded_at_utc": "2026-11-08T14:54:00Z",
+  "read_only": true,
+  "window_start": "2026-11-08T14:20:44.915574+00:00",
+  "window_end": "2026-11-08T14:50:46.725270+00:00",
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 164,
+    "published_posts": 7,
+    "older_posts_revised": 154,
+    "published_ready": 7,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 7,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 7,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 10,
+    "avg_ms": "7514.5",
+    "p95_ms": "25559.2",
+    "within_3s": 4,
+    "older_backlog_versions_received": 154
+  },
+  "market_samples": 61,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T14:50:00.151971+00:00",
+    "last_poll_elapsed_ms": 22117.4,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 29067,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 16.4,
+    "oldest_quote_age_seconds": 329233.2,
+    "failed_batches": 0
+  },
+  "official_reconciliation": {
+    "official_posts": 7,
+    "normalized_posts": 7,
+    "matched": 7,
+    "missing": []
+  },
+  "manual_semantics": {
+    "manual_messages": 7,
+    "own_images_sha_verified_and_viewed": 5,
+    "no_new_pick": 5,
+    "real_pick_unresolved_period_context": 1,
+    "real_pick_dismissed_as_old_ticket": 1
+  },
+  "window_end_counts_preserved": true,
+  "receipt_is_not_semantic_success": true,
+  "three_second_target_passed": false,
+  "natural_positive_semantic_acceptance_passed": false,
+  "production_writes": 0,
+  "funded_tests": 0
+}

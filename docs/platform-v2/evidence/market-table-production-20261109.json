@@ -1,0 +1,145 @@
+{
+  "updated_at_utc": "2026-11-09T11:54:00Z",
+  "status": "development_candidate_deployed; natural latency acceptance pending",
+  "source_commit": "c96e276feb3e1d2962345d9277a021d331705ada",
+  "deployed_at_utc": "2026-11-09T11:52:17Z",
+  "mcp_image_id": "sha256:bdcc031819f66b4e2f26b5a0df84f0b4eaf714515792864b4abed625a969d5ff",
+  "image_source_verification": {
+    "source_commit": "c96e276feb3e1d2962345d9277a021d331705ada",
+    "server_sha256": "fe61b81f029272405defbdff5f2cfa65803ef14e32c7f645ec9b920f25ba5406",
+    "requirements_exact": true,
+    "uid": 10002,
+    "native_lossless_table_loaded": true,
+    "provider_calls": 0
+  },
+  "local_full_regression": {
+    "source_parent_commit": "c96e276feb3e1d2962345d9277a021d331705ada",
+    "committed_source_verified": true,
+    "tests": 2009,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1378.124
+  },
+  "remote_ci": {
+    "commit": "c96e276feb3e1d2962345d9277a021d331705ada",
+    "all_four_remote_jobs_success": true,
+    "remote_tests": 2009,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 777.452,
+    "frozen_source_hashes_verified": 1168,
+    "source_artifact_sha256": "27fc659e3414f428eb9736c78705fdd581ad63a3b4acbec7571de4224d051166",
+    "profitable_browser_artifact_present": true,
+    "profitable_browser_artifact_sha256": "fa1b8ce295832d8be5d9fdfd3c85fc6db1d014e1bf15cc50597e92778ef61610"
+  },
+  "remote_runs": {
+    "verify": 42608954558,
+    "boundaries": 42608958161
+  },
+  "framework_acceptance": {
+    "native_exit": 0,
+    "frozen_source_unchanged": true,
+    "log_sha256": "c7b7df9ac1264383b93a5aec6eefe567ae5696fab39ba95770b437c7b833840d"
+  },
+  "actual_model_protocol": [
+    {
+      "case": 0,
+      "passed": true,
+      "model": "deepseek-v4.1-flash",
+      "actual_configured_model": true,
+      "synthetic_messages_and_quotes": true,
+      "native_guarded_mcp_and_api": true,
+      "market_table_results_seen": 1,
+      "signal_count": 1,
+      "orders": 0,
+      "expert_multiplier_ignored": true,
+      "exact_period_line_direction": true,
+      "closed_original_not_substituted": false,
+      "elapsed_ms": 21876.685,
+      "production_writes": 0,
+      "funded_tests": 0,
+      "synthetic_quote_publisher": true,
+      "quote_ttl_unchanged": true
+    },
+    {
+      "case": 1,
+      "passed": true,
+      "model": "deepseek-v4.1-flash",
+      "actual_configured_model": true,
+      "synthetic_messages_and_quotes": true,
+      "native_guarded_mcp_and_api": true,
+      "market_table_results_seen": 1,
+      "signal_count": 1,
+      "orders": 0,
+      "expert_multiplier_ignored": true,
+      "exact_period_line_direction": true,
+      "closed_original_not_substituted": false,
+      "elapsed_ms": 22877.283,
+      "production_writes": 0,
+      "funded_tests": 0,
+      "synthetic_quote_publisher": true,
+      "quote_ttl_unchanged": true
+    },
+    {
+      "case": 2,
+      "passed": true,
+      "model": "deepseek-v4.1-flash",
+      "actual_configured_model": true,
+      "synthetic_messages_and_quotes": true,
+      "native_guarded_mcp_and_api": true,
+      "market_table_results_seen": 1,
+      "signal_count": 0,
+      "orders": 0,
+      "expert_multiplier_ignored": true,
+      "exact_period_line_direction": true,
+      "closed_original_not_substituted": true,
+      "elapsed_ms": 26240.668,
+      "production_writes": 0,
+      "funded_tests": 0,
+      "synthetic_quote_publisher": true,
+      "quote_ttl_unchanged": true
+    }
+  ],
+  "native_readiness": {
+    "authenticated_fixed_hermes_catalog_status": 200,
+    "both_presentation_connections_ready": true,
+    "four_tool_allowlist_and_identical_input_schemas": true,
+    "business_tool_calls": 0,
+    "provider_generation_calls": 0
+  },
+  "profile_config_sha256": "49eeb74b37b8188d87587b660e8dc514eed87348059aba968992935b76386d51",
+  "skill_sha256": "7700627d62ddb78efd088ce172458db7d1c14f90a7bf53a7c066386844237052",
+  "rollout": {
+    "only_mcp_image_and_hermes_project_profile_recreated": true,
+    "five_other_local_and_four_remote_containers_unchanged": true,
+    "provider_model_reasoning_and_secret_environment_unchanged": true,
+    "all_owner_policies_and_global_live_switch_unchanged": true,
+    "profitable_mode_api_worker_web_preserved": true,
+    "permissions_security_and_resources_unchanged": true,
+    "funded_tests": 0,
+    "historical_backfill": false
+  },
+  "original_build_verification_failure": {
+    "native_exit": 1,
+    "category": "nonroot_verifier_cannot_read_0700_frozen_mount",
+    "preserved": true,
+    "production_deployment_started": false,
+    "repair": "exact SHA verified readable text copy; production uid unchanged"
+  },
+  "next_natural_window": {
+    "actual_start": "2026-11-09T11:52:20.333898339Z",
+    "minutes": 30,
+    "completion_pending": true,
+    "performance_budget_ms": 10000,
+    "accepted_order_sample_sufficient": false
+  },
+  "unpromoted_composed_prompt_candidate": {
+    "synthetic_protocol_passed": true,
+    "original_image_adoption_exit": 1,
+    "production_profile_changed": false
+  },
+  "funded_tests": 0,
+  "historical_backfill": false
+}

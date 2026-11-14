@@ -1,0 +1,94 @@
+{
+  "window_start": "2026-11-08T10:40:12.533082+00:00",
+  "window_last_database_sample": "2026-11-08T11:10:13.756513+00:00",
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 197,
+    "published_posts": 24,
+    "older_posts_revised": 171,
+    "published_ready": 17,
+    "published_pending": 0,
+    "published_unsupported": 7
+  },
+  "reviews_final": {
+    "eligible": 18,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 18,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 27,
+    "avg_ms": "5442.9",
+    "p95_ms": "13346.8",
+    "within_3s": 12,
+    "older_backlog_versions_received": 170
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 111
+    },
+    {
+      "trace_kind": "review_failure",
+      "failure_category": "provider_transient",
+      "finish_reason": null,
+      "count": 99
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 111
+    }
+  ],
+  "market_samples": 61,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T11:09:21.159289+00:00",
+    "last_poll_elapsed_ms": 27100.5,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 38506,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 21.3,
+    "oldest_quote_age_seconds": 315999.1,
+    "failed_batches": 0
+  },
+  "official_reconcile": {
+    "read_only": true,
+    "official_posts": 27,
+    "normalized_posts": 24,
+    "matched": 24,
+    "missing": []
+  },
+  "exits": {
+    "e940-independent-native": 0,
+    "e940-market-native": 0,
+    "e940-official-scan": 0,
+    "e940-official-reconcile": 0,
+    "e940-natural-audit": 0,
+    "e940-completion-audit": 0
+  },
+  "all_functionality_verified": false,
+  "raw_original_messages_included": false,
+  "production_writes": false
+}

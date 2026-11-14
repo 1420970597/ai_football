@@ -1,0 +1,36 @@
+# Overlay only: leave legacy-local-workers profile disabled during remote deployment.
+services:
+  collector:
+    profiles: [legacy-local-workers]
+  executor:
+    profiles: [legacy-local-workers]
+  api:
+    environment:
+      TELEGRAM_CONTROL_URL: http://remote-link:18092
+  remote-link:
+    image: ${REMOTE_TUNNEL_IMAGE:?Pin verified storage tunnel image by digest}
+    entrypoint: [python, /deployment/ssh_link.py]
+    environment:
+      REMOTE_LINK_CONFIG: /run/remote/link.json
+      COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Reuse collector token}
+    volumes:
+      - {type: bind, source: ./infra/remote/ssh_link.py, target: /deployment/ssh_link.py, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/tunnel, target: /run/storage, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/remote/link.json, target: /run/remote/link.json, read_only: true, bind: {create_host_path: false}}
+    depends_on: {api: {condition: service_healthy}}
+    healthcheck:
+      test: [CMD, python, /deployment/ssh_link.py, --health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [app-private, egress]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16m"]
+    cpus: .1
+    mem_limit: 128m
+    pids_limit: 64
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}

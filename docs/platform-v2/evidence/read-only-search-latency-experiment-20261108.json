@@ -1,0 +1,91 @@
+{
+  "schema": "safe-performance-evidence-v1",
+  "baseline_query_measurements": {
+    "observed_at": "2026-11-08T13:32:30.930939+00:00",
+    "read_only": true,
+    "candidate_source": "be94bfc7afd4dfa90b9b7374030993d41cacca7f",
+    "select_one_roundtrips_ms": [
+      502.752,
+      149.758,
+      157.238,
+      158.983,
+      154.958
+    ],
+    "samples": [
+      {
+        "team_query": "布莱顿",
+        "competition_query": "",
+        "sport": "football",
+        "client_elapsed_ms": 774.713,
+        "server_planning_ms": 4.11,
+        "server_execution_ms": 394.295,
+        "matched_rows": 45,
+        "statement": "SELECT-only candidate projection"
+      },
+      {
+        "team_query": "卡拉夫",
+        "competition_query": "",
+        "sport": null,
+        "client_elapsed_ms": 500.094,
+        "server_planning_ms": 0.493,
+        "server_execution_ms": 283.074,
+        "matched_rows": 1,
+        "statement": "SELECT-only candidate projection"
+      },
+      {
+        "team_query": "",
+        "competition_query": "捷克丙级联赛",
+        "sport": "football",
+        "client_elapsed_ms": 248.581,
+        "server_planning_ms": 1.128,
+        "server_execution_ms": 92.232,
+        "matched_rows": 25,
+        "statement": "SELECT-only candidate projection"
+      }
+    ],
+    "model_calls": 0,
+    "business_writes": 0
+  },
+  "empty_alias_guard_experiment": {
+    "observed_at": "2026-11-08T13:34:24.452523+00:00",
+    "read_only": true,
+    "same_repeatable_read_snapshot": true,
+    "identical_complete_candidate_projection": true,
+    "candidate_projection_sha256": "a2adbcb16f00b74bdd188079880ed8af33ea97c39235ca8f03b7a84fd090af7a",
+    "application_source_changed": false,
+    "production_writes": 0,
+    "model_calls": 0,
+    "measurements": [
+      {
+        "turn": 1,
+        "variant": "baseline",
+        "client_elapsed_ms": 409.901,
+        "server_execution_ms": 77.988,
+        "planning_ms": 0.606
+      },
+      {
+        "turn": 2,
+        "variant": "guarded",
+        "client_elapsed_ms": 500.553,
+        "server_execution_ms": 67.959,
+        "planning_ms": 0.438
+      },
+      {
+        "turn": 3,
+        "variant": "baseline",
+        "client_elapsed_ms": 255.471,
+        "server_execution_ms": 86.439,
+        "planning_ms": 0.461
+      },
+      {
+        "turn": 4,
+        "variant": "guarded",
+        "client_elapsed_ms": 250.79,
+        "server_execution_ms": 67.379,
+        "planning_ms": 0.425
+      }
+    ]
+  },
+  "conclusion": "Client timings do not establish a stable end-to-end improvement; no application patch adopted.",
+  "three_second_goal_verified": false
+}

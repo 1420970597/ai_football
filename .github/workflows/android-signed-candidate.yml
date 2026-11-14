@@ -1,0 +1,82 @@
+name: Build externally signed Android candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Explicit semantic or numbered rc version
+        required: true
+        type: string
+      version_code:
+        description: Reviewed increasing Android version code
+        required: true
+        type: string
+      certificate_sha256:
+        description: Expected certificate digest from the signing custodian
+        required: true
+        type: string
+      stable_evidence_directory:
+        description: Optional project-local real release evidence directory; empty keeps candidate only
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-signing
+  cancel-in-progress: false
+
+jobs:
+  signed-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: android-signing
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Stage externally managed signing material
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -eu
+          test -n "$KEYSTORE_BASE64" && test -n "$STORE_PASSWORD" && test -n "$KEY_PASSWORD" && test -n "$KEY_ALIAS"
+          umask 077
+          mkdir -p .runtime/android-signing
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > .runtime/android-signing/signing.jks
+          printf '%s' "$STORE_PASSWORD" > .runtime/android-signing/store-password
+          printf '%s' "$KEY_PASSWORD" > .runtime/android-signing/key-password
+          printf '%s' "$KEY_ALIAS" > .runtime/android-signing/key-alias
+      - name: Verify and build signed candidate inside Docker
+        env:
+          ANDROID_RELEASE_VERSION: ${{ inputs.version }}
+          ANDROID_RELEASE_VERSION_CODE: ${{ inputs.version_code }}
+          ANDROID_SIGNER_SHA256: ${{ inputs.certificate_sha256 }}
+          ANDROID_SIGNING_DIRECTORY: ${{ github.workspace }}/.runtime/android-signing
+        run: bash android/build-signed-candidate.sh
+      - name: Check optional stable release evidence without publishing
+        if: ${{ inputs.stable_evidence_directory != '' }}
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION_CODE: ${{ inputs.version_code }}
+          SIGNER_SHA256: ${{ inputs.certificate_sha256 }}
+          EVIDENCE_DIRECTORY: ${{ inputs.stable_evidence_directory }}
+        run: |
+          docker run --rm --cpus=.25 --memory=128m --network none -v "$PWD:/source:ro" -w /source \
+            python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
+            python infra/android/release_policy.py --version "$RELEASE_VERSION" --version-code "$RELEASE_VERSION_CODE" \
+              --commit "$GITHUB_SHA" --package-output android/build/signed-artifacts/package-verification.txt \
+              --certificate-sha256 "$SIGNER_SHA256" --evidence "$EVIDENCE_DIRECTORY" \
+              --apk "android/build/signed-artifacts/ballnews-$RELEASE_VERSION-signed-candidate.apk" \
+              --worktree-status android/build/signed-artifacts/source-worktree-status.txt \
+            > android/build/signed-artifacts/stable-gate.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: externally-signed-android-candidate
+          path: android/build/signed-artifacts/
+          retention-days: 14
+      - name: Remove only this job's staged signing inputs
+        if: always()
+        run: rm -f .runtime/android-signing/signing.jks .runtime/android-signing/store-password .runtime/android-signing/key-password .runtime/android-signing/key-alias

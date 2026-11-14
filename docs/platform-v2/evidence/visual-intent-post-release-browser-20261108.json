@@ -1,0 +1,272 @@
+{
+  "schema": "safe-post-visual-intent-browser-v1",
+  "api_source_commit": "875028c27be043f469d05624f9a02987306dde70",
+  "web_source_commit": "b187600582795593d50d64582210e5cbb05587e2",
+  "post_handoff": "2026-11-08T20:43:53Z",
+  "all_native_and_controller_exits": 0,
+  "real_browser_cases": 22,
+  "results": {
+    "phase_and_original": {
+      "results": [
+        {
+          "width": 1440,
+          "case": "phase_click",
+          "phase": "finished",
+          "status": "passed",
+          "click_to_rows_ms": 2195,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 1440,
+          "case": "phase_click",
+          "phase": "live",
+          "status": "passed",
+          "click_to_rows_ms": 1591,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 1440,
+          "case": "phase_click",
+          "phase": "scheduled",
+          "status": "passed",
+          "click_to_rows_ms": 1406,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 1440,
+          "case": "phase_click",
+          "phase": "cancelled",
+          "status": "passed",
+          "click_to_rows_ms": 1293,
+          "markets_included": false,
+          "server_items": 1,
+          "dom_rows": 1
+        },
+        {
+          "width": 1440,
+          "case": "phase_click",
+          "phase": "all",
+          "status": "passed",
+          "click_to_rows_ms": 1190,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 1440,
+          "case": "original_image",
+          "status": "passed",
+          "authorized": true,
+          "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+          "mouse_and_keyboard": true,
+          "scroll": true,
+          "close_reopen": true,
+          "production_writes": 0
+        },
+        {
+          "width": 390,
+          "case": "phase_click",
+          "phase": "finished",
+          "status": "passed",
+          "click_to_rows_ms": 1470,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 390,
+          "case": "phase_click",
+          "phase": "live",
+          "status": "passed",
+          "click_to_rows_ms": 1016,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 390,
+          "case": "phase_click",
+          "phase": "scheduled",
+          "status": "passed",
+          "click_to_rows_ms": 1118,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 390,
+          "case": "phase_click",
+          "phase": "cancelled",
+          "status": "passed",
+          "click_to_rows_ms": 784,
+          "markets_included": false,
+          "server_items": 1,
+          "dom_rows": 1
+        },
+        {
+          "width": 390,
+          "case": "phase_click",
+          "phase": "all",
+          "status": "passed",
+          "click_to_rows_ms": 1103,
+          "markets_included": false,
+          "server_items": 50,
+          "dom_rows": 50
+        },
+        {
+          "width": 390,
+          "case": "original_image",
+          "status": "passed",
+          "authorized": true,
+          "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+          "mouse_and_keyboard": true,
+          "scroll": true,
+          "close_reopen": true,
+          "production_writes": 0
+        }
+      ],
+      "response_injection": false,
+      "production_writes": 0
+    },
+    "anchor": {
+      "results": [
+        {
+          "width": 1440,
+          "passed": true,
+          "rows": 50,
+          "facts_ms": 2006,
+          "summaries_settled_ms": 3803,
+          "summary_responses": [
+            {
+              "status": 200
+            }
+          ],
+          "pending_rows": 0,
+          "focus_preserved": true,
+          "visible_fixture_anchor_preserved": true,
+          "scroll_before": 350,
+          "scroll_after": 389,
+          "anchor_top_before": 27,
+          "anchor_top_after": 27
+        },
+        {
+          "width": 390,
+          "passed": true,
+          "rows": 50,
+          "facts_ms": 1698,
+          "summaries_settled_ms": 3107,
+          "summary_responses": [
+            {
+              "status": 200
+            }
+          ],
+          "pending_rows": 0,
+          "focus_preserved": true,
+          "visible_fixture_anchor_preserved": true,
+          "scroll_before": 350,
+          "scroll_after": 414,
+          "anchor_top_before": 0,
+          "anchor_top_after": 0
+        }
+      ],
+      "response_injection": false,
+      "production_writes": 0
+    },
+    "expert_tg_member": {
+      "results": [
+        {
+          "width": 1440,
+          "case": "expert_ranking_refresh",
+          "status": "passed",
+          "experts": 10
+        },
+        {
+          "width": 1440,
+          "case": "expert_detail_and_tabs",
+          "status": "passed",
+          "settled_count_matches_api": true
+        },
+        {
+          "width": 1440,
+          "case": "telegram_monitoring_sources",
+          "status": "passed",
+          "source_count": 6,
+          "status_http": 200
+        },
+        {
+          "width": 1440,
+          "case": "ordinary_member_search_and_admin_scope",
+          "status": "passed",
+          "available_sources_checked": 0,
+          "restricted_sources_reported": 1,
+          "ordinary_member_found": true,
+          "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+          "trust_or_permissions_changed": false
+        },
+        {
+          "width": 390,
+          "case": "expert_ranking_refresh",
+          "status": "passed",
+          "experts": 10
+        },
+        {
+          "width": 390,
+          "case": "expert_detail_and_tabs",
+          "status": "passed",
+          "settled_count_matches_api": true
+        },
+        {
+          "width": 390,
+          "case": "telegram_monitoring_sources",
+          "status": "passed",
+          "source_count": 6,
+          "status_http": 200
+        },
+        {
+          "width": 390,
+          "case": "ordinary_member_search_and_admin_scope",
+          "status": "passed",
+          "available_sources_checked": 0,
+          "restricted_sources_reported": 1,
+          "ordinary_member_found": true,
+          "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+          "trust_or_permissions_changed": false
+        }
+      ],
+      "response_injection": false,
+      "production_writes": 0,
+      "identities_exported": false
+    }
+  },
+  "phase_click_to_rows_ms": {
+    "min": 784,
+    "max": 2195
+  },
+  "selected_screenshots_primary_viewed": {
+    "e1601-live-browser/phase-finished-1440.png": "b5e30d8198311f4d9be610c1f9ed07c140277b47ecd241081bba6dbf8cba2c3a",
+    "e1601-live-browser/phase-live-390.png": "03f53cee7f7c805ad8617f163d0881a9633ea98d8cf817e08ec6efa10e63d597",
+    "e1601-live-browser/original-expanded-390.png": "55b700d36c4530eccca525ab79cebeb7793434734808fd48d9e748f0b6a4e8e1",
+    "e1601-live-browser/original-expanded-1440.png": "c88ba8c41937a15e4ac909b44d18f3dc0dc8ca4da685cb4b4629fe7cf910b8e4",
+    "e1602-anchor-production/settled-summaries-1440.png": "efa11f849e6d0be097a23c9017ce9527401cf3d3b9c1937d17c98ec5ca9fc417",
+    "e1603-live-browser/expert-ranking-1440.png": "6ddf7285b6183d2ce56c9ef279a297ea7a7b4702ea2b2afeb48d443fb1a3bc5f",
+    "e1603-live-browser/expert-ranking-390.png": "f116f180234ae49437d294f2fcc2cacd9649ea80a5a9acadfeb808ce412fce06"
+  },
+  "screenshot_review_scope": "seven selected actual desktop/mobile screenshots; no claim that every generated frame was manually viewed",
+  "current_trusted_experts": 7,
+  "current_trusted_nicknames_present_and_recently_seen": 7,
+  "pending_display_experts": 2,
+  "pending_display_with_enabled_trust": 0,
+  "disabled_trust_links_not_reenabled": true,
+  "tg_profile_evidence": "tg-trusted-nickname-audit-20261108.json",
+  "member_search_scope": "one verified ordinary member in an existing configured source; unrestricted enumeration of every group not claimed",
+  "production_test_writes": 0,
+  "response_injection": false,
+  "three_second_review_target_passed": false,
+  "whole_market_freshness_or_positive_natural_recommendation_claimed": false
+}

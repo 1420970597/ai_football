@@ -2,43 +2,22 @@ from __future__ import annotations
 
 import logging
 import os
-import re
-import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 
-from . import admin_mfa, auth, database, identity_lifecycle
+from . import auth, database, identity_lifecycle
 from .config import load_settings
+from .http_runtime import (_safe_exception_frames, request_context, unexpected_error,
+                           database_temporarily_unavailable, timeout_error,
+                           database_interface_error, register_error_handlers)
 from .health import HermesProbe, MCPProbe, StorageProbe
-from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, results, reviews, telegram
+from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, result_checks, results, reviews, telegram
 from .security import decrypt_secret
+from .routes import account_history
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("platform.api")
-
-
-_SAFE_FRAME = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.]*|<[A-Za-z0-9_]+>):\d+$")
-
-
-def _safe_exception_frames(exc: BaseException, *, limit: int = 8) -> str:
-    """Return only code locations; never serialize exception text or locals.
-
-    Exception strings may contain a PostgreSQL DSN, an upstream token, or a
-    request body.  The global handler is deliberately limited to a bounded
-    list of traceback code locations so diagnostics remain useful without
-    copying those values into the log sink.
-    """
-    frames = []
-    traceback = exc.__traceback__
-    while traceback is not None:
-        code_name = traceback.tb_frame.f_code.co_name
-        candidate = f"{code_name}:{traceback.tb_lineno}"
-        if _SAFE_FRAME.fullmatch(candidate):
-            frames.append(candidate)
-        traceback = traceback.tb_next
-    return ",".join(frames[-limit:])
 
 
 @asynccontextmanager
@@ -67,26 +46,8 @@ app = FastAPI(
 )
 
 
-@app.middleware("http")
-async def request_context(request: Request, call_next):
-    supplied = request.headers.get("x-request-id", "")
-    request_id = supplied if len(supplied) <= 64 and supplied and all(c.isalnum() or c in "-_." for c in supplied) else str(uuid.uuid4())
-    request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api/") else "public, max-age=60"
-    return response
-
-
-@app.exception_handler(Exception)
-async def unexpected_error(request: Request, exc: Exception):
-    log.error("request failure request_id=%s category=%s frames=%s", getattr(request.state, "request_id", ""), type(exc).__name__, _safe_exception_frames(exc))
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "服务暂不可用", "request_id": getattr(request.state, "request_id", "")},
-    )
+app.middleware("http")(request_context)
+register_error_handlers(app)
 
 
 @app.get("/healthz")
@@ -102,16 +63,18 @@ async def readyz():
 
 app.include_router(auth.router)
 app.include_router(identity_lifecycle.router)
-app.include_router(admin_mfa.router)
 app.include_router(public.router)
 app.include_router(admin.router)
 app.include_router(operations.router)
 app.include_router(admin_reviews.router)
 app.include_router(accounts.router)
 app.include_router(accounts.executor_router)
+app.include_router(account_history.router)
+app.include_router(account_history.executor_router)
 app.include_router(internal.router)
 app.include_router(reviews.router)
 app.include_router(renewal.router)
 app.include_router(results.router)
+app.include_router(result_checks.router)
 app.include_router(telegram.router)
 app.include_router(expert_content.router)

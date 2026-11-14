@@ -1,0 +1,7 @@
+# Explicit production capacity profile; owner trading policies remain unchanged.
+services:
+  review-worker:
+    environment:
+      REVIEW_WORKER_CONCURRENCY: "4"
+      REVIEW_EXPERT_CONCURRENCY_FLOOR: "2"
+      REVIEW_HISTORICAL_CONCURRENCY: "0"

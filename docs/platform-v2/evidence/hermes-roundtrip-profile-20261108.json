@@ -1,0 +1,651 @@
+{
+  "scope": "nine isolated original-image framework transcripts; adjacent record timestamps only",
+  "source_commit": "80d9f3ca0ebc56d51326e265d72746da3c2ad209",
+  "median_elapsed_ms": 22721.708,
+  "median_total_tokens": 52588,
+  "records_do_not_establish_provider_vs_network_or_cpu_causality": true,
+  "no_configuration_or_production_changes": true,
+  "samples": [
+    {
+      "case": "e1434",
+      "elapsed_ms": 19985.323,
+      "usage": {
+        "prompt_tokens": 67839,
+        "completion_tokens": 774,
+        "total_tokens": 68613
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 810
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 7939.999,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 9
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 393.426,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 27897
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 5305.168,
+          "tool_names": [
+            "mcp__football__list_match_markets"
+          ],
+          "tool_name": null,
+          "content_chars": 71
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 88.125,
+          "tool_names": [],
+          "tool_name": "mcp__football__list_match_markets",
+          "content_chars": 1580
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 5706.999,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 460
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 35.075,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1435",
+      "elapsed_ms": 17862.168,
+      "usage": {
+        "prompt_tokens": 51560,
+        "completion_tokens": 1028,
+        "total_tokens": 52588
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 810
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 6423.403,
+          "tool_names": [
+            "mcp__football__search_matches",
+            "mcp__football_parallel__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 205.365,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 447
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 11.878,
+          "tool_names": [],
+          "tool_name": "mcp__football_parallel__search_matches",
+          "content_chars": 3678
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 5479.03,
+          "tool_names": [
+            "mcp__football_parallel__list_match_markets"
+          ],
+          "tool_name": null,
+          "content_chars": 60
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 98.067,
+          "tool_names": [],
+          "tool_name": "mcp__football_parallel__list_match_markets",
+          "content_chars": 1466
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 5226.473,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 402
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 31.478,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1436",
+      "elapsed_ms": 18642.682,
+      "usage": {
+        "prompt_tokens": 32012,
+        "completion_tokens": 371,
+        "total_tokens": 32383
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 810
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 9433.49,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 54
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 72.53,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 3703
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 8568.638,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 210
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 36.176,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1437",
+      "elapsed_ms": 22721.708,
+      "usage": {
+        "prompt_tokens": 100349,
+        "completion_tokens": 1721,
+        "total_tokens": 102070
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 647
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 5516.603,
+          "tool_names": [
+            "mcp__football__search_matches",
+            "mcp__football_parallel__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 57
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 285.466,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 18530
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 8.361,
+          "tool_names": [],
+          "tool_name": "mcp__football_parallel__search_matches",
+          "content_chars": 11848
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 4856.927,
+          "tool_names": [
+            "mcp__football__resolve_match"
+          ],
+          "tool_name": null,
+          "content_chars": 72
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 122.514,
+          "tool_names": [],
+          "tool_name": "mcp__football__resolve_match",
+          "content_chars": 2478
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 5061.323,
+          "tool_names": [
+            "mcp__football__list_match_markets",
+            "mcp__football_parallel__list_match_markets"
+          ],
+          "tool_name": null,
+          "content_chars": 92
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 69.67,
+          "tool_names": [],
+          "tool_name": "mcp__football__list_match_markets",
+          "content_chars": 1449
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 2.971,
+          "tool_names": [],
+          "tool_name": "mcp__football_parallel__list_match_markets",
+          "content_chars": 1532
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 6319.336,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 703
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 43.718,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1438",
+      "elapsed_ms": 23807.602,
+      "usage": {
+        "prompt_tokens": 51134,
+        "completion_tokens": 725,
+        "total_tokens": 51859
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 647
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 9003.654,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 66.843,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 3623
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 7345.803,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 73.02,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 4162
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 6883.158,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 296
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 38.608,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1439",
+      "elapsed_ms": 32613.716,
+      "usage": {
+        "prompt_tokens": 50949,
+        "completion_tokens": 918,
+        "total_tokens": 51867
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 647
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 12625.489,
+          "tool_names": [
+            "mcp__football__search_matches",
+            "mcp__football_parallel__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 21.295,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 654
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 5.785,
+          "tool_names": [],
+          "tool_name": "mcp__football_parallel__search_matches",
+          "content_chars": 663
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 10721.865,
+          "tool_names": [
+            "mcp__football__search_matches",
+            "mcp__football_parallel__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 232.558,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 3623
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 5.723,
+          "tool_names": [],
+          "tool_name": "mcp__football_parallel__search_matches",
+          "content_chars": 4171
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 8641.399,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 340
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 11.846,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1440",
+      "elapsed_ms": 16698.429,
+      "usage": {
+        "prompt_tokens": 30974,
+        "completion_tokens": 462,
+        "total_tokens": 31436
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 745
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 8222.631,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 88.458,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 4121
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 7908.705,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 250
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 47.838,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1441",
+      "elapsed_ms": 44394.208,
+      "usage": {
+        "prompt_tokens": 79627,
+        "completion_tokens": 1114,
+        "total_tokens": 80741
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 745
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 8000.403,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 47.428,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 1063
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 7713.673,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 33.896,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 561
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 6959.473,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 59.92,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 2078
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 11453.054,
+          "tool_names": [
+            "mcp__football__resolve_match"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 56.442,
+          "tool_names": [],
+          "tool_name": "mcp__football__resolve_match",
+          "content_chars": 2760
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 9731.238,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 271
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 38.409,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    },
+    {
+      "case": "e1442",
+      "elapsed_ms": 43333.572,
+      "usage": {
+        "prompt_tokens": 54060,
+        "completion_tokens": 4773,
+        "total_tokens": 58833
+      },
+      "completion_rounds": 1,
+      "events": [
+        {
+          "role": "user",
+          "after_previous_record_ms": null,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 745
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 11726.217,
+          "tool_names": [
+            "mcp__football__search_matches"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 193.11,
+          "tool_names": [],
+          "tool_name": "mcp__football__search_matches",
+          "content_chars": 4159
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 19601.515,
+          "tool_names": [
+            "mcp__football__list_match_markets"
+          ],
+          "tool_name": null,
+          "content_chars": 0
+        },
+        {
+          "role": "tool",
+          "after_previous_record_ms": 52.777,
+          "tool_names": [],
+          "tool_name": "mcp__football__list_match_markets",
+          "content_chars": 1455
+        },
+        {
+          "role": "assistant",
+          "after_previous_record_ms": 11344.65,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 629
+        },
+        {
+          "role": "session_meta",
+          "after_previous_record_ms": 55.44,
+          "tool_names": [],
+          "tool_name": null,
+          "content_chars": 0
+        }
+      ]
+    }
+  ]
+}

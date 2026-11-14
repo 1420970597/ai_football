@@ -15,7 +15,8 @@ from uuid import UUID
 
 import httpx
 
-from services.collector.leyu_protocol import LeyuError, MAX_RESPONSE_BYTES, ODDS_SCALE, SUCCESS_CODES, decode_envelope, parse_line, timestamp
+from services.collector.leyu_protocol import AUTH_CODES, AuthExpired, LeyuError, MAX_RESPONSE_BYTES, ODDS_SCALE, SUCCESS_CODES, decode_envelope, parse_line, timestamp
+from services.execution_scope import native_execution_market_supported, native_match_type
 from .account_session import AccountScope, VenueSession
 
 AMOUNT_PATH = "/yewu12/api/user/amount"
@@ -75,24 +76,33 @@ class NativeSelection:
     chpid: str
     kind: str
     period: str
-    line: Decimal
+    line: Decimal | None
     price: Decimal
     phase: str
     score_benchmark: str = ""
+
+    @classmethod
+    def from_snapshot(cls, snapshot: Mapping[str, Any]) -> "NativeSelection":
+        fields = ("match_id", "market_instance_id", "play_id", "selection_id", "selection_code",
+                  "sport_id", "chpid", "kind", "period", "line", "price", "phase", "score_benchmark")
+        return cls(**{key: snapshot[key] for key in fields})
 
     def __post_init__(self):
         for value in (self.match_id, self.market_instance_id, self.play_id, self.selection_id, self.chpid):
             if not isinstance(value, str) or not value or len(value) > 160 or "\n" in value or "\r" in value:
                 raise LeyuError("invalid_native_selection")
-        if (self.kind not in {"winner", "handicap", "total"} or self.period not in {"full_time", "first_half", "second_half"}
-                or self.selection_code not in {"1", "2", "X", "Over", "Under"} or not self.sport_id.isdigit()):
+        if (not native_execution_market_supported(self.sport_id, self.chpid, self.kind, self.period)
+                or self.selection_code not in {"1", "2", "X", "Over", "Under"}):
             raise LeyuError("unsupported_native_selection")
         allowed = {"winner": {"1", "2", "X"}, "handicap": {"1", "2"}, "total": {"Over", "Under"}}
-        if self.selection_code not in allowed[self.kind]:
+        if self.selection_code not in allowed[self.kind] or self.sport_id == "2" and self.selection_code == "X":
             raise LeyuError("native_selection_direction_mismatch")
-        line, price = number(self.line), number(self.price, minimum=Decimal("1.00001"))
-        if price * ODDS_SCALE != (price * ODDS_SCALE).to_integral_value():
-            raise LeyuError("unsupported_native_price_precision")
+        line = None if self.kind == 'winner' and self.line is None else number(self.line)
+        if self.kind == 'winner':
+            if line not in (None, Decimal('0')):
+                raise LeyuError('invalid_native_winner_line')
+            line = None
+        price = number(self.price, minimum=Decimal("0"))
         object.__setattr__(self, "line", line)
         object.__setattr__(self, "price", price)
 
@@ -140,9 +150,15 @@ def normalize_order(row: Mapping[str, Any], state: str) -> dict[str, Any]:
     basis = "provider_reported_net" if profit is not None else "unknown"
     if raw_profit is None and stake is not None and payout is not None:
         profit, basis = str(Decimal(payout) - Decimal(stake)), "gross_return_minus_stake"
+    currency = _first(merged, "currencyCode", "currency")
+    currency = currency if isinstance(currency, str) and re.fullmatch(r"[A-Z]{3}", currency) else None
+    price = _optional_number(_first(merged, "oddFinally", "oddsFinally"))
+    # These are the decimal execution-price fields used by the verified protocol.
+    # The unrelated `odds` integer uses ODDS_SCALE and is not a decimal price.
+    price = price if price is not None and Decimal(price) > 1 else None
     return {"order_no": str(identifier), "identifier_kind": "order" if parent_id else "detail",
             "state": state, "stake": stake, "payout": payout, "net_profit": profit, "pnl_basis": basis, "fees": None,
-            "price": _optional_number(_first(merged, "oddFinally", "oddsFinally", "odds", "odd")),
+            "price": price, "currency": currency,
             "placed_at": timestamp(_first(merged, "betTime", "createTime", "orderTime")),
             "settled_at": timestamp(_first(merged, "settleTime", "settled_at", "settleAt", "settlementTime")),
             "match_id": str(_first(merged, "matchId", "eventId", "mid") or "") or None,
@@ -217,7 +233,7 @@ class AccountProtocolClient:
         self.scope, self.session = scope, session
         self.live_orders_enabled = live_orders_enabled
         self._used_permits: set[str] = set()
-        self._issued_prepared: dict[str, tuple[str, float]] = {}
+        self._issued_prepared: dict[str, tuple[str, float, str]] = {}
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(10, connect=3), limits=httpx.Limits(max_connections=3, max_keepalive_connections=3),
                                       transport=transport, trust_env=False, follow_redirects=False,
                                       headers={"requestId": session.request_id, "Lang": "zh", "Accept-Language": "zh-CN,zh;q=0.9",
@@ -238,8 +254,6 @@ class AccountProtocolClient:
         try:
             async with asyncio.timeout(12), self.http.stream("POST" if body is not None else "GET", self.session.base_url + path,
                                                           **({"json": dict(body)} if body is not None else {})) as response:
-                if response.status_code >= 300:
-                    raise LeyuError("account_http_rejected", str(response.status_code))
                 raw = bytearray()
                 async for chunk in response.aiter_bytes():
                     raw.extend(chunk)
@@ -248,7 +262,17 @@ class AccountProtocolClient:
                 try:
                     payload = json.loads(raw)
                 except (ValueError, UnicodeError):
+                    if response.status_code >= 300:
+                        raise LeyuError("account_http_rejected", str(response.status_code)) from None
                     raise LeyuError("invalid_account_response") from None
+                if response.status_code >= 300:
+                    # The venue also returns its explicit session-expiry code
+                    # with HTTP 401. Status alone never authorizes renewal, and
+                    # a submitted order must retain its unknown-result handling.
+                    code = str(payload.get("code", "")) if isinstance(payload, Mapping) else ""
+                    if not submission and response.status_code in {401, 403} and code in AUTH_CODES:
+                        raise AuthExpired("session_expired", code)
+                    raise LeyuError("account_http_rejected", str(response.status_code))
                 return payload if submission else decode_envelope(payload) if isinstance(payload, Mapping) and "code" in payload else payload
         except (httpx.HTTPError, TimeoutError):
             raise LeyuError("account_transport_failure") from None
@@ -272,79 +296,104 @@ class AccountProtocolClient:
         return order_page(await self._request(ORDERS_PATH, body), state, page, size)
 
     async def lookup(self, order_no: str, *, begin: datetime, end: datetime, max_pages: int = 10) -> dict[str, Any]:
+        return (await self.lookup_many([order_no], begin=begin, end=end, max_pages=max_pages))[order_no]
+
+    async def lookup_many(self, order_nos: list[str], *, begin: datetime, end: datetime, max_pages: int = 10) -> dict[str, dict[str, Any]]:
+        """Scan each account-history page once for this bounded group of orders."""
+        if (not 1 <= len(order_nos) <= 2 or len(set(order_nos)) != len(order_nos)
+                or any(not order_no or len(order_no) > 160 for order_no in order_nos)
+                or not 1 <= max_pages <= 100):
+            raise LeyuError("invalid_account_order_lookup")
         try:
             async with asyncio.timeout(60):
-                return await self._lookup(order_no, begin=begin, end=end, max_pages=max_pages)
+                return await self._lookup_many(order_nos, begin=begin, end=end, max_pages=max_pages)
         except TimeoutError:
             raise LeyuError("account_lookup_deadline_exceeded") from None
 
-    async def _lookup(self, order_no: str, *, begin: datetime, end: datetime, max_pages: int) -> dict[str, Any]:
-        if not order_no or len(order_no) > 160 or not 1 <= max_pages <= 100:
-            raise LeyuError("invalid_account_order_lookup")
+    async def _lookup_many(self, order_nos: list[str], *, begin: datetime, end: datetime, max_pages: int) -> dict[str, dict[str, Any]]:
         matches = []
         complete = True
-        ambiguous = False
+        conflicts = set()
         for state in ("unsettled", "settled"):
             previous_ids = set()
             for page in range(1, max_pages + 1):
                 response = await self.orders(state, page=page, begin=begin, end=end)
                 if response["total"] is None:
                     complete = False
-                ambiguous |= order_no in response["conflicting_order_ids"]
+                conflicts.update(response["conflicting_order_ids"])
                 identities = {(item["identifier_kind"], item["order_no"]) for item in response["items"]}
                 if response["malformed_records"] or (page > 1 and identities and identities <= previous_ids):
                     complete = False
                 previous_ids |= identities
-                matches.extend(item for item in response["items"] if item["identifier_kind"] == "order" and item["order_no"] == order_no)
+                matches.extend(item for item in response["items"] if item["identifier_kind"] == "order" and item["order_no"] in order_nos)
                 if not response["has_more"]:
                     break
                 if page == max_pages:
                     complete = False
         # 缺失不能证明拒单；结算回执优于同订单的短暂未结缓存。
-        unique = {item["state"]: item for item in matches}
-        ambiguous |= any(any(previous != item for previous in matches if previous["state"] == item["state"]) for item in matches)
-        return {"found": bool(unique) and not ambiguous, "receipt": None if ambiguous else unique.get("settled") or unique.get("unsettled"),
-                "scan_complete": complete and not ambiguous, "ambiguous": ambiguous, "absence_proves_rejection": False}
+        result = {}
+        for order_no in order_nos:
+            items = [item for item in matches if item['order_no'] == order_no]
+            unique = {item["state"]: item for item in items}
+            ambiguous = order_no in conflicts or any(any(previous != item for previous in items if previous["state"] == item["state"]) for item in items)
+            result[order_no] = {"found": bool(unique) and not ambiguous, "receipt": None if ambiguous else unique.get("settled") or unique.get("unsettled"),
+                                "scan_complete": complete and not ambiguous, "ambiguous": ambiguous, "absence_proves_rejection": False}
+        return result
 
     async def preflight(self, selection: NativeSelection, stake: Decimal, *, device_imei: str = "") -> PreparedBet:
-        if selection.phase != "live":
-            raise LeyuError("prematch_execution_protocol_unverified")
+        match_type = native_match_type(selection.phase)
+        if match_type is None:
+            raise LeyuError("unsupported_execution_phase")
         amount = number(stake, minimum=Decimal("0.01"))
         if amount != amount.quantize(Decimal("0.01")):
             raise LeyuError("invalid_account_stake_precision")
         latest_query = {"idList": [{"marketId": selection.market_instance_id, "matchInfoId": selection.match_id,
                         "oddsId": selection.selection_id, "oddsType": selection.selection_code, "playId": selection.play_id,
-                        "chpid": selection.chpid, "matchType": 2, "sportId": int(selection.sport_id)}]}
+                        "chpid": selection.chpid, "matchType": match_type, "sportId": int(selection.sport_id)}]}
         limit_detail = {"marketId": selection.market_instance_id, "matchId": selection.match_id, "playId": selection.play_id,
-                        "playOptionId": selection.selection_id, "oddsValue": str(int(selection.price * ODDS_SCALE)), "matchType": 2, "deviceType": 3}
-        tasks = [asyncio.create_task(self._request(LATEST_MARKET_PATH, latest_query)),
-                 asyncio.create_task(self._request(LIMITS_PATH, {"orderMaxBetMoney": [limit_detail]})),
-                 asyncio.create_task(self.balance())]
+                        "playOptionId": selection.selection_id, "oddsValue": str(int(selection.price * ODDS_SCALE)), "matchType": match_type, "deviceType": 3}
         try:
-            latest, limits, wallet = await asyncio.gather(*tasks)
+            latest = await self._request(LATEST_MARKET_PATH, latest_query)
         except BaseException:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
             raise
+        checked_at = datetime.now(timezone.utc).isoformat()
         markets = [row for row in _rows(latest) if str(row.get("id")) == selection.market_instance_id
                    and str(row.get("matchInfoId")) == selection.match_id and str(row.get("playId")) == selection.play_id]
         if len(markets) != 1:
             raise LeyuError("selected_native_market_not_unique")
         market = markets[0]
-        if (str(market.get("matchStatus")) != "1" or str(market.get("matchOver", "0")) != "0"
+        expected_status = "0" if selection.phase == "scheduled" else "1"
+        if (str(market.get("matchStatus")) != expected_status or str(market.get("matchOver", "0")) != "0"
                 or str(market.get("matchHandicapStatus")) != "0" or str(market.get("status")) != "0"):
             raise LeyuError("selected_native_market_not_open")
-        options = [row for row in _rows(market.get("marketOddsList")) if str(row.get("id")) == selection.selection_id]
-        if len(options) != 1 or str(options[0].get("oddsType")) != selection.selection_code or str(options[0].get("oddsStatus")) not in {"0", "1"}:
+        options = [row for row in _rows(market.get("marketOddsList"))
+                   if str(row.get("oddsType")) == selection.selection_code
+                   and str(row.get("oddsStatus")) in {"0", "1"}]
+        if len(options) != 1:
             raise LeyuError("selected_native_option_not_open")
         option = options[0]
+        current_selection_id = str(option.get("id", ""))
+        if not current_selection_id or len(current_selection_id) > 160 or "\n" in current_selection_id or "\r" in current_selection_id:
+            raise LeyuError("invalid_native_selection_id")
         price = number(option.get("oddsValue")) / ODDS_SCALE
         raw_line = market.get("marketValue")
-        line = Decimal("0") if selection.kind == "winner" and raw_line in (None, "") else parse_line(raw_line)
-        if price != selection.price or line != selection.line:
+        line = parse_line(raw_line)
+        if selection.kind == 'winner' and (raw_line in (None, '') or line == Decimal('0')):
+            line = None
+        elif line is None:
             raise LeyuError("selected_native_quote_changed")
-        matching_limits = [row for row in _rows(limits) if str(row.get("playOptionsId")) == selection.selection_id]
+        if line != selection.line:
+            raise LeyuError("selected_native_quote_changed")
+        # The expert's price is informational. Query limits with the current
+        # provider price discovered immediately above.
+        limit_detail["oddsValue"] = str(int(price * ODDS_SCALE))
+        limit_detail["playOptionId"] = current_selection_id
+        try:
+            limits, wallet = await asyncio.gather(
+                self._request(LIMITS_PATH, {"orderMaxBetMoney": [limit_detail]}), self.balance())
+        except BaseException:
+            raise
+        matching_limits = [row for row in _rows(limits) if str(row.get("playOptionsId")) == current_selection_id]
         if len(matching_limits) != 1:
             raise LeyuError("native_limits_not_unique")
         limit = matching_limits[0]
@@ -356,28 +405,29 @@ class AccountProtocolClient:
         if not minimum <= amount <= maximum or Decimal(wallet["available"]) < amount:
             raise LeyuError("account_stake_outside_available_limits")
         detail = {"betAmount": format(amount, ".2f"), "matchId": selection.match_id, "marketId": selection.market_instance_id,
-                  "playId": selection.play_id, "playOptions": selection.selection_code, "playOptionsId": selection.selection_id,
+                  "playId": selection.play_id, "playOptions": selection.selection_code, "playOptionsId": current_selection_id,
                   "oddFinally": str(price), "odds": str(int(price * ODDS_SCALE)), "marketValue": "" if raw_line is None else str(raw_line),
-                  "marketTypeFinally": "EU", "matchType": 2, "sportId": selection.sport_id, "scoreBenchmark": selection.score_benchmark}
+                  "marketTypeFinally": "EU", "matchType": match_type, "sportId": selection.sport_id, "scoreBenchmark": selection.score_benchmark}
         if market.get("placeNum") is not None:
             detail["placeNum"] = market["placeNum"]
         payload = {"acceptOdds": 2, "currencyCode": "CNY", "deviceImei": device_imei, "deviceType": "3", "openMiltSingle": 0,
                    "preBet": "0", "seriesOrders": [{"seriesType": "1", "seriesSum": 1, "fullBet": 0, "orderDetailList": [detail]}]}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha256((self.scope.user_id + ":" + self.scope.account_id + ":" + str(self.scope.revision) + ":" + encoded).encode()).hexdigest()
+        digest = hashlib.sha256((self.scope.user_id + ":" + self.scope.account_id + ":" + str(self.scope.revision) + ":" + checked_at + ":" + encoded).encode()).hexdigest()
         expires = time.monotonic() + 15
         self._issued_prepared = {key: value for key, value in self._issued_prepared.items() if value[1] > time.monotonic()}
         if len(self._issued_prepared) >= 128:
             raise LeyuError("prepared_order_budget_exceeded")
-        self._issued_prepared[digest] = encoded, expires
-        return PreparedBet(self.scope, encoded, digest, expires, datetime.now(timezone.utc).isoformat())
+        self._issued_prepared[digest] = encoded, expires, checked_at
+        return PreparedBet(self.scope, encoded, digest, expires, checked_at)
 
     async def submit_once(self, prepared: PreparedBet, permit: SubmissionPermit) -> dict[str, Any]:
         if not self.live_orders_enabled:
             raise LeyuError("live_orders_disabled")
         if (prepared.scope != self.scope or permit.scope != self.scope or permit.prepared_digest != prepared.digest
                 or prepared.expires_monotonic <= time.monotonic()
-                or self._issued_prepared.get(prepared.digest) != (prepared.payload_json, prepared.expires_monotonic)):
+                or self._issued_prepared.get(prepared.digest) != (prepared.payload_json, prepared.expires_monotonic, prepared.checked_at)
+                or hashlib.sha256((self.scope.user_id + ":" + self.scope.account_id + ":" + str(self.scope.revision) + ":" + prepared.checked_at + ":" + prepared.payload_json).encode()).hexdigest() != prepared.digest):
             raise LeyuError("execution_permit_invalid_or_expired")
         if permit.execution_id in self._used_permits:
             raise LeyuError("execution_already_sent")

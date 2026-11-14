@@ -1,0 +1,321 @@
+{
+  "observed_at": "2026-11-09T00:32:51.610393+00:00",
+  "source_commit": "f480949ae741a2a7f2664c7f65e9c2f992b03843",
+  "purpose": "Read the current quote-age policy with the already-bound quotes in one preflight SQL statement.",
+  "full_regression": {
+    "source_parent_commit": "f480949ae741a2a7f2664c7f65e9c2f992b03843",
+    "committed_source_verified": true,
+    "tests": 1953,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1314.828
+  },
+  "native_exits": {
+    "e1917-record-policy-target": 0,
+    "e1922-full-native": 0,
+    "e1922-full-controller": 0,
+    "e1923-framework": 0,
+    "e1945-api-build": 0,
+    "e1945-build-controller": 0,
+    "e1950-preparation": 0,
+    "e1950-apply": 0,
+    "e1950-controller": 0,
+    "e1950-gate-native": 0,
+    "e1950-gate-release": 0,
+    "e1935-natural-export": 0
+  },
+  "fixed_hermes_framework_log_sha256": "9d788696a698947749058b492672a57f29fc614e602dcb4a86eedfcc9e5a4493",
+  "fixed_framework_scenarios": [
+    {
+      "scenario": "timeout_cleanup"
+    },
+    {
+      "scenario": "reply_image",
+      "tool_count": 10
+    },
+    {
+      "scenario": "tool_unavailable",
+      "tool_count": 10
+    },
+    {
+      "scenario": "normal",
+      "tool_count": 10
+    },
+    {
+      "scenario": "adversarial",
+      "tool_count": 10
+    },
+    {
+      "scenario": "length",
+      "tool_count": 10
+    },
+    {
+      "scenario": "parallel",
+      "tool_count": 10
+    },
+    {
+      "scenario": "no_intent",
+      "tool_count": 10
+    },
+    {
+      "scenario": "provider_503"
+    },
+    {
+      "scenario": "line_conflict",
+      "tool_count": 10
+    },
+    {
+      "scenario": "normal",
+      "tool_count": 10
+    },
+    {
+      "scenario": "no_intent",
+      "tool_count": 10
+    },
+    {
+      "scenario": "provider_stall"
+    },
+    {
+      "scenario": "budget",
+      "tool_count": 10
+    }
+  ],
+  "api_image": "sha256:462a5ef608136b49509cd734302de25bcd806705a16950a7d5d941ba164004f7",
+  "actual_handoff_completed_at": "2026-11-09T00:31:40Z",
+  "actual_loaded_code": {
+    "actual_route_exact_source": true,
+    "current_policy_snapshot_loaded": true,
+    "live_order_capability_still_enabled": true
+  },
+  "rollout_checks": {
+    "only_api_image_recreated": true,
+    "six_other_local_and_four_remote_services_unchanged": true,
+    "model_governance_and_provider_configuration_unchanged": true,
+    "live_order_environment_permissions_and_resources_unchanged": true
+  },
+  "api_health_and_readiness": [
+    200,
+    200
+  ],
+  "post_cutover_telegram_readiness_attempts": [
+    {
+      "observed_at": "2026-11-09T00:30:30.767025+00:00",
+      "attempt": 1,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:34.152052+00:00",
+      "attempt": 2,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:37.409602+00:00",
+      "attempt": 3,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:40.667750+00:00",
+      "attempt": 4,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:44.052731+00:00",
+      "attempt": 5,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:47.489508+00:00",
+      "attempt": 6,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:50.901381+00:00",
+      "attempt": 7,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:54.159042+00:00",
+      "attempt": 8,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:30:57.785814+00:00",
+      "attempt": 9,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:31:01.043862+00:00",
+      "attempt": 10,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:31:04.301916+00:00",
+      "attempt": 11,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:31:07.737952+00:00",
+      "attempt": 12,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:31:11.122929+00:00",
+      "attempt": 13,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:31:14.380862+00:00",
+      "attempt": 14,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:31:17.639161+00:00",
+      "attempt": 15,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-09T00:31:20.896774+00:00",
+      "attempt": 16,
+      "read_only": true,
+      "http_status": 200,
+      "state": "connected",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 1
+    },
+    {
+      "observed_at": "2026-11-09T00:31:24.281016+00:00",
+      "attempt": 17,
+      "read_only": true,
+      "http_status": 200,
+      "state": "connected",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 2
+    }
+  ],
+  "initial_telegram_unavailable_observations_preserved": 15,
+  "live_order_capability_enabled_before_and_after": true,
+  "user_live_betting_permission_changed": false,
+  "executor_code_or_configuration_changed": false,
+  "funded_test_orders": 0,
+  "historical_backfill": false,
+  "post_api_natural_window": {
+    "id": "E1960",
+    "actual_origin": "2026-11-09T00:31:43.419514197Z",
+    "completed": false,
+    "semantic_acceptance": false
+  },
+  "stable_latency_gain_proven": false,
+  "three_second_acceptance": false
+}

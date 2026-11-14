@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-09",
+  "status": "isolated_verified_pending_production",
+  "scope": "owner-enabled profitable expert mode; evidence-preserving statistics reset",
+  "production_changed": false,
+  "real_orders_submitted": 0,
+  "profitability": {
+    "days": 30,
+    "unit_net": "strict Decimal > 0",
+    "effective_settled_signals": "> 0",
+    "effective_outcomes": ["win", "half_win", "loss", "half_loss"],
+    "owner_selection": "all currently eligible experts when owner saves profitable mode",
+    "existing_users": "manual; all prior amounts, limits and account consents preserved"
+  },
+  "migration": "030_profitable_expert_mode.sql",
+  "frozen_source_archive_sha256": "658a16a5e3969aaaaf7fd6434ed34922b798562f123b28a7b5666b7bdac83a81",
+  "owned_code_manifest_sha256": "ad9c7eb2e2c1b545f2dd837a5d5d3057126f412c571c3ccbaeedde68e64cb79e",
+  "backend": {
+    "image_id": "sha256:a8fc0cb5dbebed71df5688f33c3963a076151c7d41ca8e7625520b8ab7ffc234",
+    "command": "python -m unittest -v test_profitable_experts test_statistics_cycle_cli test_expert_statistics test_performance_statistics test_account_state test_result_ledger",
+    "tests": 101,
+    "failures": 0,
+    "errors": 0,
+    "exit_code": 0,
+    "oom_killed": false,
+    "seconds": 165.718,
+    "cpus": 0.25,
+    "memory_mib": 384
+  },
+  "browser": {
+    "image_id": "sha256:ece536b0cb81dd6dabfa43c57163750589f023219a28e7fc41e4b64e8b989a7c",
+    "command": "VISUAL_NETWORK_SUBNET=10.88.250.144/28 sh tests/browser/visual-check.sh",
+    "exit_code": 0,
+    "old_screens_unchanged": 14,
+    "new_viewport_widths": [1440, 390],
+    "new_control_changed_pixels": [0, 0],
+    "channel_threshold": 16,
+    "max_changed_ratio": 0.002,
+    "negative_colour_probe_exit_code": 1,
+    "negative_colour_probe_correctly_rejected": true,
+    "owner_confirmation_required": true,
+    "manual_rollback_verified": true,
+    "synthetic_api_fixtures": true,
+    "production_evidence": false,
+    "cpus": 0.25,
+    "memory_mib": 384
+  },
+  "reset_verified": [
+    "current <=0 and effective>0 experts only",
+    "all old effective settled signals excluded including outside 30 days",
+    "original signals, quote evidence, settlement ledger and orders preserved",
+    "old settlement correction cannot re-enter reset cycle",
+    "previous pending signal can settle into new cycle",
+    "changed preview rejected without partial writes",
+    "same-key sequential and concurrent replay produce one audited batch",
+    "revocation restores statistics without removing batch evidence",
+    "private preview manifest uses 0600 and cannot overwrite an existing manifest"
+  ],
+  "guards_verified": [
+    "dispatch, reservation, claim and send recheck dynamic qualification",
+    "disabled expert, source and trust mapping remain rejected",
+    "profit becoming nonpositive blocks claim or send",
+    "unknown submission remains reserved and is not resubmitted"
+  ]
+}

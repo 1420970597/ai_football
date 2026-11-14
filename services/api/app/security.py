@@ -5,8 +5,6 @@ import hashlib
 import hmac
 import os
 import secrets
-import struct
-import time
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -47,31 +45,6 @@ def new_token() -> str:
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-def totp_step(secret: str, submitted: str, now: int | None = None) -> int | None:
-    if len(submitted) != 6 or not submitted.isascii() or not submitted.isdigit() or not secret:
-        return None
-    try:
-        key = base64.b32decode(secret.upper() + "=" * (-len(secret) % 8), casefold=True)
-    except Exception:
-        return None
-    if len(key) < 10:
-        return None
-    step = int((time.time() if now is None else now) // 30)
-    for offset in (-1, 0, 1):
-        if step + offset < 0:
-            continue
-        digest = hmac.new(key, struct.pack(">Q", step + offset), hashlib.sha1).digest()
-        pos = digest[-1] & 0x0F
-        code = (struct.unpack(">I", digest[pos : pos + 4])[0] & 0x7FFFFFFF) % 1_000_000
-        if hmac.compare_digest(f"{code:06d}", submitted):
-            return step + offset
-    return None
-
-
-def totp_valid(secret: str, submitted: str, now: int | None = None) -> bool:
-    return totp_step(secret, submitted, now) is not None
 
 
 def encrypt_secret(key: bytes, value: str) -> str:

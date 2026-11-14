@@ -1,0 +1,266 @@
+{
+  "passed": true,
+  "source_commit": "19b0157265b9540f4c0d589dffbd6e678736e4d8",
+  "manual_scope": "all nine full final texts, intent/side/line and authoritative bound phases",
+  "cases": [
+    {
+      "bound_fixtures": [
+        "leyu:5593645"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 21935.61,
+      "completion_rounds": 1,
+      "case": "e1468",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "final_sha256": "a96bc5ba9350dfa731168825e1db72b60f7d7d0a85b48319440b396b1f7e0922",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5593645"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 10636.275,
+      "completion_rounds": 1,
+      "case": "e1469",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "final_sha256": "e4dbf0dd5f38d8066c7af835dd370dcb92fa07ac68fab700dc44aca74c24b2f9",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5593645"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 19768.359,
+      "completion_rounds": 1,
+      "case": "e1470",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "final_sha256": "cf5078f9428317d8f575aebce3e0f5f7a4c820241f285be1383c8b50c7c9e35e",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 23355.438,
+      "completion_rounds": 1,
+      "case": "e1471",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "final_sha256": "75b95f44af8f3109d4aaf1edf90a7d9a3249a406561cc271e8505cc1ddfc445c",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 24235.012,
+      "completion_rounds": 2,
+      "case": "e1472",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "final_sha256": "8c691f11bd77de89102413be24dc760d087a11b0b7bf6ea0d2910cf08d19de14",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 32194.087,
+      "completion_rounds": 1,
+      "case": "e1473",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "final_sha256": "e4c8551b71b53f0ab06bae419802f38f259c10399f53216cab9d2ecdbe759841",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 25886.24,
+      "completion_rounds": 1,
+      "case": "e1474",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "final_sha256": "7e1efafcaf8b0bf32379bf9781f6908f26c956ea04b261d27abe8ac97256bc0d",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 20975.683,
+      "completion_rounds": 1,
+      "case": "e1475",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "final_sha256": "e6a05f98581c4692a02c2c158d02478166ba0ef517f534241e7495c6aecf4787",
+      "intent_and_phase_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 14491.34,
+      "completion_rounds": 1,
+      "case": "e1476",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "final_sha256": "7237ef729d27ac0e2718b72fe01f595d1ec453442a0abeac8ee2dc9bd043712d",
+      "intent_and_phase_manually_checked": true
+    }
+  ],
+  "only_identity_intent_and_explanation_evidence": true,
+  "no_quote_or_production_recommendation_claim": true,
+  "three_second_target_passed": false,
+  "provider_configuration_changed": false,
+  "production_writes": 0,
+  "read_only_phase_queries": [
+    {
+      "case": "e1468",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "explicit_claim_count": 0,
+      "named_claim_count": 1,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1469",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "explicit_claim_count": 0,
+      "named_claim_count": 1,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1470",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "explicit_claim_count": 0,
+      "named_claim_count": 0,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1471",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "explicit_claim_count": 2,
+      "named_claim_count": 0,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1472",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "explicit_claim_count": 1,
+      "named_claim_count": 0,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1473",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "explicit_claim_count": 0,
+      "named_claim_count": 2,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1474",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "explicit_claim_count": 1,
+      "named_claim_count": 0,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1475",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "explicit_claim_count": 0,
+      "named_claim_count": 1,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    },
+    {
+      "case": "e1476",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "explicit_claim_count": 1,
+      "named_claim_count": 0,
+      "conflicts": [],
+      "line_conflicts": [],
+      "read_only_actual_completion_query": true
+    }
+  ]
+}

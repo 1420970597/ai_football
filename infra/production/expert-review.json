@@ -1,0 +1,58 @@
+{
+  "services": {
+    "api": {
+      "image": "sha256:4f68b3a80cbad7d96aa1b761214f8ded8d25e24ba610f46c0d24797d383b8136"
+    },
+    "review-worker": {
+      "image": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08"
+    },
+    "local-mcp-api": {
+      "image": "sha256:6291c59678dc7c9f34b4b62834f62ee13b5adeeb32c726c261d35255b35d8435"
+    },
+    "collector": {
+      "image": "sha256:1c21f2cec54d75b3812998ced074bea1af4ffe54a3f292a8769c8f587f3253ff",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/root/ai_football/.runtime/leyu-app-discovery.json",
+          "target": "/run/secrets/leyu-app-discovery.json",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "/root/ai_football/.runtime/minio-20261111/tls/ca.crt",
+          "target": "/run/secrets/s3-ca.crt",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "/root/ai_football/.runtime/leyu-app-signing.json",
+          "target": "/run/secrets/leyu-app-signing.json",
+          "read_only": true
+        }
+      ]
+    },
+    "hermes": {
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/root/ai_football/.runtime/expert-review-incident-20261113/release/hermes/config.yaml",
+          "target": "/opt/data/.hermes/config.yaml",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "/root/ai_football/.runtime/expert-review-incident-20261113/release/hermes/SKILL.md",
+          "target": "/workspace/skills/expert-review/SKILL.md",
+          "read_only": true
+        }
+      ]
+    },
+    "hermes-mcp": {
+      "image": "sha256:44bd067d9a41bcf72b2a5fc71cde600bc78377d22af687b1de74400a522bf800"
+    },
+    "web": {
+      "image": "sha256:098d1ebf2edf1728becaa08e8293f4d88014c1f0570ee400f1245908194914dc"
+    }
+  }
+}

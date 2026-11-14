@@ -1,0 +1,76 @@
+{
+  "source_commit": "912d5f2c38bd31d179b3f558de198e03d576510e",
+  "image_id": "sha256:5c5fe0e4c177d67a3d36cac0d325e60cd5f123da2d9ca1e3f4556209e46c20f8",
+  "deployed_at": "2026-11-08T11:35:35Z",
+  "native_exits": {
+    "e992-web-build": 0,
+    "e992-web-apply": 0,
+    "e992-web-controller": 0,
+    "e992-browser-live-native": 0
+  },
+  "served_app_sha256": "6539835fabda1d9ce4a9298510dca3784501c8930aed34910175a0a94ee01b6f",
+  "rollout": {
+    "only_web_recreated": true,
+    "other_six_local_and_four_remote_unchanged": true,
+    "configuration_budgets_preserved": true
+  },
+  "real_deployed_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "status": "passed",
+        "message_id": "ea272be8-8840-4386-aff7-038cc43ce38d",
+        "attempt_id": "5c99ae59-7356-41a9-a958-b81f749ed7ba",
+        "accepted_count": 1,
+        "fixture_id": "leyu:5593321",
+        "signal_id": "89e465ef-795b-4580-b31b-820f665804f5",
+        "period": "first_half",
+        "kind": "total",
+        "line": 1.5,
+        "selection": "over",
+        "system_price": 1.67,
+        "original_image_sha256": "70373f89e94da7dd57b7259f28820f6a2341e6813970e55885e17a7da64f158f",
+        "original_authorized": true,
+        "close_reopen": true,
+        "original_size": {
+          "width": 1179,
+          "height": 2562,
+          "naturalWidth": 1177,
+          "naturalHeight": 2560
+        },
+        "mouse_and_keyboard_zoom": true,
+        "local_scroll": true
+      },
+      {
+        "width": 390,
+        "status": "passed",
+        "message_id": "ea272be8-8840-4386-aff7-038cc43ce38d",
+        "attempt_id": "5c99ae59-7356-41a9-a958-b81f749ed7ba",
+        "accepted_count": 1,
+        "fixture_id": "leyu:5593321",
+        "signal_id": "89e465ef-795b-4580-b31b-820f665804f5",
+        "period": "first_half",
+        "kind": "total",
+        "line": 1.5,
+        "selection": "over",
+        "system_price": 1.67,
+        "original_image_sha256": "70373f89e94da7dd57b7259f28820f6a2341e6813970e55885e17a7da64f158f",
+        "original_authorized": true,
+        "close_reopen": true,
+        "original_size": {
+          "width": 1179,
+          "height": 2562,
+          "naturalWidth": 1177,
+          "naturalHeight": 2560
+        },
+        "mouse_and_keyboard_zoom": true,
+        "local_scroll": true
+      }
+    ],
+    "production_writes": false,
+    "response_injection": false
+  },
+  "candidate_full_browser_cases": 45,
+  "screenshots_visually_reviewed": true,
+  "gateway_or_executor_changes": false
+}

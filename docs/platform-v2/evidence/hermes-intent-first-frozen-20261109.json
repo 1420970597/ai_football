@@ -1,0 +1,137 @@
+{
+  "status": "frozen_semantic_regression_passed_performance_pending",
+  "model": "deepseek-v4.1-flash",
+  "hermes_version": "0.22.5",
+  "provider_configuration_changed": false,
+  "system_prompt_changed": false,
+  "scope": "loss feedback interpretation and redundant trailing skill-loading instruction",
+  "cases": [
+    {
+      "case": 0,
+      "actual_original_text": true,
+      "expected_new_intent": false,
+      "source_posted_at_unchanged": true,
+      "passed": true,
+      "tool_names": [],
+      "business_tools": 0,
+      "image_count": 1,
+      "elapsed_ms": 14184.076,
+      "production_writes": 0,
+      "funded_test_orders": 0,
+      "signal_count": 0,
+      "order_count": 0,
+      "source_result_sha256": "96b6b84094839357fc5933dd7bbd8ea6c3d94e4881ff859c9a70d8e7528eb746"
+    },
+    {
+      "case": 1,
+      "actual_original_text": true,
+      "expected_new_intent": false,
+      "source_posted_at_unchanged": true,
+      "passed": true,
+      "tool_names": [],
+      "business_tools": 0,
+      "image_count": 1,
+      "elapsed_ms": 6917.179,
+      "production_writes": 0,
+      "funded_test_orders": 0,
+      "signal_count": 0,
+      "order_count": 0,
+      "source_result_sha256": "d2c3d1ce485bbd70eba886f240595846469e168e97051f4823cc3441deccf642"
+    },
+    {
+      "case": 2,
+      "actual_original_text": true,
+      "expected_new_intent": false,
+      "source_posted_at_unchanged": true,
+      "passed": true,
+      "tool_names": [],
+      "business_tools": 0,
+      "image_count": 1,
+      "elapsed_ms": 10378.143,
+      "production_writes": 0,
+      "funded_test_orders": 0,
+      "signal_count": 0,
+      "order_count": 0,
+      "source_result_sha256": "0d2d2ba9de62c66dd68d86384c3ba37530accd73541c162083490d85340307eb"
+    },
+    {
+      "case": 3,
+      "actual_original_text": true,
+      "expected_new_intent": true,
+      "source_posted_at_unchanged": true,
+      "passed": true,
+      "tool_names": [
+        "mcp__football__search_matches"
+      ],
+      "business_tools": 1,
+      "image_count": 1,
+      "elapsed_ms": 12478.775,
+      "production_writes": 0,
+      "funded_test_orders": 0,
+      "signal_count": 0,
+      "order_count": 0,
+      "source_result_sha256": "255bb8719b2dc5b1c0b9644b044cb0ba77ddc53ee09c6c3e62673a85f7bd12ae"
+    },
+    {
+      "case": 4,
+      "actual_original_text": false,
+      "expected_new_intent": true,
+      "source_posted_at_unchanged": true,
+      "passed": true,
+      "tool_names": [
+        "mcp__football__search_matches",
+        "mcp__football_parallel__list_match_markets"
+      ],
+      "business_tools": 2,
+      "image_count": 2,
+      "elapsed_ms": 39287.087,
+      "production_writes": 0,
+      "funded_test_orders": 0,
+      "signal_count": 0,
+      "order_count": 0,
+      "source_result_sha256": "8ca60a8e530c82ffd6e3379e1b8bb32921b3b51bdfe304ca1f9677f0e3ef2dce"
+    },
+    {
+      "case": 5,
+      "actual_original_text": false,
+      "expected_new_intent": true,
+      "source_posted_at_unchanged": true,
+      "passed": true,
+      "tool_names": [
+        "mcp__football__search_matches",
+        "mcp__football__list_match_markets"
+      ],
+      "business_tools": 2,
+      "image_count": 2,
+      "elapsed_ms": 125976.389,
+      "production_writes": 0,
+      "funded_test_orders": 0,
+      "signal_count": 0,
+      "order_count": 0,
+      "source_result_sha256": "a2793421cdb4083e65c6dc0533b3706cf5348c9894ecf23283de0d6a8232ffe2"
+    }
+  ],
+  "manual_dispositions": [
+    "three repeats of actual loss-feedback text and original image: no new intent and no business tools",
+    "empty text with original selected image: unique finished fixture identified, no trade signal",
+    "constructed full-time mixed message: only new fixture and exact over 2.75 checked; complete zero quote inventory retained",
+    "constructed first-half mixed message: only new fixture and exact over 0.75 checked; complete zero quote inventory retained"
+  ],
+  "related_tests": {
+    "tests": 39,
+    "seconds": 19.726,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "native_exit": 0
+  },
+  "failures_retained": [
+    "earlier untrimmed-input positive replay timed out after 210 seconds",
+    "initial target command used an absent module and failed",
+    "target run without isolated PostgreSQL skipped nine tests and was not accepted"
+  ],
+  "small_sample_only": true,
+  "ten_second_accepted_order_proven": false,
+  "full_frozen_suite_and_framework_pending": true,
+  "production_test_orders": 0
+}

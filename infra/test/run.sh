@@ -16,6 +16,7 @@ trap cleanup EXIT INT TERM
 mkdir -p "$test_output"
 docker build -f infra/test/Dockerfile -t ai-football-verifier:v2.0.0-dev .
 docker network create --internal "$test_network" >/dev/null
+# Keep the original isolated budget: .5 CPU PostgreSQL plus .75 CPU runner.
 docker run -d --name "$test_database" --network "$test_network" \
   --network-alias ai-football-v2-pgverify --network-alias ai-football-v2-pgtest \
   --cpus=.5 --memory=384m --tmpfs /var/lib/postgresql/data:rw,size=256m \

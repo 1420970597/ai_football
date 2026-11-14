@@ -1,0 +1,186 @@
+{
+  "isolated_only": true,
+  "application_image": "sha256:c4559ba15c28cc3f03623816c4715fd6824821e1844b77727fe6fec3a35c229b",
+  "parallel": 4,
+  "baseline_cpus": 0.2,
+  "candidate_cpus": 0.4,
+  "memory_mib": 256,
+  "samples_per_group": 48,
+  "same_exact_identity_all_96": true,
+  "rounds": [
+    {
+      "run": "e2766",
+      "label": "baseline_a",
+      "count": 16,
+      "summary": {
+        "search_ms": {
+          "median": 88.221,
+          "p95": 142.601,
+          "max": 142.601
+        },
+        "market_ms": {
+          "median": 197.294,
+          "p95": 250.807,
+          "max": 250.807
+        },
+        "combined_ms": {
+          "median": 289.125,
+          "p95": 312.759,
+          "max": 312.759
+        }
+      }
+    },
+    {
+      "run": "e2766",
+      "label": "candidate",
+      "count": 16,
+      "summary": {
+        "search_ms": {
+          "median": 24.6,
+          "p95": 122.164,
+          "max": 122.164
+        },
+        "market_ms": {
+          "median": 97.071,
+          "p95": 102.162,
+          "max": 102.162
+        },
+        "combined_ms": {
+          "median": 124.504,
+          "p95": 210.417,
+          "max": 210.417
+        }
+      }
+    },
+    {
+      "run": "e2766",
+      "label": "baseline_b",
+      "count": 16,
+      "summary": {
+        "search_ms": {
+          "median": 93.419,
+          "p95": 188.31,
+          "max": 188.31
+        },
+        "market_ms": {
+          "median": 187.528,
+          "p95": 196.702,
+          "max": 196.702
+        },
+        "combined_ms": {
+          "median": 208.549,
+          "p95": 292.287,
+          "max": 292.287
+        }
+      }
+    },
+    {
+      "run": "e2769",
+      "label": "candidate_a",
+      "count": 16,
+      "summary": {
+        "search_ms": {
+          "median": 18.537,
+          "p95": 234.306,
+          "max": 234.306
+        },
+        "market_ms": {
+          "median": 82.505,
+          "p95": 106.638,
+          "max": 106.638
+        },
+        "combined_ms": {
+          "median": 99.776,
+          "p95": 326.947,
+          "max": 326.947
+        }
+      }
+    },
+    {
+      "run": "e2769",
+      "label": "baseline",
+      "count": 16,
+      "summary": {
+        "search_ms": {
+          "median": 93.275,
+          "p95": 115.746,
+          "max": 115.746
+        },
+        "market_ms": {
+          "median": 190.451,
+          "p95": 199.78,
+          "max": 199.78
+        },
+        "combined_ms": {
+          "median": 254.493,
+          "p95": 293.477,
+          "max": 293.477
+        }
+      }
+    },
+    {
+      "run": "e2769",
+      "label": "candidate_b",
+      "count": 16,
+      "summary": {
+        "search_ms": {
+          "median": 56.754,
+          "p95": 220.808,
+          "max": 220.808
+        },
+        "market_ms": {
+          "median": 92.649,
+          "p95": 108.955,
+          "max": 108.955
+        },
+        "combined_ms": {
+          "median": 162.417,
+          "p95": 289.531,
+          "max": 289.531
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "baseline": {
+      "search_ms": {
+        "median_ms": 91.188,
+        "p95_nearest_rank_ms": 115.746,
+        "max_ms": 188.31
+      },
+      "market_ms": {
+        "median_ms": 191.769,
+        "p95_nearest_rank_ms": 248.037,
+        "max_ms": 250.807
+      },
+      "combined_ms": {
+        "median_ms": 283.934,
+        "p95_nearest_rank_ms": 293.477,
+        "max_ms": 312.759
+      }
+    },
+    "candidate": {
+      "search_ms": {
+        "median_ms": 24.6,
+        "p95_nearest_rank_ms": 122.164,
+        "max_ms": 234.306
+      },
+      "market_ms": {
+        "median_ms": 89.146,
+        "p95_nearest_rank_ms": 105.887,
+        "max_ms": 108.955
+      },
+      "combined_ms": {
+        "median_ms": 112.625,
+        "p95_nearest_rank_ms": 219.349,
+        "max_ms": 326.947
+      }
+    }
+  },
+  "tail_variation_remains": true,
+  "test_cpu_restored": true,
+  "production_changes": 0,
+  "funded_tests": 0,
+  "model_requests": 0,
+  "source_requests": 0
+}

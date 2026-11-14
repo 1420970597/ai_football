@@ -1,0 +1,82 @@
+{
+  "observed_at": "2026-11-08T18:35:51.609689+00:00",
+  "read_only": true,
+  "production_writes": 0,
+  "source_count": 6,
+  "sources": [
+    {
+      "configured_links": 0,
+      "trusted_enabled": 0,
+      "directory_state": "unavailable",
+      "directory_reason": "member_enumeration_restricted",
+      "admin_count": 0,
+      "last_attempt_age_seconds": 263,
+      "last_success_age_seconds": null,
+      "saved_admin_nickname_mismatches": 0,
+      "trusted_profile_last_seen_age_seconds": null,
+      "source_alias": "source_1"
+    },
+    {
+      "configured_links": 1,
+      "trusted_enabled": 1,
+      "directory_state": "unavailable",
+      "directory_reason": "member_enumeration_restricted",
+      "admin_count": 0,
+      "last_attempt_age_seconds": 263,
+      "last_success_age_seconds": null,
+      "saved_admin_nickname_mismatches": 0,
+      "trusted_profile_last_seen_age_seconds": 263,
+      "source_alias": "source_2"
+    },
+    {
+      "configured_links": 5,
+      "trusted_enabled": 2,
+      "directory_state": "ready",
+      "directory_reason": null,
+      "admin_count": 7,
+      "last_attempt_age_seconds": 263,
+      "last_success_age_seconds": 263,
+      "saved_admin_nickname_mismatches": 0,
+      "trusted_profile_last_seen_age_seconds": 263,
+      "source_alias": "source_3"
+    },
+    {
+      "configured_links": 0,
+      "trusted_enabled": 0,
+      "directory_state": "ready",
+      "directory_reason": null,
+      "admin_count": 11,
+      "last_attempt_age_seconds": 256,
+      "last_success_age_seconds": 256,
+      "saved_admin_nickname_mismatches": 0,
+      "trusted_profile_last_seen_age_seconds": null,
+      "source_alias": "source_4"
+    },
+    {
+      "configured_links": 3,
+      "trusted_enabled": 3,
+      "directory_state": "ready",
+      "directory_reason": null,
+      "admin_count": 7,
+      "last_attempt_age_seconds": 248,
+      "last_success_age_seconds": 248,
+      "saved_admin_nickname_mismatches": 0,
+      "trusted_profile_last_seen_age_seconds": 248,
+      "source_alias": "source_5"
+    },
+    {
+      "configured_links": 1,
+      "trusted_enabled": 1,
+      "directory_state": "unavailable",
+      "directory_reason": "member_enumeration_restricted",
+      "admin_count": 0,
+      "last_attempt_age_seconds": 305,
+      "last_success_age_seconds": null,
+      "saved_admin_nickname_mismatches": 0,
+      "trusted_profile_last_seen_age_seconds": 305,
+      "source_alias": "source_6"
+    }
+  ],
+  "identities_exported": false,
+  "trust_changed": false
+}

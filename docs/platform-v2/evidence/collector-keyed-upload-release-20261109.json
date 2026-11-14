@@ -1,0 +1,47 @@
+{
+  "released_at": "2026-11-09T01:24:30Z",
+  "source_commit": "7ee699f8333f832f5f9c6eab1749da719397ea4e",
+  "image_id": "sha256:3b393e4c02dc346e38dd537d246d1d1a179d0c60d04fa1453feb371b502883f2",
+  "native_exits": {
+    "e2001-transfer": 0,
+    "e2008-resources-readonly": 0,
+    "e2009-remote-precheck": 0,
+    "e2009-collector-apply": 0,
+    "e2009-controller": 0
+  },
+  "prior_precheck_failures_preserved": {
+    "E2001": 1,
+    "E2007": 1
+  },
+  "prior_failures_switched_services": false,
+  "root_cause": "historical 0.3 CPU assumption differed from actual 0.5 CPU runtime",
+  "actual_before_and_after_resources": {
+    "cpu": 0.5,
+    "memory_bytes": 536870912,
+    "memory_swap_bytes": 1073741824,
+    "pids_limit": 128
+  },
+  "other_three_remote_services_unchanged": true,
+  "all_seven_local_services_unchanged": true,
+  "actual_environment_mounts_security_and_dependencies_preserved": true,
+  "retiring_process_exit": 0,
+  "readiness_observations_before": 2,
+  "readiness_observations_after": 7,
+  "nonhealthy_after_switch_observations": 5,
+  "two_consecutive_healthy_samples_before_and_after": true,
+  "zero_interruption_claim": false,
+  "source_count_after": 6,
+  "source_errors_after": 0,
+  "user_live_execution_configuration": {
+    "executor": "true",
+    "api-bridge": "true"
+  },
+  "user_live_configuration_forced_on_or_off": false,
+  "shared_model_gateway_or_governance_changed": false,
+  "funded_test_orders": 0,
+  "historical_backfill": false,
+  "postrelease_window_actual_container_start": "2026-11-09T01:24:35.556292613Z",
+  "postrelease_30_minute_acceptance_complete": false,
+  "three_second_end_to_end_accepted": false,
+  "private_apply_artifact_sha256": "67344d5fcd33c0d11ff79322fc210afb5c5e9aeb41efcca8ef25df8575e48c35"
+}

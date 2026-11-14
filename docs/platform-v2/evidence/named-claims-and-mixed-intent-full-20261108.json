@@ -1,0 +1,10 @@
+{
+  "source_parent_commit": "8352e2dc4863b75c92e47280e097d5723993525c",
+  "committed_source_verified": true,
+  "tests": 1840,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 1270.969,
+  "scope": "older 8352 frozen source only; does not qualify subsequent ambiguity and Belgian name changes"
+}

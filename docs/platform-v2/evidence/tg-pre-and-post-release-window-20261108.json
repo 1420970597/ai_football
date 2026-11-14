@@ -1,0 +1,140 @@
+{
+  "window_start": "2026-11-08T13:30:14.396860+00:00",
+  "window_last_database_sample": "2026-11-08T14:00:15.221848+00:00",
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1802.7,
+    "health_all_200": false,
+    "telegram_all_healthy": false,
+    "baseline_live_event_counters": {
+      "received": 81271,
+      "staged": 4429,
+      "deferred": 0,
+      "unmapped_source": 76842
+    },
+    "final_live_event_counters": {
+      "received": 83121,
+      "staged": 4514,
+      "deferred": 0,
+      "unmapped_source": 78607
+    },
+    "live_event_delta": {
+      "received": 1850,
+      "staged": 85,
+      "deferred": 0,
+      "unmapped_source": 1765
+    }
+  },
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [
+    {
+      "observed_at": "2026-11-08T13:54:11.023880+00:00",
+      "health": {
+        "healthz": null,
+        "readyz": null
+      }
+    }
+  ],
+  "telegram_degraded_samples": [],
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 163,
+    "published_posts": 6,
+    "older_posts_revised": 154,
+    "published_ready": 6,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 6,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 6,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 9,
+    "avg_ms": "4198.6",
+    "p95_ms": "8457.5",
+    "within_3s": 3,
+    "older_backlog_versions_received": 154
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 8
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 8
+    }
+  ],
+  "market_samples": 61,
+  "market_degraded_samples": [],
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T13:59:22.545623+00:00",
+    "last_poll_elapsed_ms": 33007.0,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 31737,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 28.4,
+    "oldest_quote_age_seconds": 326206.4,
+    "failed_batches": 0
+  },
+  "includes_successful_api_handoff": false,
+  "whole_database_freshness_claim": false,
+  "schema_version": 1,
+  "recorded_at_utc": "2026-11-08T14:18:00Z",
+  "documented_release_overlap": {
+    "task": "E1045",
+    "completed_utc": "2026-11-08T13:56:39Z",
+    "observed_health_interruption_utc": "2026-11-08T13:54:11.023880Z",
+    "final_health_and_telegram_recovered": true,
+    "zero_interruption_claim": false
+  },
+  "semantic_acceptance_pending": true,
+  "latency_3s_passed": false,
+  "manual_window_classification": {
+    "posts": 6,
+    "text_reviewed": 6,
+    "images_reviewed": 1,
+    "posts_without_media": 5,
+    "non_recommendation_posts": 6,
+    "original_image_sha256": "db83032dcffc8c4a488b56c3bf25bdc7a3f98aed98b019704c9303c7d6b6193c",
+    "image_classification": "finished score feedback; no new recommendation instruction",
+    "natural_positive_recommendation_sample_after_release": false
+  }
+}

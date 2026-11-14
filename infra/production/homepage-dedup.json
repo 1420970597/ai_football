@@ -1,0 +1,56 @@
+{
+  "services": {
+    "api": {
+      "image": "sha256:4f68b3a80cbad7d96aa1b761214f8ded8d25e24ba610f46c0d24797d383b8136",
+      "command": [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "2",
+        "--proxy-headers",
+        "--no-access-log"
+      ],
+      "entrypoint": [],
+      "mem_limit": 805306368,
+      "memswap_limit": 1610612736,
+      "cpus": 0.4
+    },
+    "local-mcp-api": {
+      "image": "sha256:6291c59678dc7c9f34b4b62834f62ee13b5adeeb32c726c261d35255b35d8435",
+      "command": [
+        "uvicorn",
+        "app.mcp_app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "1",
+        "--no-access-log"
+      ],
+      "entrypoint": [],
+      "mem_limit": 268435456,
+      "memswap_limit": 536870912,
+      "pids_limit": 64,
+      "cpus": 0.4
+    },
+    "web": {
+      "image": "sha256:098d1ebf2edf1728becaa08e8293f4d88014c1f0570ee400f1245908194914dc",
+      "command": [
+        "nginx",
+        "-g",
+        "daemon off;"
+      ],
+      "entrypoint": [
+        "/docker-entrypoint.sh"
+      ],
+      "mem_limit": 134217728,
+      "memswap_limit": 268435456,
+      "cpus": 0.1
+    }
+  }
+}
