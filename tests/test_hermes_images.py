@@ -91,6 +91,22 @@ class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('保留身份未核验',text)
         self.assertIn('不能把候选全名',text)
 
+    async def test_visual_outcome_marks_require_actual_feedback_evidence_and_keep_new_items(self):
+        message=self.message([{'object_key':'current.png','mime_type':'image/png'}])
+        message['raw_text']='回顾上图，下一场全场大2.5继续买'
+        with patch.object(blobstore,'read_image',AsyncMock(return_value=PNG)):
+            parts=await hermes_client._content_parts(message,'review','attempt')
+        text=parts[0]['text']
+        self.assertIn('若明确标注已出赛果',text)
+        self.assertIn('单纯红色、高亮或表格线不证明赛果',text)
+        self.assertIn('只核验新增项',text)
+        self.assertIn(message['raw_text'],text)
+        self.assertEqual('image_url',parts[1]['type'])
+
+    async def test_text_only_input_does_not_claim_visual_feedback(self):
+        parts=await hermes_client._content_parts(self.message([]),'review','attempt')
+        self.assertNotIn('逐场手绘勾叉',parts[0]['text'])
+
     async def test_album_images_prepare_concurrently_with_a_bounded_reader_pool(self):
         active = peak = 0
 
