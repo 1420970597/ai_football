@@ -4,6 +4,8 @@ from __future__ import annotations
 from .team_matching import normalize_team_name
 
 _FOOTBALL_ALIASES = {
+    '葡u23': '葡萄牙联赛U23',
+    '葡萄牙u23联赛': '葡萄牙联赛U23',
     '印度甲': '印度甲级联赛',
     '拉脱超降': '拉脱维亚超级联赛 - 附加赛',
     '澳女联': '澳大利亚女子甲级联赛',

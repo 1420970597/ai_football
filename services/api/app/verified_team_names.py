@@ -5,8 +5,18 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.6'
+REGISTRY_VERSION = '2026-11-14.7'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'葡萄牙联赛U23',
+        'names':('法伦斯U23','法伦斯 U23','法鲁人U23'),
+        'reference':'7m:649044+scfarense:sub23+zhwiki:95093528+leyu:57869:20261114',
+    },
+    {
+        'sport':'football','competition':'葡萄牙联赛U23',
+        'names':('葡萄牙体育U23','葡萄牙体育 U23','里斯本竞技U23'),
+        'reference':'7m:453008+titan:39834+sporting:sub23+leyu:23267:20261114',
+    },
     {
         'sport':'football','competition':'印度甲级联赛',
         'names':('班加鲁鲁联','孟加拉鲁联合会','班加罗尔联合'),
