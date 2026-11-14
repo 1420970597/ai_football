@@ -37,7 +37,7 @@
         "REVIEW_EXPERT_CONCURRENCY_FLOOR": "2",
         "REVIEW_HISTORICAL_CONCURRENCY": "0"
       },
-      "image": "sha256:5074212b3e284d46aab2cdb427b0ab69deca84af39db608aeb8ef0a5e14a7a34",
+      "image": "sha256:5e7a898defca66b69c396b468dbfff78740b883c2b2d03eea70d1147209db548",
       "command": [
         "python",
         "-m",
