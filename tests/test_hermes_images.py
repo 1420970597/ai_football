@@ -84,6 +84,13 @@ class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(PNG, base64.b64decode(parts[1]['image_url']['url'].split(',',1)[1]))
         self.assertEqual('high', parts[1]['image_url']['detail'])
 
+    async def test_retry_guidance_keeps_pair_identity_and_never_invents_alias(self):
+        parts=await hermes_client._content_parts(self.message([]),'review','attempt')
+        text=parts[0]['text']
+        self.assertIn('仍同时传原文team_a/team_b',text)
+        self.assertIn('保留身份未核验',text)
+        self.assertIn('不能把候选全名',text)
+
     async def test_album_images_prepare_concurrently_with_a_bounded_reader_pool(self):
         active = peak = 0
 

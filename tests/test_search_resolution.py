@@ -42,6 +42,8 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_spaced_age_group_query_recalls_compact_provider_name_without_widening_identity(self):
         # 生产样本：来源写“雪兰莪 U20”，平台存“雪兰莪U20”；修复前同一场完整检索为零候选。
         fixture = await self.fixture(home_team='雪兰莪U20', away_team='柔佛达鲁塔克欣C队U20')
+        await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',
+            self.message,'雪兰莪 U20 VS 柔佛达鲁塔克欣C队 U20 全场大2.5')
         await self.fixture(2, home_team='雪兰莪', away_team='柔佛达鲁塔克欣')
         response = await self.post('search_matches', team_query='雪兰莪 U20')
         self.assertEqual(200, response.status_code, response.text)
@@ -109,7 +111,7 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         await self.resolve(response.json()['search_key'])
         self.assertEqual(1, await self.bindings())
 
-    async def test_explicit_resolution_uses_five_remote_statements_and_replay_is_exact(self):
+    async def test_explicit_resolution_keeps_source_guard_and_exact_replay(self):
         fixture = await self.fixture()
         search = (await self.post('search_matches', team_query='Alpha')).json()
         counted = evidence_support._CountingPool(self.pool)
@@ -117,7 +119,7 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
             response = await self.post('resolve_match', search_key=search['search_key'],
                                        team_a='Alpha1', team_b='Beta1')
         self.assertEqual(200, response.status_code, response.text)
-        self.assertEqual(5, counted.commands)
+        self.assertEqual(6, counted.commands) # Includes the independent original-source squad guard.
         result = response.json()
         self.assertEqual(fixture, result['fixture']['id'])
         self.assertEqual(result, (await self.replay('mcp_resolve_match'))[1])
