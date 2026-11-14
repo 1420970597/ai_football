@@ -80,3 +80,6 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
                        'source_period_unknown时不重试读盘', '不去掉原期间、方向或线值反复刷新'):
             self.assertIn(phrase, skill)
         self.assertNotIn('仅total传原样market_query', skill)
+        self.assertIn('单场或多场完整total/handicap/team_total必须首查直接review_match_batch',skill)
+        self.assertIn('图片推荐也适用，只有1项同样使用',skill)
+        self.assertIn('首查review_match_batch已完整处理的对阵不再使用本节手动查询',skill)
