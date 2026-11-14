@@ -841,6 +841,23 @@ class TelegramCollector:
                     head_kind=type(head).__name__, head_action=type(getattr(head, 'action', None)).__name__,
                     head_has_text=bool(getattr(head, 'message', None)), head_has_media=bool(getattr(head, 'media', None)))
             page_detected_at = datetime.now(timezone.utc).isoformat()
+            # Observe before any album I/O; batching must not grant a new
+            # detection deadline after a slow Telegram response.
+            album_heads = {}
+            for message in members:
+                if _utc(message.date) < cutoff:
+                    break
+                if _trusted_message_author(chat_id, source, message) is not None:
+                    self._remember_detection(chat_id, [message], page_detected_at)
+                    grouped_id = getattr(message, 'grouped_id', None)
+                    cached = albums.get(grouped_id)
+                    if grouped_id and (cached is None or cached[1].get(message.id) != _message_revision_evidence(message)):
+                        album_heads.setdefault(grouped_id, message)
+            if len(album_heads) > 1:
+                phase_counts['album_expansions'] += len(album_heads)
+                expanded = await timed('album_expand', self._expand_page_albums(entity, album_heads))
+                for grouped_id, group in expanded.items():
+                    albums[grouped_id] = (group, {m.id: _message_revision_evidence(m) for m in group})
             lookup = getattr(self.backend, 'event_receipts', None)
             known = None
             last = cursor
@@ -1065,6 +1082,22 @@ class TelegramCollector:
                 raise
             return 'claim_changed'
         return None
+
+    async def _expand_page_albums(self, entity, heads):
+        """Use the same complete neighbourhoods, at most 100 IDs per RPC."""
+        identifiers = sorted({identifier for message in heads.values()
+            for identifier in range(max(1, int(message.id)-20), int(message.id)+21)})
+        groups = {grouped_id: {} for grouped_id in heads}
+        for offset in range(0, len(identifiers), 100):
+            candidates = await self.client.get_messages(entity, ids=identifiers[offset:offset+100])
+            for item in candidates:
+                grouped_id = getattr(item, 'grouped_id', None) if item else None
+                if grouped_id in groups:
+                    groups[grouped_id][item.id] = item
+        for grouped_id, message in heads.items():
+            groups[grouped_id].setdefault(message.id, message)
+        return {grouped_id: sorted(group.values(), key=lambda item: item.id)
+                for grouped_id, group in groups.items()}
 
     async def _expand_album(self, message, entity):
         grouped_id = getattr(message, "grouped_id", None)

@@ -32,7 +32,7 @@
       "cpus": 0.5
     },
     "review-worker": {
-      "image": "sha256:2d30ed45aadc25428490fb8865fc019dbdc5a44f4ce07c5884be4cd1d45f6abb",
+      "image": "sha256:29ec9a700964d49afdff39d1360f2ad81822a9c8e666ee0df39dab0ec063cb65",
       "command": [
         "python",
         "-m",
@@ -93,6 +93,6 @@
     "required_nonempty_contiguous_windows": 3,
     "review_deadline_seconds": 20,
     "acceptance_state": "in_progress",
-    "source_revision": "40927692"
+    "source_revision": "e52325a1"
   }
 }
