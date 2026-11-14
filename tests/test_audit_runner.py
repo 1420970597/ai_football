@@ -45,3 +45,23 @@ class AuditRunnerTests(unittest.TestCase):
             value=json.loads(prepare_audio(path.parents[1],raw))
         self.assertEqual('audio_uncertain',value['audio_audits'][0]['state'])
         run.assert_not_called()
+
+    def test_audio_container_receives_complete_original_via_stdin(self):
+        import base64
+        import hashlib
+        import tempfile
+        body=b'OggSbounded-original'
+        media=dict(state='ready',mime_type='audio/ogg',sha256=hashlib.sha256(body).hexdigest(),
+                   data_base64=base64.b64encode(body).decode())
+        decoded=dict(sha256=media['sha256'],duration=1,reads=[],model_revision='fixed')
+        with (tempfile.TemporaryDirectory()as model,patch.dict('os.environ',{
+                'EXPERT_AUDIO_AUDIT_IMAGE':'sha256:'+'a'*64,'EXPERT_AUDIO_AUDIT_MODEL':model}),
+                patch('audit_runner.subprocess.run',side_effect=[
+                    SimpleNamespace(returncode=0,stdout=json.dumps(decoded).encode()),
+                    SimpleNamespace(returncode=0,stdout=b'')])as run):
+            value=json.loads(prepare_audio(path.parents[1],json.dumps({'unsupported_media':[media]})))
+        command=run.call_args_list[0].args[0]
+        self.assertEqual(['docker','run','-i','--rm'],command[:4])
+        self.assertEqual(media,json.loads(run.call_args_list[0].kwargs['input']))
+        self.assertIn('--network',command)
+        self.assertEqual('audio_uncertain',value['audio_audits'][0]['state'])

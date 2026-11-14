@@ -32,7 +32,7 @@ def prepare_audio(source,prepared):
     notes=[]
     for media in audio:
         name='ai-football-audio-audit-'+__import__('uuid').uuid4().hex[:16]
-        command=['docker','run','--rm','--name',name,'--network','none','--read-only',
+        command=['docker','run','-i','--rm','--name',name,'--network','none','--read-only',
             '--cpus','.4','--memory','1536m','--pids-limit','64','--cap-drop','ALL',
             '--security-opt','no-new-privileges:true','-e','PYTHONDONTWRITEBYTECODE=1',
             '--tmpfs','/tmp:rw,nosuid,nodev,size=16m',
