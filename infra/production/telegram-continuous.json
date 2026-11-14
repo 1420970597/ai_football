@@ -62,7 +62,7 @@
       "cpus": 0.4
     },
     "hermes-mcp": {
-      "image": "sha256:5f55159d63b918a9e5723433635e90b79506a76da459b3626af1e0bf3e10a6f1"
+      "image": "sha256:21b400a2dbc00ee1c119fbf8d5e06fd35b3a319f61d640ef9d6b9340e67ced94"
     },
     "hermes": {
       "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",

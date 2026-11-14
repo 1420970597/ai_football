@@ -253,7 +253,7 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('record_expert_signals', [path for path, _ in calls])
 
     async def test_unknown_period_duplicate_pair_extra_authority_and_budget_fail_before_any_call(self):
-        invalid = [[self.item(source_periods=[])], [self.item(period='unknown')],
+        invalid = [[self.item(period='unknown')],
             [self.item(source_periods=['first_half'])], [self.item(selection_team=None)],
             [self.item(selection_line=None)], [self.item(selection_line='.3')],
             [self.item(selection_line='NaN')], [self.item(market_query='Away0+0.5')],

@@ -24,7 +24,7 @@ def market_filters(body):
         line = (line + other) / 2
     if line > Decimal('99999.999') or line % Decimal('0.25'):
         return filters
-    explicit = {'market_kind': 'total', 'line': line,
+    explicit = {'market_kind': 'team_total' if filters['market_kind'] == 'team_total' else 'total', 'line': line,
                 'selection': 'over' if (match['before'] or match['after']) == '大' else 'under'}
     if any(filters[key] is not None and filters[key] != value for key, value in explicit.items()):
         return filters

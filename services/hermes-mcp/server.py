@@ -144,7 +144,7 @@ def budget_schema_descriptions(schema):
             prop['description'] = BUDGET_ARGUMENT_DESCRIPTIONS[name]
     properties = result.get('properties', {})
     if all(name in properties for name in ('market_query', 'selection_team', 'selection_line')):
-        properties['market_query']['description'] = '仅total填原表达；handicap省略或null，使用selection_team/selection_line。'
+        properties['market_query']['description'] = 'total/team_total填原表达；单队须selection_team；handicap用selection_team/selection_line。'
     return result
 
 
@@ -249,10 +249,10 @@ class SourceMatchIntent(BaseModel):
     from_utc: str = Field(min_length=1, max_length=40)
     to_utc: str = Field(min_length=1, max_length=40)
     market_kind: str = Field(min_length=1, max_length=80)
-    period: Literal['full_time', 'first_half', 'second_half']
-    source_periods: Annotated[list[Literal['full_time', 'first_half', 'second_half']], Field(min_length=1, max_length=3)]
-    market_query: str | None = Field(default=None, max_length=120, description='仅total填大小球原表达；handicap必须省略或null，使用selection_team/selection_line，不同时填此筛选。')
-    selection_team: Literal['team_a', 'team_b'] | None = Field(default=None, description='让球来源明确选哪一支原文队伍；使用team_a或team_b，不假设主客。')
+    period: Literal['full_time', 'first_half', 'second_half'] | None
+    source_periods: Annotated[list[Literal['full_time', 'first_half', 'second_half']], Field(max_length=3)]
+    market_query: str | None = Field(default=None, max_length=120, description='total/team_total填大小球原表达；handicap必须省略或null，使用selection_team/selection_line，不同时填此筛选。')
+    selection_team: Literal['team_a', 'team_b'] | None = Field(default=None, description='handicap或team_total来源明确所选原文队伍；使用team_a或team_b，不假设主客。total省略。')
     selection_line: Decimal | None = Field(default=None, max_digits=8, decimal_places=3,
         multiple_of=Decimal('.25'), allow_inf_nan=False, description='来源所选球队带符号线；受让为正、让球为负，不填系统主队口径。')
     evidence_text: str = Field(min_length=1, max_length=3000)
@@ -265,7 +265,8 @@ class SourceMatchIntent(BaseModel):
         if isinstance(self.market_query, str) and not self.market_query.strip():
             self.market_query = None
         if (not self.team_a.strip() or not self.team_b.strip() or self.team_a.strip() == self.team_b.strip()
-                or not self.evidence_text.strip() or self.period not in self.source_periods):
+                or not self.evidence_text.strip()
+                or (self.source_periods and self.period not in self.source_periods)):
             raise ValueError('完整来源双方、证据及首读前期间清单为必需，未知项用单场工具保留未解决')
         if self.market_kind == 'handicap':
             if self.selection_team is None or self.selection_line is None or self.market_query is not None:
@@ -273,6 +274,9 @@ class SourceMatchIntent(BaseModel):
         elif self.market_kind == 'total':
             if not self.market_query or self.selection_team is not None or self.selection_line is not None:
                 raise ValueError('大小球需要来源market_query，不使用让球选择字段')
+        elif self.market_kind == 'team_total':
+            if not self.market_query or self.selection_team is None or self.selection_line is not None:
+                raise ValueError('单队大小球需要market_query及原文selection_team，不使用让球selection_line')
         elif self.selection_team is not None or self.selection_line is not None:
             raise ValueError('其它玩法不支持自动按所选方线录入')
         return self
@@ -439,10 +443,12 @@ async def _record_bound_markets(combined, markets, fixture, review_id, attempt_i
                                 market_kind, period, evidence_text, *, search_key=None,
                                 source_selection=None, source_selection_line=None):
     """Reuse the same native exact-scope gate after lookup or a recovery read."""
-    quote = (_unique_source_handicap(markets, fixture['id'], period,
-                                    source_selection, source_selection_line)
-             if market_kind == 'handicap' else
-             _unique_source_total(markets, fixture['id'], market_kind, period))
+    if market_kind == 'handicap':
+        quote = _unique_source_handicap(markets, fixture['id'], period, source_selection, source_selection_line)
+    elif market_kind == 'team_total':
+        quote = _unique_source_team_total(markets, fixture['id'], period, source_selection)
+    else:
+        quote = _unique_source_total(markets, fixture['id'], market_kind, period)
     if quote is None:
         return combined | {'source_intent_recording': {
             'attempted': False, 'reason': 'no_unique_source_option'}}
@@ -485,6 +491,31 @@ def _source_period_parameters(source_periods):
     if source_periods is not None or explicit_market_intent.get():
         return {'source_periods':source_periods or []}
     return {}
+
+
+def _unique_source_team_total(markets, fixture_id, period, side):
+    if not isinstance(markets, dict) or side not in {'home', 'away'} or period != 'full_time':
+        return None
+    rows = markets.get('markets')
+    coverage = markets.get('market_coverage')
+    if (not isinstance(rows, list) or not isinstance(coverage, dict)
+            or coverage.get('complete_for_filter') is not True
+            or coverage.get('returned_quotes') != len(rows)
+            or coverage.get('matched_quotes') != len(rows)):
+        return None
+    selected = [row for row in rows if isinstance(row, dict) and row.get('team_side') == side]
+    if len(selected) != 1:
+        return None
+    row = selected[0]
+    # Reuse the exact total gates on this verified native team-side scope.
+    adapted = dict(markets, markets=[dict(row, market_kind='total')],
+        market_filter=dict(markets.get('market_filter') or {}, market_kind='total'),
+        market_coverage=dict(coverage, matched_quotes=1, returned_quotes=1))
+    if (row.get('market_kind') != 'team_total'
+            or markets.get('market_filter', {}).get('market_kind') != 'team_total'
+            or _unique_source_total(adapted, fixture_id, 'total', period) is None):
+        return None
+    return row
 
 
 def _unique_source_total(markets, fixture_id, market_kind, period):
@@ -601,8 +632,11 @@ async def _review_batch_item(review_id, attempt_id, item):
             if not isinstance(sides, dict):
                 sides = {}
             selected = sides.get(item.selection_team)
+            if not item.source_periods or item.period not in item.source_periods:
+                return result | {'source_intent_recording': {
+                    'attempted': False, 'reason': 'source_period_unknown'}}
             can_select = item.market_kind == 'total' or (
-                item.market_kind == 'handicap' and set(sides) == {'team_a', 'team_b'}
+                item.market_kind in {'handicap', 'team_total'} and set(sides) == {'team_a', 'team_b'}
                 and all(isinstance(side, str) for side in sides.values())
                 and set(sides.values()) == {'home', 'away'})
             return await _with_bound_markets(result, resolution, review_id, attempt_id,
@@ -676,11 +710,13 @@ def _batch_result_view(result, item):
         selection = sides.get(item.selection_team) if isinstance(sides, dict) else None
         wanted_line = item.selection_line
         known_scope = item.market_kind == 'handicap' and selection in {'home', 'away'} and wanted_line is not None
-        if item.market_kind == 'total':
+        if item.market_kind in {'total', 'team_total'}:
             selection = scope.get('selection')
             try:
                 wanted_line = Decimal(str(scope.get('line')))
                 known_scope = selection in {'over', 'under'} and wanted_line.is_finite()
+                if item.market_kind == 'team_total':
+                    known_scope = known_scope and isinstance(sides, dict) and sides.get(item.selection_team) in {'home', 'away'}
             except (InvalidOperation, ValueError, TypeError):
                 known_scope = False
         rows = markets.get('markets')
@@ -697,6 +733,8 @@ def _batch_result_view(result, item):
             if (not known_scope or not isinstance(row, dict)
                     or row.get('market_kind') != item.market_kind or row.get('period') != item.period
                     or row.get('selection') != selection):
+                continue
+            if item.market_kind == 'team_total' and row.get('team_side') != sides.get(item.selection_team):
                 continue
             try:
                 line = Decimal(str(row.get('selection_line')))
@@ -828,7 +866,7 @@ def _batch_error_view(error, item):
 @mcp.tool()
 async def review_match_batch(review_id: str, attempt_id: str,
                              items: Annotated[list[SourceMatchIntent], Field(min_length=1, max_length=6)]) -> dict:
-    """多场明确推荐首查一次提交，最多6个不同来源对阵、内部2路并发。逐项原生连续分页、唯一绑定、声明来源期间、读取当前盘口并立即精确录入total/handicap；未知字段不用此工具。带原文可读联赛，避免电子赛同名。让球selection_team指原文team_a/team_b，selection_line为所选球队带符号线，不猜主客或价格。其它玩法仅返回原生读盘，需继续核验。每项检查record_result；无接受回执不声称成功。"""
+    """多场明确推荐首查一次提交，最多6个不同来源对阵、内部2路并发。逐项连续分页、唯一绑定、声明期间、读当前盘口并精确录入total/handicap/team_total。期间未知传period=null/source_periods=[]，只识别不读盘。带原文可读联赛。handicap用原文selection_team及所选方带符号selection_line；team_total用selection_team及market_query，不猜主客或价格。其它玩法只读盘。每项检查record_result，无回执不称成功。"""
     keys = [(item.sport.casefold(), frozenset((item.team_a.strip().casefold(), item.team_b.strip().casefold())))
             for item in items]
     if len(set(keys)) != len(keys):

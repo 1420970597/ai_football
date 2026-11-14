@@ -7,8 +7,8 @@ from app.review_market_query import market_filters
 
 class MarketQueryTests(unittest.TestCase):
     def filters(self, query, **overrides):
-        return market_filters(SimpleNamespace(market_kind=None, period=None, line=None,
-            selection=None, **({'market_query': query} | overrides)))
+        return market_filters(SimpleNamespace(**(dict(market_kind=None, period=None, line=None,
+            selection=None, market_query=query) | overrides)))
 
     def test_explicit_totals_keep_period_unspecified(self):
         self.assertEqual({'market_kind': 'total', 'period': None, 'line': Decimal('2.5'),
@@ -18,6 +18,12 @@ class MarketQueryTests(unittest.TestCase):
     def test_split_totals_use_numeric_average(self):
         self.assertEqual(Decimal('.75'), self.filters('大0.5/1')['line'])
         self.assertEqual(Decimal('2.75'), self.filters('小3/2.5')['line'])
+
+    def test_explicit_team_total_keeps_kind_without_guessing_team_side(self):
+        result = self.filters('大2.5/3', market_kind='team_total', period='full_time')
+        self.assertEqual({'market_kind': 'team_total', 'period': 'full_time',
+            'line': Decimal('2.75'), 'selection': 'over', 'market_query': None}, result)
+        self.assertNotIn('team_side', result)
 
     def test_suffix_totals_have_the_same_explicit_scope_as_prefix(self):
         for suffix,prefix in (('1.5大','大1.5'),('0.5/1大','大0.5/1'),('3/2.5小','小3/2.5')):
