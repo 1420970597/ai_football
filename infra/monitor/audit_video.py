@@ -39,6 +39,16 @@ def prepare(value):
             offset=0
             while offset<len(body): offset+=os.write(descriptor,body[offset:])
             os.lseek(descriptor,0,os.SEEK_SET)
+            probe=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration',
+                '-of','json','/proc/self/fd/'+str(descriptor)],pass_fds=(descriptor,),
+                capture_output=True,timeout=5)
+            duration=None
+            if probe.returncode==0 and len(probe.stdout)<4096:
+                try:
+                    candidate=float(json.loads(probe.stdout).get('format',{}).get('duration',0))
+                    if 0<candidate<float('inf'):duration=candidate
+                except (ValueError,TypeError):pass
+            os.lseek(descriptor,0,os.SEEK_SET)
             result=subprocess.run(['ffmpeg','-v','error','-threads','1','-i',
                 '/proc/self/fd/'+str(descriptor),'-t','12',
                 '-vf','fps=2,scale=768:768:force_original_aspect_ratio=decrease',
@@ -49,7 +59,9 @@ def prepare(value):
         if result.returncode or len(result.stdout)>24*1024*1024:raise ValueError('video_decode_failed')
         frames=png_frames(result.stdout)
         notes.append({'state':'sampled_video','frames':len(frames),'interval_seconds':.5,
-                      'maximum_seconds':12,'sha256':media['sha256']})
+                      'maximum_seconds':12,'duration_seconds':duration,
+                      'truncated_or_unknown':duration is None or duration>12,
+                      'sha256':media['sha256']})
         for frame in frames:
             parts.append({'type':'image_url','image_url':{'url':'data:image/png;base64,'+
                 base64.b64encode(frame).decode(),'detail':'high'}})

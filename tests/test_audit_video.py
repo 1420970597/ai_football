@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import struct
 import unittest
@@ -22,12 +23,26 @@ class AuditVideoTests(unittest.TestCase):
         media={'state':'ready','mime_type':'video/webm','data_base64':base64.b64encode(b'clip').decode(),
                'sha256':hashlib.sha256(b'clip').hexdigest()}
         value={'parts':[{'type':'text','text':'source'}],'unsupported_media':[media]}
-        with patch('infra.monitor.audit_video.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=self.frame()))as run:
+        with patch('infra.monitor.audit_video.subprocess.run',side_effect=[
+                SimpleNamespace(returncode=0,stdout=b'{"format":{"duration":"1"}}'),
+                SimpleNamespace(returncode=0,stdout=self.frame())])as run:
             output=prepare(value)
         self.assertEqual(3,len(output['parts']));self.assertNotIn('unsupported_media',output)
         self.assertEqual(15,run.call_args.kwargs['timeout'])
+        self.assertFalse(json.loads(output['parts'][1]['text'])['independent_media_audit'][0]['truncated_or_unknown'])
         media['sha256']='wrong'
         with self.assertRaises(ValueError):prepare(value)
+
+    def test_unknown_or_long_video_duration_is_explicitly_incomplete(self):
+        media={'state':'ready','mime_type':'video/mp4','data_base64':base64.b64encode(b'clip').decode(),
+               'sha256':hashlib.sha256(b'clip').hexdigest()}
+        for body in (b'{}',b'{"format":{"duration":"45"}}',b'invalid'):
+            with patch('infra.monitor.audit_video.subprocess.run',side_effect=[
+                    SimpleNamespace(returncode=0,stdout=body),
+                    SimpleNamespace(returncode=0,stdout=self.frame())]):
+                output=prepare({'parts':[],'unsupported_media':[media]})
+            note=json.loads(next(p['text']for p in output['parts']if p['type']=='text'))['independent_media_audit'][0]
+            self.assertTrue(note['truncated_or_unknown'])
 
     def test_unavailable_audio_is_explicit_not_assumed_chat(self):
         output=prepare({'parts':[],'unsupported_media':[{'state':'unsupported_for_visual_audit'}]})
@@ -39,6 +54,7 @@ class AuditVideoTests(unittest.TestCase):
                'data_base64':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
         seen=[]
         def decode(command,**kwargs):
+            if command[0]=='ffprobe':return SimpleNamespace(returncode=0,stdout=b'{}')
             descriptor=kwargs['pass_fds'][0];seen.append(descriptor)
             self.assertEqual('/proc/self/fd/'+str(descriptor),command[command.index('-i')+1])
             self.assertNotIn('input',kwargs)
