@@ -12,11 +12,22 @@ async def repeated_identity_failure(conn,job_id,attempt_id,issues):
     if (not keys or None in keys or any(not m.get('candidate')
             or not m['candidate'].get('search_complete')for m in mentions)):
         return False
+    # search_matches also performs a real resolve on its completed snapshot.
+    # Count that system-captured negative result for the same pair and scope;
+    # otherwise one automatic + one explicit refusal causes a third model turn.
     rows=await conn.fetch(
-        "SELECT payload->'parameters'->>'search_key' AS search_key "
+        "WITH negative AS (SELECT payload->'parameters' AS parameters,"
+        "CASE WHEN trace_kind='mcp_search_matches' THEN payload->>'search_key' "
+        "ELSE payload->'parameters'->>'search_key' END AS search_key "
         "FROM v2_analysis_traces WHERE job_id=$1 AND payload->>'attempt_id'=($2::uuid)::text "
-        "AND trace_kind='mcp_resolve_match' AND payload->>'status'='succeeded' "
-        "AND payload->'result'->>'resolved'='false' "
-        "AND payload->'result'->>'candidate_count'='0' "
-        "GROUP BY payload->'parameters' HAVING count(*)>=2",job_id,attempt_id)
+        "AND payload->>'status'='succeeded' AND ("
+        "(trace_kind='mcp_resolve_match' AND payload->'result'->>'resolved'='false' "
+        "AND payload->'result'->>'candidate_count'='0') OR "
+        "(trace_kind='mcp_search_matches' AND payload->>'complete'='true' "
+        "AND payload->'resolution'->>'resolved'='false' "
+        "AND payload->'resolution'->>'candidate_count'='0'))) "
+        "SELECT search_key FROM negative WHERE search_key IS NOT NULL "
+        "AND parameters->>'team_a' IS NOT NULL AND parameters->>'team_b' IS NOT NULL "
+        "GROUP BY search_key,parameters->>'team_a',parameters->>'team_b' HAVING count(*)>=2",
+        job_id,attempt_id)
     return keys<={r['search_key']for r in rows}

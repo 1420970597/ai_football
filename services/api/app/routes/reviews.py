@@ -293,7 +293,12 @@ async def search_matches(body: SearchInput, request: Request):
                         'required_scope': ['competition_query', 'sport', 'from_utc', 'to_utc'],
                         'max_window_days': 7, 'does_not_confirm_identity': True,
                     }
-            return await tool_success(conn, body, result, {"scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more})
+            summary = {"scope": scope, "search_key": search_key, "after": position,
+                       "returned": len(page), "total": total, "complete": not has_more}
+            if 'resolution' in result:
+                summary['resolution'] = {key: result['resolution'][key]
+                    for key in ('resolved', 'candidate_count') if key in result['resolution']}
+            return await tool_success(conn, body, result, summary)
 
 
 @router.post("/resolve_match")

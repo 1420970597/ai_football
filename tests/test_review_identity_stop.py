@@ -56,3 +56,21 @@ class IdentityStopIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,summary['completion_issues']['unbound_mention_count'])
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_auto_search_and_explicit_refusal_count_for_same_pair_only(self):
+        await self.fixture(id='leyu:1',home_team='Alpha1',away_team='Beta1')
+        r=await self.post('search_matches',team_query='Alpha',team_a='Unverified',team_b='Beta1')
+        key=r.json()['search_key']
+        self.assertFalse(r.json()['resolution']['resolved'])
+        issues=IdentityStopTests().issues()
+        issues['unbound_mentions'][0]['candidate']['search_key']=key
+        async with self.pool.acquire()as conn:
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+        await self.post('resolve_match',search_key=key,team_a='Other',team_b='Beta1')
+        async with self.pool.acquire()as conn:
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+        await self.post('resolve_match',search_key=key,team_a='Unverified',team_b='Beta1')
+        async with self.pool.acquire()as conn:
+            self.assertTrue(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
