@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 
-from consecutive_windows import record,repaired
+from consecutive_windows import ACCEPTANCE_CONTRACT,record,repaired
 from save_window import save
 
 
@@ -55,8 +55,15 @@ def main():
     fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
     first=int(os.environ['FIRST_WINDOW_START'])
     if first%1800:raise ValueError('Unaligned first window')
-    statefile=root/'acceptance-state.json'
-    state=json.loads(statefile.read_text())if statefile.exists()else{'streak':0,'windows':{}}
+    # Preserve the earlier, stricter interpretation as an immutable history.
+    # Re-evaluate the same hash-bound audits under the user's actual contract
+    # in a separate state file, never by rewriting old failed verdicts.
+    statefile=root/'acceptance-user-contract-v2.json'
+    state=json.loads(statefile.read_text())if statefile.exists()else{
+        'acceptance_contract':ACCEPTANCE_CONTRACT,
+        'previous_contract_state':'acceptance-state.json','streak':0,'windows':{}}
+    if state.get('acceptance_contract')!=ACCEPTANCE_CONTRACT:
+        raise ValueError('Acceptance contract mismatch')
     stop_health=threading.Event()
     threading.Thread(target=health_loop,args=(source,root,stop_health),daemon=True).start()
     while not state.get('complete'):

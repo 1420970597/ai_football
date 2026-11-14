@@ -18,14 +18,41 @@ class ConsecutiveWindowTests(unittest.TestCase):
         self.assertEqual(3,state['streak'])
         self.assertTrue(state['complete'])
 
-    def test_failure_empty_incomplete_or_ad_only_resets(self):
+    def test_failure_empty_or_incomplete_resets(self):
         for change in ({'trusted_messages':0},{'deadline_violations':1},
-                       {'recommendation_messages':0},{'upstream_complete':False},
+                       {'recommendation_messages':-1},{'upstream_complete':False},
                        {'unexplained_outcomes':1},{'audit_sha256':''}):
             with self.subTest(change=change):
                 state=record({},good(1800));state=record(state,good(3600)|change)
                 self.assertEqual(0,state['streak']);self.assertFalse(state['complete'])
                 self.assertEqual(1,record(state,good(5400))['streak'])
+
+    def test_nonempty_fully_audited_feedback_counts_without_forcing_new_picks(self):
+        state = {}
+        for start, count in ((1800, 2), (3600, 0), (5400, 0)):
+            state = record(state, good(start) | {'recommendation_messages': count})
+        self.assertEqual(3, state['streak'])
+        self.assertTrue(state['complete'])
+
+    def test_zero_picks_does_not_excuse_unknown_or_incomplete_review(self):
+        for change in ({'unexplained_outcomes': 1}, {'audit_complete': False},
+                       {'unreviewed_messages': 1}, {'missing_messages': 1},
+                       {'confirmed_omissions': 1}, {'confirmed_misbindings': 1},
+                       {'duplicate_signals': 1}, {'deadline_violations': 1},
+                       {'source_health_ok': False}):
+            with self.subTest(change=change):
+                self.assertFalse(evaluate(good(1800) | {'recommendation_messages': 0} | change)[0])
+
+    def test_recommendation_count_is_present_nonnegative_and_not_above_messages(self):
+        for count in (None, True, -1, 5):
+            self.assertIn('invalid_recommendation_count', evaluate(good(1800) | {'recommendation_messages': count})[1])
+
+    def test_reassessment_uses_separate_state_and_keeps_legacy_history(self):
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / 'infra/monitor/continuous_watch.py').read_text()
+        self.assertIn("statefile=root/'acceptance-user-contract-v2.json'", source)
+        self.assertIn("'previous_contract_state':'acceptance-state.json'", source)
+        self.assertIn("'acceptance_contract':ACCEPTANCE_CONTRACT", source)
 
     def test_gap_and_repair_reset(self):
         state=record({},good(1800));state=record(state,good(5400))

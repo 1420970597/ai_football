@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 PERIOD = 1800
+ACCEPTANCE_CONTRACT = 'nonempty-fully-audited-user-contract-v2'
 
 
 def evaluate(evidence: dict) -> tuple[bool, list[str]]:
@@ -14,9 +15,14 @@ def evaluate(evidence: dict) -> tuple[bool, list[str]]:
     count = evidence.get('trusted_messages')
     if type(count) is not int or count <= 0:
         reasons.append('empty_window')
-    # An ad-only window cannot demonstrate recommendation interpretation.
-    if type(evidence.get('recommendation_messages')) is not int or evidence['recommendation_messages'] <= 0:
-        reasons.append('no_recommendation_sample')
+    # The user excludes periods without speech, not correctly rejected
+    # feedback or incomplete recommendations. All messages still need an
+    # independent, conclusive source/outcome audit. Keep the sample count
+    # visible without requiring experts to publish a complete new pick.
+    recommendations = evidence.get('recommendation_messages')
+    if (type(recommendations) is not int or recommendations < 0
+            or type(count) is int and recommendations > count):
+        reasons.append('invalid_recommendation_count')
     for key in ('missing_messages', 'unreviewed_messages', 'confirmed_omissions',
                 'confirmed_misbindings', 'duplicate_signals', 'deadline_violations',
                 'unexplained_outcomes'):
