@@ -112,6 +112,16 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([None,'native-next'],[body.get('cursor')for _,body in calls])
         self.assertTrue(all(body['competition_query']=='来源联赛'for _,body in calls))
 
+    async def test_unsupported_raw_correct_score_with_unknown_period_is_identity_only(self):
+        calls,_=await self.install()
+        item=self.item(market_kind='波胆',period=None,source_periods=[],
+            market_query='1-1',selection_team=None,selection_line=None,
+            evidence_text='来源联赛 Home0 vs Away0，足球滚球波胆1-1 @5.2')
+        native=(await self.call([item]))['items'][0]['result']
+        self.assertTrue(native['resolution']['resolved'])
+        self.assertEqual('source_period_unknown',native['source_intent_recording']['reason'])
+        self.assertEqual(['search_matches'],[path for path,_ in calls])
+
     async def test_selected_team_uses_native_orientation_not_source_order(self):
         def swap(path, body, result):
             if path == 'search_matches':

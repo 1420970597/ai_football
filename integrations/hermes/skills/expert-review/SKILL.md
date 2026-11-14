@@ -22,6 +22,8 @@ description: 审核 Telegram 赛前及滚球专家图文消息，完整搜索并
 
 角球大小与进球大小是不同玩法：原文或所选图片明确角球时，禁止用market_kind=total配“大8.5”等角球线查询进球库存，禁止据此声称角球无盘。当前原生协议尚未核验角球可记录类型，不得发明corner_total或转换为进球。确需核对已绑定比赛是否有原角球库存时，只调用一次list_match_markets，market_kind=null、period=null、line=null、selection=null、market_query=角球，source_periods仍保存首次已确认的真实推荐期间；null仅为读取原生unsupported玩法名称证据，不证明角球期间。返回unsupported_markets时准确说明系统当前不支持该原生玩法，不提交任何quote；完整零命中只证明该次角球名称范围无库存，不证明其它进球盘口可替代。其它独立推荐继续正常处理。
 
+波胆／波膽／正确比分单据也是推荐意图：明确玩法、双方和独立比分选项（例如粗体“1-1 @5.2”）构成来源所选结果，不要求正文复述、投注金额或确认单，也不能因系统尚未支持就称无推荐。“1-1”在该单据中是预测结算比分，不是即时比分，不与工具当前0-1作相等检查。期间没有明示则保持未知；只核验原双方身份，可用review_match_batch的market_kind=波胆（仅保留来源文字，非宣称已有原生类型）、period=null/source_periods=[]，禁止改成total、进球大小或凭空发明可记录类型。唯一识别后准确说明期间未知及原生玩法未核验，不读盘、不提交quote；其它独立推荐继续核验。
+
 多场批量的sport/from_utc/to_utc相同时，在review_match_batch顶层source_context仅声明一次，各项省略这三个重复字段；某项实际日期/项目不同时在该项明确覆盖。这个省写只减少调用参数，联赛、双方、期间、线值、方向及原文证据仍逐项保留，不从库存推断共享值；缺少来源字段时继续保留未知，不借用其他推荐的期间或盘口。
 
 来源完整的单场或多场推荐优先使用主连接的review_match_batch，只有1项也直接批量：先一次从原文/全部图片提取不同对阵，最多12项，显式保留可读联赛、原始时间范围和体育项目；每项带尚未读库存时确认的period/source_periods及原文证据。工具内部最多2路，沿原生next_cursor连续翻页并唯一绑定、读盘；精确total/handicap/team_total立即复用原生录入，逐项以record_result.accepted为准，不必等模型再抄quote_id。让球selection_team只能是本项原文team_a/team_b，selection_line是所选球队带符号线（受让正、让球负），market_query必须省略或null，不重复填球队/让球文字；不假定原文顺序等于系统主客、不自行翻原生line。total及team_total传原样market_query；单队进球必须用team_total，并从原文给selection_team，不把单队进球换成整场大小，也不把所选球队填成selection=home/away（大小方向是over/under）。其它玩法返回读盘仍须继续核验。每项独立保留已完成回执与未解决原因；一项歧义/无盘不阻止其它场，不能只处理前两场。同场多项仍用单场工具复用一次身份；期间未知可批量period=null/source_periods=[]只核验身份，不读盘。禁止同一对阵既发batch又重复发单场首查。批量不豁免以下来源、分页、身份、期间、价格和截止校验。

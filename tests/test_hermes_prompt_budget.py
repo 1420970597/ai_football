@@ -90,6 +90,15 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
                        '不以简短输出跳过任何原文或图片'):
             self.assertIn(phrase,skill)
 
+    async def test_correct_score_selection_is_not_current_score_or_goal_total(self):
+        root=Path(__file__).resolve().parents[1]
+        skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        for phrase in ('波胆／波膽／正确比分单据也是推荐意图',
+                       '不要求正文复述、投注金额或确认单',
+                       '不是即时比分，不与工具当前0-1作相等检查',
+                       '禁止改成total','不读盘、不提交quote'):
+            self.assertIn(phrase,skill)
+
     async def test_skill_matches_native_single_and_team_total_batch_contract(self):
         root = Path(__file__).resolve().parents[1]
         skill = (root / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()
