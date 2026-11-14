@@ -61,6 +61,9 @@
       "memswap_limit": 536870912,
       "cpus": 0.4
     },
+    "hermes-mcp": {
+      "image": "sha256:8502bdd125b05415e80a0eb9adfd30091f91e232e25802b19697bc576c5adf78"
+    },
     "hermes": {
       "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
       "command": [
@@ -93,6 +96,6 @@
     "required_nonempty_contiguous_windows": 3,
     "review_deadline_seconds": 20,
     "acceptance_state": "in_progress",
-    "source_revision": "4d8225c2"
+    "source_revision": "7aaf2845"
   }
 }
