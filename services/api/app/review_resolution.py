@@ -9,7 +9,7 @@ from fastapi.encoders import jsonable_encoder
 
 from .competition_names import normalize_competition_name
 from .team_matching import normalize_team_name, team_name_matches, with_verified_aliases
-from .review_team_identity import added_squad_markers
+from .review_team_identity import added_squad_markers,explicit_source_pairs,source_pair_supports_claim
 
 if TYPE_CHECKING:
     from .routes.reviews import ResolveInput
@@ -30,6 +30,10 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
         body.review_id,body.attempt_id)
     if source and not source['media_objects'] and added_squad_markers(body.team_a,body.team_b,source['raw_text']):
         return {'resolved':False,'reason':'source_squad_identity_unverified','candidate_count':0}
+    if source and not source['media_objects'] and rows:
+        pairs=explicit_source_pairs(source['raw_text'])
+        if pairs and not source_pair_supports_claim(body.team_a,body.team_b,pairs,rows):
+            return {'resolved':False,'reason':'source_team_identity_unverified','candidate_count':0}
     matches = []
     if normalize_team_name(body.team_a) == normalize_team_name(body.team_b):
         raise HTTPException(status_code=422, detail='two distinct team identities are required')
