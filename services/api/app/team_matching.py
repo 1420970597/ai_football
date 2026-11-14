@@ -78,6 +78,14 @@ def team_search_variants(value: str, *, sport: str | None = None, competition: s
     if not normalized:
         return ()
     variants = {normalized}
+    # Chinese feeds use 女足/女队/女子/(女) for the same explicit
+    # women's qualifier. Preserve the whole club, reserve and age identity.
+    if sport == 'football' and re.search(r'[\u3400-\u9fff]', normalized):
+        compact = compact_chinese_boundaries(normalized)
+        qualified = re.sub(r'(?:女足|女队|女子)$', '女', compact)
+        variants.add(qualified)
+        if qualified.endswith('女'):
+            variants.add(qualified[:-1] + ' 女')
     group = _verified_group(value, sport, competition)
     if group:
         variants.update(normalize_team_name(name) for name in group['names'])
