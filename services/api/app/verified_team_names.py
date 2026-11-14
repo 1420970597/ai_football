@@ -5,7 +5,7 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.10'
+REGISTRY_VERSION = '2026-11-14.11'
 VERIFIED_TEAM_NAMES = (
     {
         'sport':'football','competition':'西班牙女子甲级联赛',
@@ -21,8 +21,8 @@ VERIFIED_TEAM_NAMES = (
     },
     {
         'sport':'football','competition':'国际友谊赛',
-        'names':('中国台湾','中国台湾(中)','中国台北','Chinese Taipei'),
-        'reference':'7m:939:live5198357+team-profile+afc:ctfa:20261114',
+        'names':('中国台湾','中国台湾(中)','中国台北','中华台北','中華台北','Chinese Taipei'),
+        'reference':'7m:939:live5198357+team-profile+afc:ctfa+zhwiki:95505837:20261114',
     },
     {
         'sport':'football','competition':'香港联赛杯',
