@@ -9,6 +9,8 @@ _FOOTBALL_ALIASES = {
     '葡萄牙u23联赛': '葡萄牙联赛U23',
     '印度甲': '印度甲级联赛',
     '巴西乙': '巴西乙级联赛',
+    '哥伦甲': '哥伦比亚甲级联赛',
+    '哥伦比亚甲组联赛': '哥伦比亚甲级联赛',
     '拉脱超降': '拉脱维亚超级联赛 - 附加赛',
     '澳女联': '澳大利亚女子甲级联赛',
     '澳锦标': '澳大利亚锦标赛',
@@ -48,6 +50,11 @@ def competition_query_members(value: str, sport: str | None) -> tuple[str, ...]:
     """
     if sport == 'football' and normalize_team_name(value) == '欧国联':
         return tuple(normalize_team_name('欧洲国家联赛'+division) for division in 'ABCD')
+    if sport == 'football' and normalize_team_name(value) == '哥伦甲秋':
+        # Publisher league 250, subleague 364 (Clausura). The native feed
+        # exposes only the parent league; this is retrieval scope, not a
+        # fabricated native season/stage or a team identity by itself.
+        return (normalize_team_name('哥伦比亚甲级联赛'),)
     return ()
 
 

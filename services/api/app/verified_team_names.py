@@ -5,8 +5,13 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.16'
+REGISTRY_VERSION = '2026-11-14.17'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'哥伦比亚甲级联赛',
+        'names':('卡尔达斯十一人','云斯卡尔达斯','卡達斯','Once Caldas','Deportiva Once Caldas'),
+        'reference':'nowscore:2206:team250+zhwiki:2843026:86174735+oncecaldas:20261114',
+    },
     {
         'sport':'football','competition':'巴西乙级联赛',
         'names':('塞阿拉CE','塞阿拉','施亞拉','Ceara'),
