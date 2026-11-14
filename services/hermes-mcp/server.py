@@ -106,19 +106,19 @@ INTENT_ARGUMENT_DESCRIPTIONS = {
 # These profiles are used with the complete, preloaded expert-review skill.
 # Only descriptions change: validation schemas and business calls stay native.
 BUDGET_TOOL_DESCRIPTIONS = {
-    'review_match_batch': 'expert-review单场或多场明确来源首选（1项也用此工具）：最多12个不同对阵，内部2路连续分页、唯一绑定、读盘并精确录入total/handicap/team_total；单队进球须selection_team。核实双方、联赛、期间及原文，不从库存补字段；无原期间盘口立即未解决，禁换期间。',
-    'search_matches': 'expert-review已预载，勿重复skill_view。同场查询只调用一次。查全部阶段并连续翻页；传原文双方、sport及原始日期。唯一活动绑定可合并读盘；明确单项total/期间/方向/线时record_source_intent=true，以record_result为准。未知期间不录入。',
+    'review_match_batch': 'expert-review来源首选：1–12不同对阵、2路分页/绑定/读盘/精确录入；单队须selection_team。共用sport/from_utc/to_utc放source_context，各项省略或明确覆盖；其它来源字段逐项保留。无原盘停止，不从库存补字段。',
+    'search_matches': 'expert-review已预载；一次查全阶段并连续分页，带原文双方/sport/日期。唯一活动绑定合并读盘；明确total/期间/线/方向时record_source_intent=true，只认record_result；未知不录入。',
     'resolve_match': 'expert-review已预载；用完整search_key及双方/联赛/时间消歧，已绑定不重做。明确单项total可合并读盘录入，以record_result为准；非活动不读盘。',
     'list_match_markets': 'expert-review：明确total来源时record_source_intent=true，带market_query/evidence_text及原source_periods；恢复读盘后精确有效项立即录入，以record_result为准。未知不录入，完整零库存停止。',
     'record_expert_signals': 'expert-review已预载；提交本任务已读quote_id，以accepted/rejected/系统价格为准。retry_same_evidence=false停止该项重试，其余继续。',
 }
 BUDGET_ARGUMENT_DESCRIPTIONS = {
     'cursor': '逐字复制本查询next_cursor；首查不传，连续读至空。',
-    'sport': '来源实际项目，如football/basketball；未知才省略。',
+    'sport': '原文项目；未知才省略。',
     'team_a': '来源明确第一队；与team_b成对。',
     'team_b': '来源明确第二队，不从候选补造。',
     'competition_query': '可读来源联赛必填；未知显式null。',
-    'source_phase': '仅原文/所选原图明示阶段才传；未知null，不从可售候选推断。',
+    'source_phase': '来源明示阶段；未知null，不按库存猜。',
     'selection_team': '所选原文team_a或team_b；不是系统主客。',
     'selection_line': '所选球队带符号线：受让正、让球负。',
     'read_markets': '来源明确玩法/期间时true；唯一活动绑定合并读盘并复用。',
@@ -238,17 +238,26 @@ class ExpertPick(BaseModel):
     confidence: float = Field(default=0.5, ge=0, le=1)
 
 
+class BatchSourceContext(BaseModel):
+    """Explicit shared source fields; never inferred from current inventory."""
+    model_config = {'extra': 'forbid'}
+    sport: str = Field(min_length=1, max_length=40)
+    from_utc: str = Field(min_length=1, max_length=40)
+    to_utc: str = Field(min_length=1, max_length=40)
+
+
 class SourceMatchIntent(BaseModel):
     """A bounded source claim; only native operations can confirm or accept it."""
     model_config = {'extra': 'forbid'}
     team_a: str = Field(min_length=1, max_length=160, description='原文第一支球队，保留梯队/年龄/性别；不是从候选补造。')
     team_b: str = Field(min_length=1, max_length=160, description='原文第二支球队，来源顺序不等于系统主客。')
-    sport: str = Field(min_length=1, max_length=40)
+    sport: str | None = Field(default=None, min_length=1, max_length=40,
+        description='原文项目；与本批source_context相同可省略，否则逐项明确覆盖。')
     competition_query: str | None = Field(max_length=160, description='必填：来源可读联赛须原样保留，避免真实比赛与电子赛同名歧义；来源未知才显式null。')
     source_phase: Literal['scheduled', 'live', 'finished', 'cancelled'] | None = Field(default=None,
         description='仅原文或所选原图明示赛前/滚球/完场/取消时传；未知null，不按候选可售状态猜。')
-    from_utc: str = Field(min_length=1, max_length=40)
-    to_utc: str = Field(min_length=1, max_length=40)
+    from_utc: str | None = Field(default=None, min_length=1, max_length=40)
+    to_utc: str | None = Field(default=None, min_length=1, max_length=40)
     market_kind: str = Field(min_length=1, max_length=80)
     period: Literal['full_time', 'first_half', 'second_half'] | None
     source_periods: Annotated[list[Literal['full_time', 'first_half', 'second_half']], Field(max_length=3)]
@@ -269,7 +278,9 @@ class SourceMatchIntent(BaseModel):
 
     def require_source_scope(self):
         """Reject this item's conflicting intent before any native operation."""
-        if (not self.team_a.strip() or not self.team_b.strip() or self.team_a.strip() == self.team_b.strip()
+        if (not all(isinstance(value, str) and value.strip()
+                    for value in (self.sport, self.from_utc, self.to_utc))
+                or not self.team_a.strip() or not self.team_b.strip() or self.team_a.strip() == self.team_b.strip()
                 or not self.evidence_text.strip()
                 or (self.source_periods and self.period not in self.source_periods)):
             raise ValueError('完整来源双方、证据及首读前期间清单为必需，未知项用单场工具保留未解决')
@@ -970,9 +981,16 @@ def _batch_error_view(error, item, *, display_budget=14400):
 
 @mcp.tool()
 async def review_match_batch(review_id: str, attempt_id: str,
-                             items: Annotated[list[SourceMatchIntent], Field(min_length=1, max_length=12)]) -> dict:
+                             items: Annotated[list[SourceMatchIntent], Field(min_length=1, max_length=12)],
+                             source_context: BatchSourceContext | None = None) -> dict:
     """多场明确推荐首查一次提交，最多12个不同来源对阵、内部2路并发。逐项连续分页、唯一绑定、声明期间、读当前盘口并精确录入total/handicap/team_total。期间未知传period=null/source_periods=[]，只识别不读盘。带原文可读联赛。handicap用原文selection_team及所选方带符号selection_line；team_total用selection_team及market_query，不猜主客或价格。其它玩法只读盘。每项检查record_result，无回执不称成功。"""
-    keys = [(item.sport.casefold(), frozenset((item.team_a.strip().casefold(), item.team_b.strip().casefold())))
+    if source_context is not None:
+        # This is a lossless wire abbreviation only. Each complete original
+        # source intent still goes through the same native validation/calls.
+        shared = source_context.model_dump()
+        items = [item.model_copy(update={key: value for key, value in shared.items()
+                                       if getattr(item, key) is None}) for item in items]
+    keys = [((item.sport or '').casefold(), frozenset((item.team_a.strip().casefold(), item.team_b.strip().casefold())))
             for item in items]
     if len(set(keys)) != len(keys):
         raise ToolError('批量只接受不同来源对阵；同场多项复用单场工具及完整来源期间，不重复检索')

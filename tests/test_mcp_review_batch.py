@@ -276,6 +276,57 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(concurrency()[1], 2)
         self.assertEqual(0, concurrency()[0])
 
+    async def test_shared_source_context_expands_to_identical_native_calls(self):
+        calls, _ = await self.install()
+        full = self.item()
+        await self.call([full])
+        expected = list(calls)
+        calls.clear()
+        shared = {key: full[key] for key in ('sport', 'from_utc', 'to_utc')}
+        short = {key: value for key, value in full.items() if key not in shared}
+        response = await self.rpc('tools/call', {'name': 'review_match_batch', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'active', 'source_context': shared, 'items': [short]}})
+        result = response.json()['result']
+        self.assertFalse(result.get('isError'), result)
+        self.assertEqual(expected, calls)
+
+    async def test_item_context_overrides_shared_context_without_changing_source(self):
+        calls, _ = await self.install()
+        source = self.item(sport='basketball')
+        response = await self.rpc('tools/call', {'name': 'review_match_batch', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'active', 'source_context': {
+                'sport': 'football', 'from_utc': '2026-11-01T00:00:00Z',
+                'to_utc': '2026-11-02T00:00:00Z'}, 'items': [source]}})
+        self.assertFalse(response.json()['result'].get('isError'))
+        search = next(body for path, body in calls if path == 'search_matches')
+        for key in ('sport', 'from_utc', 'to_utc'):
+            self.assertEqual(source[key], search[key])
+
+    async def test_missing_shared_fields_and_extra_shared_authority_never_call_native(self):
+        for shared in (None, {'sport': 'football'}, {
+                'sport': 'football', 'from_utc': '2026-11-01T00:00:00Z',
+                'to_utc': '2026-11-02T00:00:00Z', 'attempt_id': 'other'}):
+            calls, _ = await self.install()
+            short = {key: value for key, value in self.item().items()
+                     if key not in {'sport', 'from_utc', 'to_utc'}}
+            response = await self.rpc('tools/call', {'name': 'review_match_batch', 'arguments': {
+                'review_id': 'job', 'attempt_id': 'active', 'source_context': shared,
+                'items': [short]}})
+            self.assertTrue(response.json()['result'].get('isError'))
+            self.assertEqual([], calls)
+
+    async def test_shared_source_context_keeps_duplicate_pair_rejection(self):
+        calls, _ = await self.install()
+        first = self.item()
+        short = {key: value for key, value in first.items()
+                 if key not in {'sport', 'from_utc', 'to_utc'}}
+        response = await self.rpc('tools/call', {'name': 'review_match_batch', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'active', 'source_context': {
+                key: first[key] for key in ('sport', 'from_utc', 'to_utc')},
+            'items': [first, short]}})
+        self.assertTrue(response.json()['result'].get('isError'))
+        self.assertEqual([], calls)
+
     async def test_source_league_must_be_declared_before_any_lookup(self):
         calls, _ = await self.install()
         item = self.item()
