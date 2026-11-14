@@ -5,8 +5,18 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.5'
+REGISTRY_VERSION = '2026-11-14.6'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'印度甲级联赛',
+        'names':('班加鲁鲁联','孟加拉鲁联合会','班加罗尔联合'),
+        'reference':'titan:41334:bfdata+alias3+7m:632313:20261114',
+    },
+    {
+        'sport':'football','competition':'拉脱维亚超级联赛 - 附加赛',
+        'names':('瓦尔麦斯','瓦尔米耶拉'),
+        'reference':'titan:14486:bfdata+alias3:20261114',
+    },
     {
         'sport':'football','competition':'日本J3联赛',
         'names':('相模原','SC相模原'),
