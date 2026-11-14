@@ -713,3 +713,12 @@
 - 11:44:55一条新消息排队212毫秒，Hermes在6.93秒返回provider_transient，65秒退避超过余下13.06秒而正确终止；没有足够状态证据区分限流与其他上游错误，不盲目缩短全部退避。当前11:30窗已失败；首个待观察完整窗仍12:00–12:30UTC。下一步冻结审计行为测试、用独立diagnostic验证后仅更新审计控制器；失败保留原记录。
 - 冻结首次27项退出1为测试运行器缺少infra/monitor导入路径，非行为断言失败；补PYTHONPATH后原组30项0.079秒退出0。独立diagnostic首例已明确necessary_reply_missing=false且consistent/missing_source_period，另例仍等待结果。发现窗口投影遗漏数据库已存的回复编号，补入未来快照；旧快照和旧正式审计不更改。
 - 第二例独立diagnostic同样consistent/missing_source_period且necessary_reply_missing=false；两个结果仅写reply-audit-release/diagnostic私有文件。最终冻结30项0.078秒退出0、git diff --check退出0。仅重启审计控制器，11:55:10UTC真实Running；采集/API/业务审核未重启。未来快照增加已持久化回复编号、未来语义审计标记v6，旧正式判定不回写；继续观察12:00完整窗，0/3。
+
+## 11:59 UTC：上游瞬时失败恢复研究
+
+- 2c7366fd已push且远端一致。17来源仍健康，11:39后30条自然消息、ready未审0、唯一provider瞬时失败保留；不能以不抛错的未解决记录代替语义验收。
+- 现有Hermes api_max_retries=1使首次真实503/流错误直接结束，再由worker60秒退避；这与实时剩余20秒不兼容。原生固定框架支持有限同轮重试，明确尊重429及所有Retry-After，且取消可打断退避。目标为先以network none、假凭据、本机协议提供方验证503恢复、401不重试、429等待、长退避取消，再决定最小配置调整；不改框架、不并发重复推荐、不延长20秒。责任为Hermes固定配置/协议测试及发布证据，失败先保留定位。
+- 同时发现生产worker已有的retry_exceeds_detection_deadline保护尚未入源树；计划按实际运行代码同步并增加隔离PG回归，不覆盖正在运行的保护。业务部署仍未变更，连续0/3。
+- 实测先发现本地框架会额外POST /api/show探测上下文，首次fixture误把探测当模型请求；修正精确路径后401/429验收通过。随后503长Retry-After案例确实揭示框架Streaming 5xx立即non-stream探测，不能声称流式模式尊重所有服务器退避。改用官方model.streaming=false配置，固定镜像network none五项完整16.711秒退出0，覆盖503同轮恢复、401不重试、429等待、429/503长退避取消；不改第三方框架源码。
+- 源树同步既有生产截止保护、增加实时终止/历史保留退避PG场景，冻结105项39.532秒退出0。下一动作仅在审核空闲锁内切换Hermes行为配置、核对新配置实际读取与自然发言；失败保留旧配置与真实原因，不延长20秒。12:00窗如发生行为切换须记修复中、不计通过。
+- 直接绑定项目config的最终native-retry-contract首次退出1为固定镜像无PyYAML；换用框架已有fast_safe_load，不安装依赖。最终5项16.180秒退出0，配置明确nonstreaming/API最多2次/auto recovery 0；PG105项与生产worker差异仅本次源树同步的既有截止保护。尚未切换真实配置，12:00后15条自然发言无技术错误、1条推荐7.87秒、最大排队2.06秒，仍须完整窗口独立审核。

@@ -2,6 +2,9 @@ model:
   provider: custom:cline
   default: ${HERMES_MODEL}
   supports_vision: true
+  # Gateway clients wait for a complete review. Avoid the framework's immediate
+  # streaming-5xx probe, which bypasses an explicit server Retry-After.
+  streaming: false
 
 providers:
   cline:
@@ -33,8 +36,9 @@ agent:
   reasoning_overrides:
     deepseek-v4.1-flash: false
     cline-pass/deepseek-v4.1-flash: false
-  # Durable review jobs own transient retries and retain per-attempt evidence.
-  api_max_retries: 1
+  # One in-turn recovery can fit the original 20-second business deadline.
+  # Native backoff honors Retry-After; the worker cancels at that same cutoff.
+  api_max_retries: 2
   auto_recovery_cycles: 0
   image_input_mode: native
   disabled_toolsets:

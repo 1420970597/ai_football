@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
-from datetime import timedelta
+from datetime import datetime,timedelta,timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import unittest
@@ -965,6 +965,37 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval(
             "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result')",
             self.job))
+
+    async def test_provider_backoff_beyond_real_detection_deadline_is_terminal_without_false_receipt(self):
+        await self.make_queued()
+        job=await worker.claim_job(self.pool)
+        job['message']['detected_at']=datetime.now(timezone.utc)
+        with patch.object(worker,'review_message',AsyncMock(side_effect=worker.HermesProviderUnavailable())), \
+             patch.object(worker,'delete_session',AsyncMock()), \
+             patch.object(worker.random,'randint',return_value=0):
+            await worker.process_job(self.pool,SimpleNamespace(hermes_model='isolated'),job)
+        row=await self.pool.fetchrow('SELECT state,last_error,lease_until FROM v2_analysis_jobs WHERE id=$1',self.job)
+        self.assertEqual(('unresolved','retry_exceeds_detection_deadline',None),tuple(row))
+        evidence=await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_retry_budget_exhausted'",self.job)
+        self.assertEqual(60,evidence['retry_delay_seconds'])
+        self.assertGreater(evidence['remaining_detection_seconds'],0)
+        self.assertLessEqual(evidence['remaining_detection_seconds'],20)
+        self.assertFalse(evidence['retryable'])
+        self.assertTrue(evidence['accepted_evidence_preserved'])
+        self.assertEqual(0,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result')",self.job))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals WHERE message_id=$1',self.message))
+
+    async def test_historical_provider_failure_keeps_backoff_with_known_detection_time(self):
+        await self.make_queued()
+        job=await worker.claim_job(self.pool)
+        job['message']['detected_at']=datetime.now(timezone.utc)
+        job['review_mode']='historical_replay'
+        with patch.object(worker,'review_message',AsyncMock(side_effect=worker.HermesProviderUnavailable())), \
+             patch.object(worker,'delete_session',AsyncMock()), \
+             patch.object(worker.random,'randint',return_value=0):
+            await worker.process_job(self.pool,SimpleNamespace(hermes_model='isolated'),job)
+        self.assertEqual('retry',await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1',self.job))
+        self.assertEqual(0,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_retry_budget_exhausted'",self.job))
 
     async def test_http_stop_no_reply_retries_and_recovers_without_false_receipts(self):
         await self.make_queued(attempts=worker.MAX_ATTEMPTS-1)
