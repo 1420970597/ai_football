@@ -109,6 +109,16 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
                        '看到任何候选/库存之前保存来源缺期间及缺数字线'):
             self.assertIn(phrase,skill)
 
+    async def test_empty_current_score_reply_does_not_reapply_archived_pick(self):
+        root=Path(__file__).resolve().parents[1]
+        skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        for phrase in ('空正文回复旧推荐且本条只有比分行时',
+                       '回复关系本身不代表再次采用旧推荐',
+                       '禁止把reply_text当成本条正文','禁止按旧单延续核验当前盘口',
+                       '不能把旧单本来缺失的期间补成全场',
+                       '不search、不读盘、不录入','不能一律跳过空正文或回复消息'):
+            self.assertIn(phrase,skill)
+
     async def test_esports_pick_requires_native_identity_without_inventing_supported_period(self):
         root=Path(__file__).resolve().parents[1]
         skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
