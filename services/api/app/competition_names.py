@@ -5,6 +5,8 @@ from .team_matching import normalize_team_name
 
 _FOOTBALL_ALIASES = {
     '澳女联': '澳大利亚女子甲级联赛',
+    '日职丙': '日本J3联赛',
+    '港超联杯': '香港联赛杯',
     '英超': '英格兰超级联赛',
     '英冠': '英格兰冠军联赛',
     '西甲': '西班牙甲级联赛',

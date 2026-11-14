@@ -5,8 +5,33 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.3'
+REGISTRY_VERSION = '2026-11-14.4'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'日本J2联赛',
+        'names':('新泻天鹅','新潟天鹅'),
+        'reference':'7m:958+live:5079549+albirex:53216+leyu:3226:20261114',
+    },
+    {
+        'sport':'football','competition':'日本J3联赛',
+        'names':('温泉群马','群马草津温泉'),
+        'reference':'7m:1927+live:5078648+thespa:20261114',
+    },
+    {
+        'sport':'football','competition':'香港联赛杯',
+        'names':('北区','高力北区'),
+        'reference':'7m:21356+schedule:1764+leyu:32745:20261114',
+    },
+    {
+        'sport':'football','competition':'香港联赛杯',
+        'names':('九龙城','和富九龙城'),
+        'reference':'7m:21379+schedule:1764+leyu:33414:20261114',
+    },
+    {
+        'sport':'football','competition':'香港联赛杯',
+        'names':('香港足球会','港会','FC香港'),
+        'reference':'7m:4897+schedule:1764+hkfc+leyu:44569:20261114',
+    },
     {
         'sport':'football','competition':'澳大利亚女子甲级联赛',
         'names':('中央海岸水手(女)','中央海岸水手学院(女)'),
