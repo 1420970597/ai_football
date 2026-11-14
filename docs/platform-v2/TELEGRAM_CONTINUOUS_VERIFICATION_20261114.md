@@ -58,3 +58,8 @@
 - 01:20:26后最新有效实时版本25条：4成功、21未解决，无新增 detection_deadline_exceeded；尚未完成完整窗口审计，不能计作成功。
 - 证据保存与连续状态9项回归退出0，.runtime/test-evidence/3561320/backend-tests.json。补监控错误状态保留和未审计前窗阻止后窗验收，后续采样仍继续。
 - 业务修复远端已同步至bb2bde9f40eeed509f32b539292393b84508491e。
+
+## 01:29 UTC：发布清单与样本耗时
+
+- 真实推荐7项：从首次检测到信号落库最大12.088497秒、P95约11.001195秒；均为01:20:26后新样本，未扩大为总体达标结论。同期31个最新实时版本7成功24未解决，无新增超时。
+- 发布覆盖清单 infra/production/telegram-continuous.json 记录5个实际角色镜像、原资源与Hermes配置引用，acceptance_state=in_progress；随后发布须将此覆盖追加在旧链路最后。没有正式Release声明。

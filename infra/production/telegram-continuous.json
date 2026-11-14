@@ -1,0 +1,98 @@
+{
+  "services": {
+    "api": {
+      "image": "sha256:65a714bea694c8df56f9c5ab19597adbeae0522a0cc08cae04b7d8752310b869",
+      "command": [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "2",
+        "--proxy-headers",
+        "--no-access-log"
+      ],
+      "entrypoint": [],
+      "mem_limit": 805306368,
+      "memswap_limit": 1610612736,
+      "cpus": 0.4
+    },
+    "collector": {
+      "image": "sha256:6df1627e2837b7786b1764e2dd775e69800e108dcd52b550cbe92a03d466496b",
+      "command": [
+        "python",
+        "-m",
+        "collector.worker"
+      ],
+      "entrypoint": null,
+      "mem_limit": 536870912,
+      "memswap_limit": 1073741824,
+      "cpus": 0.5
+    },
+    "review-worker": {
+      "image": "sha256:7275f383fd18b1a267c63c156ca41abec97290bf85d7dcc6b91e483624272a33",
+      "command": [
+        "python",
+        "-m",
+        "app.worker"
+      ],
+      "entrypoint": null,
+      "mem_limit": 536870912,
+      "memswap_limit": 1073741824,
+      "cpus": 0.25
+    },
+    "local-mcp-api": {
+      "image": "sha256:a9f5629b1946f917e361f3d8ea4da49d9426dcae885691acf748d9c3ef0769d9",
+      "command": [
+        "uvicorn",
+        "app.mcp_app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "1",
+        "--no-access-log"
+      ],
+      "entrypoint": [],
+      "mem_limit": 268435456,
+      "memswap_limit": 536870912,
+      "cpus": 0.4
+    },
+    "hermes": {
+      "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
+      "command": [
+        "python",
+        "/workspace/runner.py",
+        "gateway",
+        "run",
+        "--no-supervise"
+      ],
+      "entrypoint": [
+        "/opt/hermes/docker/entrypoint-dispatch.sh"
+      ],
+      "mem_limit": 2147483648,
+      "memswap_limit": 4294967296,
+      "cpus": 0.55,
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/root/ai_football/.runtime/tg-continuous-20261114/release/hermes/config.yaml",
+          "target": "/opt/data/.hermes/config.yaml",
+          "read_only": true
+        }
+      ]
+    }
+  },
+  "x-telegram-continuous": {
+    "schema_changes": 0,
+    "funded_test_orders": 0,
+    "production_synthetic_events": 0,
+    "required_nonempty_contiguous_windows": 3,
+    "review_deadline_seconds": 20,
+    "acceptance_state": "in_progress",
+    "source_revision": "bb2bde9f40eeed509f32b539292393b84508491e"
+  }
+}
