@@ -14,6 +14,14 @@ CASES = (
 
 
 class LiveSourceNameTests(unittest.TestCase):
+    def test_verified_australian_championship_abbreviation_is_sport_scoped(self):
+        self.assertEqual(normalize_competition_name('澳锦标', 'football'),
+            normalize_competition_name('澳大利亚锦标赛', 'football'))
+        self.assertNotEqual(normalize_competition_name('澳锦标', 'basketball'),
+            normalize_competition_name('澳大利亚锦标赛', 'basketball'))
+        self.assertNotEqual(normalize_competition_name('澳锦标女足', 'football'),
+            normalize_competition_name('澳大利亚锦标赛', 'football'))
+
     def test_whole_names_keep_competition_sport_and_squads(self):
         for a, home, b, away, league, canonical in CASES:
             self.assertEqual(normalize_competition_name(league, 'football'),
