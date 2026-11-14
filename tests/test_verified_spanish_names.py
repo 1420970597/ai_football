@@ -8,7 +8,8 @@ import test_reviews as support
 
 class SpanishScopeTests(unittest.TestCase):
     def test_exact_competition_labels_do_not_retrieve_other_countries_or_squads(self):
-        for source,target in [('西乙','西班牙乙级联赛'),('西女超','西班牙女子甲级联赛')]:
+        for source,target in [('西乙','西班牙乙级联赛'),('西班牙乙组联赛','西班牙乙级联赛'),
+                              ('西班牙乙組足球聯賽','西班牙乙级联赛'),('西女超','西班牙女子甲级联赛')]:
             expected=normalize_competition_name(target,'football')
             self.assertEqual(expected,normalize_competition_name(source,'football'))
             for wrong in (source+'U19','巴'+source,source+'B','VS-'+source):
@@ -48,6 +49,15 @@ class SpanishSearchTests(unittest.IsolatedAsyncioTestCase):
         result=response.json()
         self.assertEqual([target],[item['id']for item in result['items']])
         self.assertTrue(result['resolution']['resolved'])
+
+    async def test_explicit_second_division_group_name_binds_original_pair_on_first_search(self):
+        target=await self.fixture(1,home_team='马洛卡',away_team='科尔多瓦',competition_name='西班牙乙级联赛')
+        await self.fixture(2,home_team='马洛卡B',away_team='科尔多瓦B',competition_name='西班牙足协乙级联赛')
+        result=(await self.post('search_matches',sport='football',team_query='马略卡',team_a='马略卡',team_b='科尔多瓦',competition_query='西班牙乙组联赛')).json()
+        self.assertTrue(result['search_complete'])
+        self.assertTrue(result['resolution']['resolved'],result)
+        self.assertEqual(target,result['resolution']['fixture']['id'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*)FROM v2_expert_signals'))
 
     async def test_original_espanyol_query_retrieves_exact_womens_identity(self):
         await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',self.message,'西女超 爱斯宾奴(女) vs 科斯塔阿德赫特内里费(女)，全场大2.5')

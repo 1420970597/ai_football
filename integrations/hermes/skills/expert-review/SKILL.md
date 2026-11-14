@@ -16,6 +16,10 @@ description: 审核 Telegram 赛前及滚球专家图文消息，完整搜索并
 
 ## 先判断本条是否有新增意图
 
+期间未知的单场或多场大小球也首查review_match_batch：period=null、source_periods=[]，market_kind=total、market_query保留来源大小原线，evidence_text保留原文，source_phase只取来源明示的滚球/赛前状态。工具在同一次原生调用中完成原双方和必要的联赛范围检索，只唯一识别、不读盘、不录入；以source_period_unknown回执简短结束该项，其它独立项继续。不先手工search_matches再去联赛后复查，不为凑参数猜期间，不删改来源联赛。批量只是减少模型往返，身份、分页和原生市场保护不变。
+
+工具已完整接受或明确未解决后，每项最终只写赛事、原文选择及实际接受/未解决原因，通常一行即可；不逐条复述候选列表、搜索过程、JSON字段或规则，不重复计划下一步。完整推理证据由工具轨迹保留。尚有独立未核验项仍须核验，不以简短输出跳过任何原文或图片。
+
 角球大小与进球大小是不同玩法：原文或所选图片明确角球时，禁止用market_kind=total配“大8.5”等角球线查询进球库存，禁止据此声称角球无盘。当前原生协议尚未核验角球可记录类型，不得发明corner_total或转换为进球。确需核对已绑定比赛是否有原角球库存时，只调用一次list_match_markets，market_kind=null、period=null、line=null、selection=null、market_query=角球，source_periods仍保存首次已确认的真实推荐期间；null仅为读取原生unsupported玩法名称证据，不证明角球期间。返回unsupported_markets时准确说明系统当前不支持该原生玩法，不提交任何quote；完整零命中只证明该次角球名称范围无库存，不证明其它进球盘口可替代。其它独立推荐继续正常处理。
 
 多场批量的sport/from_utc/to_utc相同时，在review_match_batch顶层source_context仅声明一次，各项省略这三个重复字段；某项实际日期/项目不同时在该项明确覆盖。这个省写只减少调用参数，联赛、双方、期间、线值、方向及原文证据仍逐项保留，不从库存推断共享值；缺少来源字段时继续保留未知，不借用其他推荐的期间或盘口。

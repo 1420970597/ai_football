@@ -98,6 +98,20 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
             elif path == 'record_expert_signals':
                 self.assertTrue(body['signals'][0]['quote_id'].endswith(':away:0.5'))
 
+    async def test_unknown_total_period_binds_only_and_never_reads_or_records(self):
+        calls,_=await self.install(paginate=True)
+        item=self.item(market_kind='total',period=None,source_periods=[],
+            market_query='大2.5',selection_team=None,selection_line=None,
+            evidence_text='来源联赛 Home0 vs Away0，滚球大2.5，期间未明')
+        result=await self.call([item]);native=result['items'][0]['result']
+        self.assertTrue(native['search_complete'])
+        self.assertTrue(native['resolution']['resolved'])
+        self.assertEqual('source_period_unknown',native['source_intent_recording']['reason'])
+        self.assertFalse(native['source_intent_recording']['attempted'])
+        self.assertEqual(['search_matches','search_matches'],[path for path,_ in calls])
+        self.assertEqual([None,'native-next'],[body.get('cursor')for _,body in calls])
+        self.assertTrue(all(body['competition_query']=='来源联赛'for _,body in calls))
+
     async def test_selected_team_uses_native_orientation_not_source_order(self):
         def swap(path, body, result):
             if path == 'search_matches':

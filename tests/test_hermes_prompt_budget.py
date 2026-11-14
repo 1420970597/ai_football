@@ -81,6 +81,15 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
                      '不提交任何quote'):
             self.assertIn(rule,skill)
 
+    async def test_unknown_period_uses_native_identity_only_batch_and_short_receipt(self):
+        root=Path(__file__).resolve().parents[1]
+        skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        for phrase in ('期间未知的单场或多场大小球也首查review_match_batch',
+                       'period=null、source_periods=[]','只唯一识别、不读盘、不录入',
+                       '不为凑参数猜期间','不删改来源联赛','通常一行即可',
+                       '不以简短输出跳过任何原文或图片'):
+            self.assertIn(phrase,skill)
+
     async def test_skill_matches_native_single_and_team_total_batch_contract(self):
         root = Path(__file__).resolve().parents[1]
         skill = (root / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()
