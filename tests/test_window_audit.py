@@ -28,4 +28,5 @@ class WindowAuditTests(unittest.TestCase):
         signal=dict(expert_id='e',fixture_id='f',market_id='m',market_kind='total',period='full_time',
             selection='over',line='2.5',phase='scheduled',score_basis='full_period')
         self.assertEqual(1,duplicate_count([{'signals':[signal,dict(signal)]}]))
+        self.assertEqual(1,duplicate_count([{'signals':[signal,dict(signal,line='2.500')]}]))
         self.assertEqual(0,duplicate_count([{'signals':[signal,dict(signal,withdrawn_at='now')]}]))

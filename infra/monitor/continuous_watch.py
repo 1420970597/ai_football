@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import threading
 import time
 
 from consecutive_windows import record,repaired
@@ -40,6 +41,12 @@ def sample_health(source, root, now):
     atomic(directory/(str(now)+'.json'), value)
 
 
+def health_loop(source,root,stop):
+    while not stop.is_set():
+        sample_health(source,root,int(time.time()))
+        stop.wait(60)
+
+
 def main():
     os.umask(0o077)
     source=Path(os.environ['EXPERT_SOURCE_ROOT']);root=Path(os.environ['EVIDENCE_DIR'])
@@ -50,12 +57,10 @@ def main():
     if first%1800:raise ValueError('Unaligned first window')
     statefile=root/'acceptance-state.json'
     state=json.loads(statefile.read_text())if statefile.exists()else{'streak':0,'windows':{}}
-    next_health = 0
+    stop_health=threading.Event()
+    threading.Thread(target=health_loop,args=(source,root,stop_health),daemon=True).start()
     while not state.get('complete'):
         now=int(time.time())
-        if now >= next_health:
-            sample_health(source, root, now)
-            next_health = int(time.time())+60
         failure=None
         for repairfile in sorted(root.glob('repair-*.json')):
             repair=json.loads(repairfile.read_text())
@@ -106,6 +111,7 @@ def main():
                     path.unlink(missing_ok=True)
                 manifestfile.unlink()
         if not state.get('complete'):time.sleep(15)
+    stop_health.set()
     return state
 
 

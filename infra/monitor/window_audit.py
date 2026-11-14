@@ -1,6 +1,7 @@
 """Bind semantic audits and interval health to one immutable private snapshot."""
 from collections import Counter
 from datetime import datetime
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -25,7 +26,7 @@ def duplicate_count(messages):
                     tuple(sorted(score))if signal.get('period')=='second_half'else('home','away'))
                 baseline=tuple((k,score.get(k))for k in fields)
             key=tuple(str(signal.get(k))for k in('expert_id','fixture_id','market_id','market_kind',
-                'period','selection','phase','score_basis'))+(str(signal.get('line')or 0),baseline)
+                'period','selection','phase','score_basis'))+(Decimal(str(signal.get('line')or 0)),baseline)
             counts[key]+=1
     return sum(n-1 for n in counts.values()if n>1)
 

@@ -243,3 +243,9 @@
 - 新增只读窗口汇总：快照哈希、逐条独立审计哈希、分钟健康覆盖、已接受时延、活动重复意图和未解释结果统一计算。健康样本缺口超过180秒或没有覆盖窗口起止、任何失败样本都不能通过；已撤回重复信号不按活动双信号误报。
 - Docker15项0.008秒退出0，.runtime/test-evidence/4024574/backend-tests.json。没有原文写入报告，没有重写已失败audit.json；以后窗口在证据齐全后才封存。
 - 当前eb5b1155启动后尚无新的恢复超时，分钟样本17来源完整；最早验收起点04:30 UTC，连续0/3。
+
+## 04:26 UTC：采样与快照解耦
+
+- 全来源上游快照可持续一到两分钟，原串行循环会在快照期间停采健康。现由单个独立线程每60秒只读采样，不与快照争写同一文件；仅本任务监控重启，业务与最后业务修复时间不变。
+- 活动重复意图线值统一Decimal，2.5与2.500保持同一身份。冻结Docker13项退出0，命令sh infra/test/run.sh tests.test_window_audit tests.test_source_health_sample tests.test_consecutive_windows，证据见window-sampling-final-tests.log末尾与对应backend-tests.json。
+- 当前0/3。04:30起三个完整非空窗口仍须逐条语义、上游完整性、健康覆盖、无遗漏/误配/重复以及20秒截止全部满足。
