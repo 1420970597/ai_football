@@ -1,7 +1,7 @@
 {
   "services": {
     "collector": {
-      "image": "sha256:f30b034c25f1d7e71e445ab203570034285a3b0d41e48f154993a659ce920242",
+      "image": "sha256:1c21f2cec54d75b3812998ced074bea1af4ffe54a3f292a8769c8f587f3253ff",
       "command": [
         "python",
         "-m",
@@ -13,7 +13,7 @@
       "cpus": 0.5
     },
     "api": {
-      "image": "sha256:562145962a7253f363e76b201f20f67b679b422ac16e52355b1a37e8f3bfa5fb",
+      "image": "sha256:4f68b3a80cbad7d96aa1b761214f8ded8d25e24ba610f46c0d24797d383b8136",
       "command": [
         "uvicorn",
         "app.main:app",
@@ -32,7 +32,7 @@
       "cpus": 0.4
     },
     "web": {
-      "image": "sha256:956247d1a4f96adb4bcfc555f2e47347b10d512231fb4e8556521d278d7d187d",
+      "image": "sha256:098d1ebf2edf1728becaa08e8293f4d88014c1f0570ee400f1245908194914dc",
       "command": [
         "nginx",
         "-g",
@@ -47,14 +47,14 @@
     }
   },
   "x-telegram-channel-release": {
-    "source_revision": "4a42e38163f370e9b4baea034aa1f0d63b363553",
+    "source_revision": "87f3b30c00befb5e14fc877a6c645b7ba90f61f5",
     "scope": "explicit-broadcast-identity-and-durable-self-peer-recovery",
     "schema_changes": 0,
     "existing_automatic_betting_permissions_unchanged": true,
     "image_source_revisions": {
-      "api": "4a42e38163f370e9b4baea034aa1f0d63b363553",
-      "collector": "4a42e38163f370e9b4baea034aa1f0d63b363553",
-      "web": "611be25caba0caaa8864664c6d66d1234dfe14c1"
+      "api": "85cf28a57b9d18d639ba5b55d45724aa09ba26eb",
+      "collector": "87f3b30c00befb5e14fc877a6c645b7ba90f61f5",
+      "web": "60021e281019b40675f9adade497054ac565f1d1"
     },
     "source_peer_realtime_window_seconds": 300
   }
