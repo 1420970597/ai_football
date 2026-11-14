@@ -13,6 +13,10 @@
 
 ## 实现与验收边界
 
+07:34 UTC补充完整译名证据：7M香港页面 https://www.7m.hk/football/data/teams/9047 标题为中岸水手女足(Central Coast Mariners Women's)，同一出版方球队9047简体页面标题中部海岸海员女足，同一响应SHA256 9d8ea2343f3e14866915a0e9d2064135fd53c61f0bcf05a64b455664af233758；捷报 https://info.nowscore.com/big/team/Summary.aspx?teamid=9090 搜索索引同时给中央海岸水手(女)、粤语中岸水手女足、英文Central Coast Mariners(W)。仅并入既有女足组，不将中岸裸名用于男队。7M9046简体标题珀斯光荣女足(Perth Glory Women's)，响应582dc234891805220340e32a0da446e45568e9b966a1416268edb5ca9e3a870c；沿既有官方赛程/对阵证据连到珀斯光荣(女)。
+
+日本J联赛官方 https://www.jleague.jp/club/sagamihara/profile/ 的クラブ名の由来明确SC是加在地名相模原前的スポーツクラブ，页面列J3和S.C.Sagamihara；俱乐部官方 https://www.scsagamihara.com/ 标题SC相模原，响应fb90766fe67428daac6178841eeccfdfbd74e6990458ec2eb493771260ec7398。7M J3赛程 https://data.7m.com.cn/matches_data/1294/gb/matches.js 响应bee34ae2eb641dfa7d602ff4d6fd625e620bd108b855f92675d52cc914e5f341含SC相模原。仅J3登记相模原/SC相模原整名，不建立泛删SC规则，U18/U15/FIORE女队仍拒绝。07:28样本候选已finished，身份识别后必须保留不可实时录入，不能回放新推荐。
+
 06:56 UTC补充：原图“澳锦标”与供应方“澳大利亚锦标赛”联赛筛选不一致。出版方 https://data.7m.com.cn/matches_data/1903/gb/index.shtml UTF-8原始标题明确“澳锦标(澳大利亚锦标赛) 2026资料库”，响应SHA256 12d3b2daae6f02038e4e138e14d37ba2b1b1c1c65066d6fc800dda28b75dcaf1。只新增足球完整简称，篮球及加女足后缀仍不归一。首次按gb18030误解码已纠正，不以乱码证明名称。
 
 只在足球指定联赛内登记五组完整队名与两个完整联赛简称。不得泛删赞助商、学院、U20、女足、后备；不同联赛不自动复用。原文不唯一或赔率无有效当前证据时仍拒绝。隔离数据库验证四组真实原文首轮完整搜索即可唯一绑定，且不生成推荐或订单；女足、U20、后备、其它项目及相似青年联赛负例保留。

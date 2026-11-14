@@ -5,8 +5,13 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.4'
+REGISTRY_VERSION = '2026-11-14.5'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'日本J3联赛',
+        'names':('相模原','SC相模原'),
+        'reference':'jleague:sagamihara:profile+7m:1294+scsagamihara:20261114',
+    },
     {
         'sport':'football','competition':'日本J2联赛',
         'names':('新泻天鹅','新潟天鹅'),
@@ -34,8 +39,13 @@ VERIFIED_TEAM_NAMES = (
     },
     {
         'sport':'football','competition':'澳大利亚女子甲级联赛',
-        'names':('中央海岸水手(女)','中央海岸水手学院(女)'),
+        'names':('中央海岸水手(女)','中央海岸水手学院(女)','中岸水手女足','中部海岸海员女足'),
         'reference':'7m:9047+live:5172881+leyu:297502:20261114',
+    },
+    {
+        'sport':'football','competition':'澳大利亚女子甲级联赛',
+        'names':('珀斯光荣女足','珀斯光荣(女)'),
+        'reference':'7m:9046+live:5172881+leyu:34961:20261114',
     },
     {
         'sport':'football','competition':'澳大利亚锦标赛',
