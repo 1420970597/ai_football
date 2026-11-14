@@ -155,6 +155,26 @@ class ReviewSchedulerDeadlineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stamp, claimed['message']['detected_at'])
         self.assertIs(False, await worker._renew_lease(self.pool, {'id': expired, 'attempt_id': old_attempt}))
 
+    async def test_same_expert_forward_burst_can_fill_existing_six_slots_without_duplicate_claims(self):
+        first=await self.pair()
+        second=await self.pair(expert=first[1])
+        queued=[]
+        for pair in (first,second):
+            for age in (6,4,2):
+                job=(await self.queued(pair,age=age))[0]
+                await self.detected(job,age)
+                queued.append(job)
+        pool=await self.new_pool()
+        try:
+            with patch.object(worker,'EXPERT_CONCURRENCY_FLOOR',6):
+                jobs=[await worker.claim_job(self.pool if i%2 else pool)for i in range(6)]
+                self.assertEqual(set(queued),{job['id']for job in jobs})
+                self.assertIsNone(await worker.claim_job(self.pool))
+                self.assertEqual(6,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs WHERE state='running' AND lease_until>now()"))
+            self.assertEqual(6,len({job['attempt_id']for job in jobs}))
+        finally:
+            await pool.close()
+
     async def test_detection_order_does_not_promote_an_older_posting_lane(self):
         pair = await self.pair()
         old_lane = (await self.queued(pair, age=worker.FRESH_PRIORITY_WINDOW_SECONDS + 30))[0]
