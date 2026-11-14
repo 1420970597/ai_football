@@ -35,7 +35,7 @@ class EmptySourceScopeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_unknown_period_and_positive_inventory_are_not_closed(self):
         cases = [({}, {'market_coverage': dict(self.result()['market_coverage'], complete_for_filter=False)}),
-            ({'source_periods': []}, {}), ({'period': None}, {}),
+            ({'source_periods': None}, {}), ({'period': None}, {}),
             ({}, {'markets': [{'quote_id': 'real'}]}),
             ({}, {'market_coverage': dict(self.result()['market_coverage'], matched_quotes=1)}),
             ({}, {'market_filter': dict(market_kind='team_total', period='full_time')})]
@@ -49,3 +49,14 @@ class EmptySourceScopeTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.server, '_post', AsyncMock(side_effect=self.server.ToolError('inactive'))):
             with self.assertRaisesRegex(self.server.ToolError, 'inactive'):
                 await self.server._read_source_markets(self.payload())
+
+    async def test_declared_unknown_period_does_not_read_or_forge_complete_inventory(self):
+        for period in (None, 'first_half'):
+            native = AsyncMock()
+            with patch.object(self.server, '_post', native):
+                result = await self.server._read_source_markets(
+                    self.payload() | {'source_periods': [], 'period': period})
+            native.assert_not_awaited()
+            self.assertFalse(result['market_read_succeeded'])
+            self.assertFalse(result['market_coverage']['complete_for_filter'])
+            self.assertEqual('source_period_unknown',result['source_intent_recording']['reason'])

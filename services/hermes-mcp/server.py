@@ -391,6 +391,15 @@ async def _request(path: str, payload: dict) -> dict:
 
 async def _read_source_markets(payload):
     """Keep a complete empty declared scope distinct from other inventory."""
+    if payload.get('source_periods') == []:
+        return {'markets': [], 'market_read_succeeded': False,
+            'source_intent_recording': {'attempted': False, 'reason': 'source_period_unknown'},
+            'source_scope_unavailable': {'reason': 'source_period_unknown',
+                'retry_same_scope': False, 'relax_source_period': False,
+                'action': 'report_unresolved_source_period',
+                'message': '来源期间明确声明未知，不请求报价、不从库存或分钟补期间；'
+                           '只保留已核验的比赛身份，说明缺来源期间，结束本项审核。'},
+            'market_coverage': {'complete_for_filter': False}}
     result = await _post('list_match_markets', payload)
     coverage = result.get('market_coverage') or {}
     scope = result.get('market_filter') or {}

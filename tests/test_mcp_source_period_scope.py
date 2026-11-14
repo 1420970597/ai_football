@@ -30,7 +30,10 @@ class MCPSourcePeriodScopeTests(unittest.IsolatedAsyncioTestCase):
         self.client.headers['X-Football-Tool-Profile']='market-intent-v1'
         result=await self.rpc('tools/call',{'name':'list_match_markets','arguments':args})
         self.assertFalse(result.json()['result'].get('isError',False))
-        self.assertEqual([],calls[-1][1]['source_periods'])
+        self.assertEqual(1,len(calls))
+        value=json.loads(result.json()['result']['content'][0]['text'])
+        self.assertEqual('source_period_unknown',value['source_intent_recording']['reason'])
+        self.assertFalse(value['market_coverage']['complete_for_filter'])
 
     async def test_new_profile_requires_source_scope_on_all_market_capable_tools(self):
         self.client.headers['X-Football-Tool-Profile']='parallel-intent-v1'
