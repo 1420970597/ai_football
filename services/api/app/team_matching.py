@@ -109,7 +109,9 @@ def verified_team_search_variants(value: str, *, sport: str | None = None, compe
         # An umbrella query may retrieve its explicitly enumerated divisions.
         # Binding still compares both full identities against the candidate's
         # actual division through _verified_scope, never the umbrella label.
-        in_scope = (_verified_scope(group, sport, competition) or
+        # A source may omit the league. Recall reviewed vocabulary then,
+        # while binding still checks each candidate's actual competition.
+        in_scope = (not (competition or '').strip() or _verified_scope(group, sport, competition) or
                     (bool(group.get('competition')) and competition_query_matches(
                         competition or '', group['competition'], sport)))
         if in_scope and normalized in names and (sport is None or sport == group['sport']):

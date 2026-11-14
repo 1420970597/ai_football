@@ -5,8 +5,13 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.13'
+REGISTRY_VERSION = '2026-11-14.14'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'荷兰乙级联赛',
+        'names':('格拉夫夏普','迪加史卓普','De Graafschap'),
+        'reference':'zhwiki:909129:92545336:redirect+degraafschap:20261114',
+    },
     {
         'sport':'football','competition':'欧洲国家联赛B',
         'names':('波黑','波斯尼亚和黑塞哥维那','波斯尼亞和黑塞哥維那'),
