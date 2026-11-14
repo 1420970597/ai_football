@@ -68,6 +68,7 @@ def validate_source(value):
         raise ValueError('invalid_source_readability')
     if not isinstance(value.get('items'),list)or len(value['items'])>200:
         raise ValueError('invalid_source_items')
+    items=[]
     for item in value['items']:
         if not isinstance(item,dict)or item.get('period')not in {'full_time','first_half','second_half','unknown'}:
             raise ValueError('invalid_source_period')
@@ -76,7 +77,21 @@ def validate_source(value):
                 raise ValueError('invalid_source_field')
         if not isinstance(item.get('missing_fields'),list)or any(not isinstance(k,str)for k in item['missing_fields']):
             raise ValueError('invalid_source_missing_fields')
-    return value
+        # An explicit unknown/null remains a source gap even when the model
+        # forgets to repeat it in missing_fields. Never infer a missing fact
+        # from candidates, and never change the second reader's verdict.
+        missing=list(dict.fromkeys(item['missing_fields']))
+        for key in ('team_a','team_b','market_kind','selection'):
+            if not (item.get(key)or'').strip()and key not in missing:missing.append(key)
+        if item['period']=='unknown'and 'period'not in missing:missing.append('period')
+        items.append(item|{'missing_fields':missing})
+    return value|{'items':items}
+
+
+def source_observations(intent):
+    return {key:intent[key]for key in ('classification','source_readable','necessary_reply_missing')}|{
+        'items':[{'period':item['period'],'missing_fields':item['missing_fields']}
+                 for item in intent['items']]}
 
 
 def run(value):
@@ -100,7 +115,7 @@ def run(value):
         intent=validate_source(one(source_only_parts(value),SOURCE_SYSTEM))
         parts=list(value['parts'])+[{'type':'text','text':json.dumps({
             'source_intent_before_outcome':intent},ensure_ascii=False)}]
-        parsed=one(parts,SYSTEM+'\nsource_intent_before_outcome来自未见候选和接受结果的独立原图读取；与原图核对，不用候选补来源。缺少期间且零接受时无需读盘，不能仅因无读盘认定incomplete_tool_evidence；如果来源完整却未读盘仍须uncertain。')
+        parsed=one(parts,SYSTEM+'\nsource_intent_before_outcome来自未见候选和接受结果的独立原图读取；与原图核对，不用候选补来源。missing_fields按该次读取的unknown/null完整标记，不代表系统遗漏。缺少期间且零接受时无需读盘，不能仅因无读盘认定incomplete_tool_evidence；如果来源完整却未读盘仍须uncertain。逐项分别判断：例如来源两项中第一项期间明确且正确接受、第二项period=unknown且未接受，第二项应核实来源缺期间，不要求其读盘；仍有真实未提供原图/必要回复或读取矛盾时保持uncertain。')
     if parsed.get('classification')not in CLASSES or parsed.get('verdict')not in VERDICTS:raise ValueError('invalid_audit_verdict')
     for name in ('source_items','accepted_items','unresolved_items'):
         if type(parsed.get(name))is not int or parsed[name]<0:raise ValueError('invalid_audit_count')
@@ -110,7 +125,8 @@ def run(value):
         'incomplete_tool_evidence','media_unavailable'}
     if not isinstance(parsed.get('reason_codes'),list)or any(r not in reason_allow for r in parsed['reason_codes']):raise ValueError('invalid_audit_reason')
     return {k:parsed[k]for k in ('classification','verdict','source_items','accepted_items','unresolved_items','reason_codes')}|{
-        'audit_protocol':'source-outcome-separation-v6',
+        'audit_protocol':'source-outcome-separation-v7',
+        'source_observations':source_observations(intent),
         'source_intent_sha256':hashlib.sha256(json.dumps(intent,sort_keys=True).encode()).hexdigest(),
         'source_first_agents':2,
         'input_sha256':hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest(),

@@ -42,6 +42,49 @@ class IndependentReviewTests(unittest.TestCase):
         self.assertEqual({'source_text':'A VS B 大2.5'},context)
         self.assertEqual('image_url',parts[1]['type'])
 
+    def test_unknown_source_period_is_recorded_even_if_missing_fields_was_empty(self):
+        source=dict(classification='recommendation',source_readable=True,necessary_reply_missing=False,
+            items=[dict(team_a='private A',team_b='private B',period='unknown',
+                market_kind='total',line='2.5',selection='over',missing_fields=[])])
+        normalized=independent_review.validate_source(source)
+        self.assertEqual(['period'],normalized['items'][0]['missing_fields'])
+        self.assertEqual([],source['items'][0]['missing_fields'])
+        observations=independent_review.source_observations(normalized)
+        self.assertNotIn('private',json.dumps(observations))
+        self.assertEqual('unknown',observations['items'][0]['period'])
+
+    def test_complete_and_incomplete_items_keep_separate_source_gaps(self):
+        source=dict(classification='recommendation',source_readable=True,necessary_reply_missing=False,
+            items=[dict(team_a='A',team_b='B',period='first_half',market_kind='total',
+                        line='2.5',selection='over',missing_fields=[]),
+                   dict(team_a=None,team_b='D',period='unknown',market_kind='total',
+                        line='2.5',selection='over',missing_fields=['team_a','team_a'])])
+        normalized=independent_review.validate_source(source)
+        self.assertEqual([],normalized['items'][0]['missing_fields'])
+        self.assertEqual(['team_a','period'],normalized['items'][1]['missing_fields'])
+
+    def test_normalization_never_converts_an_uncertain_verdict_to_consistent(self):
+        class Agent:
+            def __init__(self,**kwargs):self.tools=[];self._session_db=None
+            def close(self):pass
+            def run_conversation(self,parts,system_message):
+                if system_message==independent_review.SOURCE_SYSTEM:
+                    output=dict(classification='recommendation',source_readable=True,necessary_reply_missing=False,
+                        items=[dict(team_a='A',team_b='B',period='unknown',market_kind='total',
+                            line='2.5',selection='over',missing_fields=[])])
+                else:
+                    output=dict(classification='recommendation',verdict='uncertain',source_items=1,
+                        accepted_items=0,unresolved_items=1,reason_codes=['media_unavailable'])
+                return {'final_response':json.dumps(output)}
+        gateway=ModuleType('gateway');runtime=ModuleType('gateway.run');agent=ModuleType('run_agent')
+        runtime._resolve_runtime_agent_kwargs=lambda:{}
+        runtime._resolve_gateway_model=lambda:'configured-model';agent.AIAgent=Agent
+        with patch.dict(sys.modules,{'gateway':gateway,'gateway.run':runtime,'run_agent':agent}):
+            output=independent_review.run({'parts':[{'type':'text','text':json.dumps({'source_text':'private'})}]})
+        self.assertEqual('uncertain',output['verdict'])
+        self.assertEqual(['media_unavailable'],output['reason_codes'])
+        self.assertEqual(['period'],output['source_observations']['items'][0]['missing_fields'])
+
 
 class AuditInputTests(unittest.IsolatedAsyncioTestCase):
     def message(self):
