@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import threading
 import time
+from audit_lane import AuditLane, LOCAL
 
 from independent_review import CLASSES, VERDICTS
 from window_audit import audit_directory
@@ -47,10 +49,14 @@ def review_message(source,message):
     prepared=subprocess.run(['docker','exec','-i','ai-football-v2-api-1','python','-c',prep],
         input=json.dumps({'message':message}).encode(),capture_output=True,timeout=40,check=False)
     if prepared.returncode:raise RuntimeError('prepare_failed')
-    result=subprocess.run(review_command()+[review],input=prepared.stdout,
-        capture_output=True,timeout=68,check=False)
-    if result.returncode:raise RuntimeError('review_failed')
-    value=json.loads(result.stdout)
+    lane=getattr(LOCAL,'lane',None)
+    if lane is not None:
+        value=lane.review(prepared.stdout)
+    else:
+        result=subprocess.run(review_command()+[review],input=prepared.stdout,
+            capture_output=True,timeout=68,check=False)
+        if result.returncode:raise RuntimeError('review_failed')
+        value=json.loads(result.stdout)
     if value.get('classification')not in CLASSES or value.get('verdict')not in VERDICTS:
         raise ValueError('invalid_audit')
     if value.get('tool_count')!=0 or value.get('persistent_session')is not False:
@@ -71,20 +77,27 @@ def audit_window(source,directory):
     errors=[]
     # Two independent reads share the existing isolated 0.30 CPU/768 MiB
     # cgroup. Model network waits overlap; no business concurrency changes.
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        jobs={executor.submit(review_message,source,message):(ref,target)
-              for message,ref,target in pending}
-        for job in as_completed(jobs):
-            ref,target=jobs[job]
-            try:value=job.result()
-            except Exception as exc:
-                errors.append(type(exc).__name__)
-                continue
-            # Transport failures may retry; valid uncertainty is immutable.
-            value.update(message_ref=ref,snapshot_sha256=summary['snapshot_sha256'])
-            if target.exists():raise ValueError('audit_result_already_exists')
-            atomic(target,value)
-            print(json.dumps({'message_ref':ref,'verdict':value['verdict']}),flush=True)
+    lanes=[];lane_guard=threading.Lock()
+    def initialize_lane():
+        lane=AuditLane(source,review_command);LOCAL.lane=lane
+        with lane_guard:lanes.append(lane)
+    try:
+        with ThreadPoolExecutor(max_workers=2,initializer=initialize_lane) as executor:
+            jobs={executor.submit(review_message,source,message):(ref,target)
+                  for message,ref,target in pending}
+            for job in as_completed(jobs):
+                ref,target=jobs[job]
+                try:value=job.result()
+                except Exception as exc:
+                    errors.append(type(exc).__name__)
+                    continue
+                # Transport failures may retry; valid uncertainty is immutable.
+                value.update(message_ref=ref,snapshot_sha256=summary['snapshot_sha256'])
+                if target.exists():raise ValueError('audit_result_already_exists')
+                atomic(target,value)
+                print(json.dumps({'message_ref':ref,'verdict':value['verdict']}),flush=True)
+    finally:
+        for lane in lanes:lane.close()
     if errors:raise RuntimeError('audit_transport_incomplete')
     value=audit_directory(directory)
     if not value['audit_complete']:raise ValueError('audit_incomplete')
