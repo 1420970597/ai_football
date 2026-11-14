@@ -5,9 +5,34 @@ import sys
 import unittest
 
 from infra.monitor.audit_lane import worker_source
+from unittest.mock import patch,Mock
+from infra.monitor.audit_lane import AuditLane,AUDIT_MESSAGE_SECONDS,AUDIT_EXIT_MARGIN_SECONDS
 
 
 class AuditLaneTests(unittest.TestCase):
+    def test_complete_two_read_budget_is_used_without_extending_each_model_call(self):
+        source=Path(__file__).parents[1]
+        code=worker_source(source)
+        self.assertEqual(120,AUDIT_MESSAGE_SECONDS)
+        self.assertIn('AUDIT_MESSAGE_SECONDS=120',code)
+        self.assertIn('run_budget_seconds=45',code)
+        self.assertIn('signal.alarm(AUDIT_MESSAGE_SECONDS)',code)
+        process=Mock();process.poll.return_value=None
+        lane=AuditLane(source,Mock());lane.process=process
+        with patch.object(lane,'read',return_value={'verdict':'uncertain'})as read:
+            self.assertEqual({'verdict':'uncertain'},lane.review(b'{"parts":[]}'))
+        read.assert_called_once_with(AUDIT_MESSAGE_SECONDS+AUDIT_EXIT_MARGIN_SECONDS)
+        process.stdin.write.assert_called_once_with(b'{"parts":[]}\n')
+
+    def test_expired_lane_is_closed_and_never_produces_a_valid_result(self):
+        lane=AuditLane(Path(__file__).parents[1],Mock())
+        lane.process=Mock()
+        selector=Mock();selector.select.return_value=[]
+        with patch('infra.monitor.audit_lane.selectors.DefaultSelector')as factory,patch.object(lane,'close')as close:
+            factory.return_value.__enter__.return_value=selector
+            with self.assertRaisesRegex(RuntimeError,'audit_lane_deadline'):lane.read(128)
+        close.assert_called_once_with()
+
     def test_reused_imports_still_make_and_close_a_fresh_agent_for_each_message(self):
         source=Path(__file__).parents[1]
         prefix='''

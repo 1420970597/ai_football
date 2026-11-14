@@ -10,7 +10,7 @@ class AuditResourceIsolationTests(unittest.TestCase):
             command=review_command()
         self.assertEqual(['docker','exec','-i','--user','hermes',
             'ai-football-tg-semantic-hermes','nice','-n','19',
-            'timeout','--signal=TERM','--kill-after=2','60','python','-c'],command)
+            'timeout','--signal=TERM','--kill-after=2','120','python','-c'],command)
 
     def test_realtime_container_cannot_be_configured_as_audit_target(self):
         with self.assertRaisesRegex(ValueError,'must_not_share'):

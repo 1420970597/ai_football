@@ -26,8 +26,8 @@ class AuditRunnerTests(unittest.TestCase):
         self.assertEqual(2,run.call_count)
         self.assertIn('hermes',run.call_args.args[0])
         self.assertEqual(['nice','-n','19'], run.call_args.args[0][6:9])
-        self.assertEqual(['timeout','--signal=TERM','--kill-after=2','60'], run.call_args.args[0][9:13])
-        self.assertGreater(run.call_args.kwargs['timeout'],62)
+        self.assertEqual(['timeout','--signal=TERM','--kill-after=2','120'], run.call_args.args[0][9:13])
+        self.assertEqual(128,run.call_args.kwargs['timeout'])
         self.assertNotIn('private-source',json.dumps(result))
 
     def test_transport_or_permission_failure_cannot_be_sealed_as_valid_audit(self):

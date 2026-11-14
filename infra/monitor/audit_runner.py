@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 import threading
 import time
-from audit_lane import AuditLane, LOCAL
+from audit_lane import AuditLane, LOCAL, AUDIT_MESSAGE_SECONDS, AUDIT_EXIT_MARGIN_SECONDS
 
 from independent_review import CLASSES, VERDICTS
 from window_audit import audit_directory
@@ -63,7 +63,7 @@ def review_command(container=None):
     # Timing out the Docker CLI does not stop its process inside the container.
     # Bound that process group first; leave time for the CLI to collect exit.
     return ['docker','exec','-i','--user','hermes',target,'nice','-n','19',
-            'timeout','--signal=TERM','--kill-after=2','60','python','-c']
+            'timeout','--signal=TERM','--kill-after=2',str(AUDIT_MESSAGE_SECONDS),'python','-c']
 
 
 def pending_messages(directory):
@@ -92,7 +92,7 @@ def review_message(source,message):
         value=lane.review(prepared_audio)
     else:
         result=subprocess.run(review_command()+[review],input=prepared_audio,
-            capture_output=True,timeout=68,check=False)
+            capture_output=True,timeout=AUDIT_MESSAGE_SECONDS+AUDIT_EXIT_MARGIN_SECONDS,check=False)
         if result.returncode:raise RuntimeError('review_failed')
         value=json.loads(result.stdout)
     if value.get('classification')not in CLASSES or value.get('verdict')not in VERDICTS:
