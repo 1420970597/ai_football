@@ -57,6 +57,8 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
                         'market_filter': {'market_kind': 'handicap', 'period': body['period']},
                         'market_coverage': {'total_quotes': 90, 'matched_quotes': len(rows),
                             'returned_quotes': len(rows), 'complete_for_filter': True}}
+                elif path == 'resolve_match':
+                    result = {'resolved':False,'reason':'ambiguous_fixture'}
                 else:
                     self.assertEqual('record_expert_signals', path)
                     result = {'accepted': [dict(signal_id='accepted:'+body['signals'][0]['fixture_id'],
@@ -106,6 +108,43 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
         recorded = [body for path, body in calls if path == 'record_expert_signals']
         self.assertEqual(1, len(recorded))
         self.assertTrue(recorded[0]['signals'][0]['quote_id'].endswith(':away:0.5'))
+
+    async def test_explicit_source_phase_resolves_native_ambiguity_before_reading(self):
+        def disambiguate(path, body, result):
+            if path=='search_matches':
+                result['resolution']={'resolved':False,'reason':'ambiguous_fixture'}
+            if path=='resolve_match':
+                self.assertEqual('live',body['source_phase'])
+                self.assertEqual('Home0',body['team_a'])
+                self.assertEqual('Away0',body['team_b'])
+                self.assertEqual('来源联赛',body['competition'])
+                return {'resolved':True,'source_team_sides':{'team_a':'home','team_b':'away'},
+                    'fixture':{'id':'fixture:0','realtime_eligible':True}}
+            return result
+        calls,_=await self.install(mutation=disambiguate)
+        result=await self.call([self.item(source_phase='live')])
+        self.assertTrue(result['items'][0]['result']['record_result']['accepted'])
+        self.assertEqual(['search_matches','resolve_match','list_match_markets','record_expert_signals'],
+                         [path for path,_ in calls])
+
+    async def test_unknown_source_phase_never_selects_live_candidate_by_availability(self):
+        def ambiguous(path,body,result):
+            if path=='search_matches':result['resolution']={'resolved':False,'reason':'ambiguous_fixture'}
+            return result
+        calls,_=await self.install(mutation=ambiguous)
+        result=await self.call()
+        self.assertFalse(result['items'][0]['result']['resolution']['resolved'])
+        self.assertEqual(['search_matches'],[path for path,_ in calls])
+
+    async def test_phase_resolution_does_not_guess_unverified_identity(self):
+        def unresolved(path,body,result):
+            if path in {'search_matches','resolve_match'}:
+                return result|{'resolution':{'resolved':False,'reason':'no_matching_fixture'}} if path=='search_matches' else {'resolved':False,'reason':'no_matching_fixture'}
+            return result
+        calls,_=await self.install(mutation=unresolved)
+        result=await self.call([self.item(source_phase='live')])
+        self.assertFalse(result['items'][0]['result']['resolution']['resolved'])
+        self.assertEqual(['search_matches','resolve_match'],[path for path,_ in calls])
 
     async def test_native_selected_line_is_not_provider_home_line_or_neighbor(self):
         calls, _ = await self.install()

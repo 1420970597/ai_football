@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import os
+import re
 from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
@@ -220,6 +221,8 @@ class SourceMatchIntent(BaseModel):
     team_b: str = Field(min_length=1, max_length=160, description='原文第二支球队，来源顺序不等于系统主客。')
     sport: str = Field(min_length=1, max_length=40)
     competition_query: str | None = Field(max_length=160, description='必填：来源可读联赛须原样保留，避免真实比赛与电子赛同名歧义；来源未知才显式null。')
+    source_phase: Literal['scheduled', 'live', 'finished', 'cancelled'] | None = Field(default=None,
+        description='仅原文或所选原图明示赛前/滚球/完场/取消时传；未知null，不按候选可售状态猜。')
     from_utc: str = Field(min_length=1, max_length=40)
     to_utc: str = Field(min_length=1, max_length=40)
     market_kind: str = Field(min_length=1, max_length=80)
@@ -536,6 +539,15 @@ async def _review_batch_item(review_id, attempt_id, item):
         cursor = result.get('next_cursor')
         if result.get('search_complete') is True and cursor is None:
             resolution = result.get('resolution') or {}
+            if resolution.get('resolved') is not True and item.source_phase is not None:
+                search_key = result.get('search_key')
+                if isinstance(search_key, str) and re.fullmatch(r'[0-9a-f]{64}', search_key):
+                    resolution = await _post('resolve_match', {
+                        'review_id': review_id, 'attempt_id': attempt_id, 'search_key': search_key,
+                        'team_a': item.team_a, 'team_b': item.team_b,
+                        'competition': item.competition_query, 'source_phase': item.source_phase,
+                        'from_utc': item.from_utc, 'to_utc': item.to_utc})
+                    result = result | {'resolution': resolution}
             sides = resolution.get('source_team_sides') or {}
             if not isinstance(sides, dict):
                 sides = {}
