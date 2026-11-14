@@ -16,17 +16,31 @@ class IndependentReviewTests(unittest.TestCase):
             def close(self):closed.append(True)
             def run_conversation(self,parts,system_message):
                 self_parts=parts
+                if system_message==independent_review.SOURCE_SYSTEM:
+                    return {'final_response':json.dumps(dict(classification='recommendation',
+                        items=[dict(team_a='A',team_b='B',period='unknown',market_kind='total',
+                                    line='2.5',selection='over',missing_fields=['period'])],
+                        source_readable=True,necessary_reply_missing=False))}
                 return {'final_response':json.dumps({'classification':'recommendation','verdict':'consistent',
                     'source_items':1,'accepted_items':0,'unresolved_items':1,'reason_codes':['missing_source_period']})}
         gateway=ModuleType('gateway');runtime=ModuleType('gateway.run');agent=ModuleType('run_agent')
         runtime._resolve_runtime_agent_kwargs=lambda:{'provider':'configured-route'}
         runtime._resolve_gateway_model=lambda:'configured-model';agent.AIAgent=Agent
         with patch.dict(sys.modules,{'gateway':gateway,'gateway.run':runtime,'run_agent':agent}):
-            value=independent_review.run({'parts':[{'type':'text','text':'private source'}]})
+            value=independent_review.run({'parts':[{'type':'text','text':json.dumps({'source_text':'private source'})}]})
         self.assertEqual([],captured['enabled_toolsets']);self.assertEqual(['all'],captured['disabled_toolsets'])
         self.assertFalse(captured['save_trajectories']);self.assertIsNone(captured['session_db'])
         self.assertEqual(0,value['tool_count']);self.assertFalse(value['persistent_session'])
-        self.assertNotIn('private source',json.dumps(value));self.assertEqual([True],closed)
+        self.assertNotIn('private source',json.dumps(value));self.assertEqual([True,True],closed)
+        self.assertEqual(2,value['source_first_agents'])
+
+    def test_source_only_stage_cannot_read_candidates_or_prior_outcome(self):
+        parts=independent_review.source_only_parts({'parts':[{'type':'text','text':json.dumps({
+            'source_text':'A VS B 大2.5','tool_evidence':['candidate'],
+            'accepted':['signal'],'state':'succeeded'})},{'type':'image_url','image_url':{'url':'data:image/png;base64,AA=='}}]})
+        context=json.loads(parts[0]['text'])
+        self.assertEqual({'source_text':'A VS B 大2.5'},context)
+        self.assertEqual('image_url',parts[1]['type'])
 
 
 class AuditInputTests(unittest.IsolatedAsyncioTestCase):

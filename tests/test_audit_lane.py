@@ -30,13 +30,16 @@ class Agent:
     def run_conversation(self,parts,system_message):
         assert self.seen==[]
         self.seen.append(parts)
+        if '只返回JSON，结构为' in system_message:
+            return {'final_response':json.dumps(dict(classification='non_recommendation',
+                items=[],source_readable=True,necessary_reply_missing=False))}
         return {'final_response':json.dumps(dict(classification='non_recommendation',
             verdict='consistent',source_items=0,accepted_items=0,unresolved_items=0,
             reason_codes=['non_recommendation']))}
 module.AIAgent=Agent
 sys.modules.update({'gateway':gateway,'gateway.run':runtime,'run_agent':module})
 '''
-        inputs=[{'parts':[{'type':'text','text':value}]}for value in ('first-private','second-private')]
+        inputs=[{'parts':[{'type':'text','text':json.dumps({'source_text':value})}]}for value in ('first-private','second-private')]
         result=subprocess.run([sys.executable,'-c',prefix+worker_source(source)],
             input=''.join(json.dumps(value)+chr(10) for value in inputs),
             capture_output=True,text=True,timeout=5,check=True)
