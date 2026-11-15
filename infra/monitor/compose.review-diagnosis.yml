@@ -1,0 +1,64 @@
+name: ai-football-review-diagnosis
+x-watch: &watch
+  image: ${EXPERT_DIAGNOSIS_IMAGE:?Use the verified Docker toolchain image digest}
+  pull_policy: never
+  restart: unless-stopped
+  init: true
+  user: "0:0"
+  read_only: true
+  network_mode: none
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  cpus: 0.15
+  mem_limit: 192m
+  pids_limit: 96
+  entrypoint: [python]
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,size=32m,mode=1777
+    - /opt/data:rw,nosuid,nodev,size=16m,mode=0700
+  volumes:
+    - ${EXPERT_PROJECT_ROOT:?Use the existing project root}:${EXPERT_PROJECT_ROOT:?Use the existing project root}
+    - /var/run/docker.sock:/var/run/docker.sock
+  logging:
+    driver: json-file
+    options:
+      max-size: "2m"
+      max-file: "3"
+services:
+  metrics:
+    <<: *watch
+    container_name: ai-football-review-diagnosis-watch
+    environment:
+      EVIDENCE_DIR: ${EXPERT_DIAGNOSIS_EVIDENCE_DIR:?Use a private metrics directory}
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["${EXPERT_SOURCE_ROOT}/infra/monitor/review_diagnosis_watch.py"]
+    healthcheck:
+      test: [CMD, python, "${EXPERT_SOURCE_ROOT}/infra/monitor/review_diagnosis_watch.py", --health]
+      interval: 60s
+      timeout: 5s
+      retries: 2
+      start_period: 60s
+  sampler:
+    <<: *watch
+    container_name: ai-football-tg-diagnosis-sampler
+    environment:
+      EXPERT_SOURCE_ROOT: ${EXPERT_SOURCE_ROOT:?Use the authoritative source tree}
+      EVIDENCE_DIR: ${EXPERT_CONTINUOUS_EVIDENCE_DIR:?Use a new private audit cycle directory}
+      FIRST_WINDOW_START: ${EXPERT_DIAGNOSIS_FIRST_START:?Use an aligned UTC epoch}
+      EXPERT_CONTINUOUS_DIAGNOSIS: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["${EXPERT_SOURCE_ROOT}/infra/monitor/continuous_watch.py"]
+  auditor:
+    <<: *watch
+    container_name: ai-football-tg-diagnosis-audit
+    cpus: 0.20
+    mem_limit: 256m
+    environment:
+      EXPERT_SOURCE_ROOT: ${EXPERT_SOURCE_ROOT:?Use the authoritative source tree}
+      EVIDENCE_DIR: ${EXPERT_CONTINUOUS_EVIDENCE_DIR:?Use a new private audit cycle directory}
+      EXPERT_CONTINUOUS_DIAGNOSIS: "1"
+      EXPERT_AUDIT_HERMES_CONTAINER: ai-football-tg-semantic-hermes
+      EXPERT_AUDIO_AUDIT_IMAGE: ${EXPERT_AUDIO_AUDIT_IMAGE:-}
+      EXPERT_AUDIO_AUDIT_MODEL: ${EXPERT_AUDIO_AUDIT_MODEL:-}
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["${EXPERT_SOURCE_ROOT}/infra/monitor/audit_runner.py"]

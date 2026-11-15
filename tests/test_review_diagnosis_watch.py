@@ -5,7 +5,8 @@ class DiagnosisWatchTests(unittest.TestCase):
     def test_private_refs_counts_and_incomplete_audit_remain_honest(self):
         result=summarize([{'id':'private-message','state':'unresolved',
             'last_error':'detection_deadline_exceeded','accepted_signal_count':1,'raw_text':'SECRET TEXT',
-            'queue_ms':10,'first_tool_ms':9000,'prompt_tokens':22000},
+            'queue_ms':10,'first_tool_ms':9000,'prompt_tokens':22000,
+            'tool_rejections':{'search_already_complete':2}},
             {'id':'other','state':'unresolved','has_model_result':True,
              'summary':{'completion_verified':True}}])
         self.assertEqual(2,result['messages'])
@@ -13,6 +14,7 @@ class DiagnosisWatchTests(unittest.TestCase):
         self.assertEqual(1,result['diagnosis']['model_concluded_without_signal'])
         self.assertFalse(result['semantic_omission_audit_complete'])
         self.assertEqual(0,result['business_writes'])
+        self.assertEqual({'search_already_complete':2},result['tool_rejections'])
         self.assertNotIn('SECRET TEXT',str(result))
         self.assertNotIn('private-message',str(result))
 

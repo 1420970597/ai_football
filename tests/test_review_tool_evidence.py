@@ -63,6 +63,16 @@ class _CountingPool:
 
 
 class ToolSnapshotUnitTests(unittest.TestCase):
+    def test_rejection_reason_is_allowlisted_without_free_text(self):
+        for detail, expected in (
+                ('search already complete; use resolution tool', 'search_already_complete'),
+                ('fixture must be uniquely resolved first', 'fixture_not_bound'),
+                ('fixture is no longer active', 'fixture_inactive'),
+                ({'category':'detection_deadline_exceeded','secret':'not-exported'}, 'detection_deadline_exceeded'),
+                ('SECRET EXCEPTION', 'tool_contract_rejected'),
+                ({'category':'SECRET EXCEPTION'}, 'tool_contract_rejected')):
+            self.assertEqual(expected, review_tool_evidence.rejection_reason(HTTPException(409, detail)))
+
     def test_refresh_spacing_survives_wire_projection_without_adding_price_authority(self):
         source=dict(fixture={'id':'fixture'},markets=[],refresh=dict(attempted=True,
             accepted=False,reason='refresh_throttled',retry_after_seconds=2))
@@ -235,6 +245,18 @@ class ToolSportMCPTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires isolated database')
 class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejections_keep_specific_codes_without_changing_gate(self):
+        await self.fixture()
+        first=await self.post('search_matches',team_query='Alpha',sport='football')
+        self.assertEqual(200,first.status_code,first.text)
+        repeated=await self.post('search_matches',team_query='Alpha',sport='football')
+        self.assertEqual(409,repeated.status_code)
+        unbound=await self.post('list_match_markets',fixture_id='not-bound')
+        self.assertEqual(409,unbound.status_code)
+        codes=await self.pool.fetch("SELECT payload->>'rejection_reason' reason FROM v2_analysis_traces WHERE payload->>'status'='failed' ORDER BY sequence_no")
+        self.assertEqual(['search_already_complete','fixture_not_bound'],[r['reason']for r in codes])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
     asyncSetUp = fixtures.ReviewTests.asyncSetUp
     asyncTearDown = fixtures.ReviewTests.asyncTearDown
     context = fixtures.ReviewTests.context

@@ -16,10 +16,11 @@ PERIOD = 1800
 
 def summarize(rows):
     from app.review_diagnostics import diagnosis
-    reasons=Counter(); states=Counter(); issues=Counter(); examples=[]; delays={}
+    reasons=Counter(); states=Counter(); issues=Counter(); rejections=Counter(); examples=[]; delays={}
     for item in rows:
         row=dict(item); code=diagnosis(row)['code']; reasons[code]+=1
         states[row.get('state') or 'not_reviewed']+=1
+        rejections.update(row.get('tool_rejections') or {})
         issues.update(k for k,v in (row.get('summary') or {}).get('completion_issues',{}).items()
                       if v and k not in {'detail_limit'})
         for key in ('queue_ms','first_tool_ms','event_to_signal_ms','prompt_tokens'):
@@ -33,7 +34,8 @@ def summarize(rows):
         return {'samples':len(values),'p50':round(values[(len(values)-1)//2],3),
             'p95':round(values[int((len(values)-1)*.95)],3),'max':round(values[-1],3)}
     return {'messages':len(rows),'states':dict(states),'diagnosis':dict(reasons),
-        'completion_issues':dict(issues),'timing':{k:quantiles(v) for k,v in delays.items()},
+        'completion_issues':dict(issues),'tool_rejections':dict(rejections),
+        'timing':{k:quantiles(v) for k,v in delays.items()},
         'attention_refs':examples,'raw_content_exported':False,'business_writes':0,
         'model_conclusion_is_not_independent_audit':True,'semantic_omission_audit_complete':False}
 
@@ -74,7 +76,12 @@ async def sample(end):
                 "WHERE s.message_id=m.id) event_to_signal_ms,"
                 "(SELECT (payload->'usage'->>'prompt_tokens')::numeric FROM v2_analysis_traces t "
                 "WHERE t.job_id=j.id AND trace_kind='hermes_result' AND payload->>'attempt_id'=j.attempt_id::text "
-                "ORDER BY sequence_no DESC LIMIT 1) prompt_tokens "
+                "ORDER BY sequence_no DESC LIMIT 1) prompt_tokens,"
+                "(SELECT jsonb_object_agg(reason,n) FROM (SELECT "
+                "coalesce(t.payload->>'rejection_reason','legacy_unspecified') reason,count(*) n "
+                "FROM v2_analysis_traces t WHERE t.job_id=j.id AND t.trace_kind LIKE 'mcp_%' "
+                "AND t.payload->>'status'='failed' AND t.payload->>'attempt_id'=j.attempt_id::text "
+                "GROUP BY 1) failures) tool_rejections "
                 "FROM messages m LEFT JOIN LATERAL(SELECT id,state,last_error,attempt_id FROM v2_analysis_jobs "
                 "WHERE message_id=m.id ORDER BY created_at DESC,id DESC LIMIT 1)j ON TRUE "
                 "LEFT JOIN LATERAL(SELECT payload FROM v2_analysis_traces t WHERE t.job_id=j.id "

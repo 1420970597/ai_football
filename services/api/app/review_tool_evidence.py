@@ -52,6 +52,30 @@ MODEL_QUOTE_FIELDS = QUOTE_FIELDS - {
 ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price', 'line_basis', 'selection_line', 'team_side'})
 REJECTED_FIELDS = frozenset({'index', 'reason', 'context_changed_fields', 'intent_context'})
 log = logging.getLogger(__name__)
+REJECTION_REASONS = {
+    'search has not started': 'search_not_started',
+    'search belongs to an earlier attempt': 'search_attempt_changed',
+    'cursor is not the next page': 'search_cursor_out_of_order',
+    'search already complete; use resolution tool': 'search_already_complete',
+    'all candidate pages must be read first': 'search_incomplete',
+    'fixture must be uniquely resolved first': 'fixture_not_bound',
+    'fixture is no longer active': 'fixture_inactive',
+    'invalid or cross-query cursor': 'search_cursor_invalid',
+    'original search scope unavailable': 'search_scope_unavailable',
+    'original search scope checksum mismatch': 'search_scope_checksum_mismatch',
+    'continuation filters conflict with original search': 'search_scope_conflict',
+    'tool evidence budget exceeded; no partial response returned': 'evidence_budget_exceeded',
+}
+
+
+def rejection_reason(error):
+    """Persist a fixed code only, never arbitrary exception/source text."""
+    detail = error.detail
+    if isinstance(detail, str):
+        return REJECTION_REASONS.get(detail, 'tool_contract_rejected')
+    if isinstance(detail, dict) and detail.get('category') == 'detection_deadline_exceeded':
+        return 'detection_deadline_exceeded'
+    return 'tool_contract_rejected'
 
 
 def _budget_error():
@@ -354,6 +378,7 @@ def tool_evidence(kind):
                                     await trace(conn, body.review_id, kind, {**context,
                                         'call_id': current.call_id, 'status': 'failed', 'parameters': _parameters(body),
                                         'failure_category': ('evidence_budget_exceeded' if original.status_code == 413 else 'tool_contract_rejected'),
+                                        'rejection_reason': rejection_reason(original),
                                         'http_status': original.status_code,
                                         'elapsed_ms': round((time.perf_counter() - current.started) * 1000, 3)})
                     except HTTPException:
