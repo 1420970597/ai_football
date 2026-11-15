@@ -569,14 +569,42 @@ async def _expire_detection_deadline(pool, job):
         changed = await conn.fetchval(
             "UPDATE v2_analysis_jobs SET state='unresolved',lease_until=NULL,"
             "last_error='detection_deadline_exceeded',updated_at=now() "
-            "WHERE id=$1 AND attempt_id=$2 AND state IN ('running','retry') RETURNING id",
+            "WHERE id=$1 AND attempt_id=$2 AND state IN ('running','retry') RETURNING message_id",
             job['id'], job['attempt_id'])
         if changed:
+            # The signal tools commit independently. A model still composing
+            # its explanation at the cutoff must not hide accepted records.
+            # This is audit-only work: no tool, fresh budget or signal write.
+            try:
+                async with conn.transaction():
+                    await record_deadline_summary(conn, job | {'message_id': changed})
+            except (TimeoutError, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+                # A receipt read failure must not roll back the deadline fence.
+                log.warning('deadline receipt unavailable review_id=%s category=%s',
+                            job['id'], type(exc).__name__)
+                await append_traces(conn, job['id'], [('deadline_summary_unavailable', {
+                    'attempt_id': str(job['attempt_id']), 'category': type(exc).__name__,
+                    'accepted_evidence_preserved': True})])
             await append_traces(conn, job['id'], [('review_deadline_exceeded', {
                 'attempt_id': str(job['attempt_id']), 'category': 'detection_deadline_exceeded',
                 'limit_seconds': 20, 'accepted_evidence_preserved': True,
                 'detected_at': job['message']['detected_at'].isoformat(),
                 'not_successful_within_deadline': True})])
+
+
+async def record_deadline_summary(conn, job):
+    from .review_summary import make_summary
+    evidence = await read_summary_evidence(
+        conn, job['id'], job['attempt_id'], job['message_id'], SUMMARY_ITEM_LIMIT)
+    receipt = make_summary(evidence.signals, accepted_total=evidence.total,
+        rejected=evidence.rejected, review_mode=job.get('review_mode', 'real_time'),
+        identified=evidence.identified, incomplete={'detection_deadline_exceeded': True,
+            'unfinished_search_count': 0, 'unbound_mention_count': 0})
+    receipt.update(attempt_id=str(job['attempt_id']), outcome='unresolved',
+        signal_count=evidence.total, reason_code='detection_deadline_exceeded',
+        deadline_exceeded=True, signal_deadline_seconds=20,
+        content=receipt['content']+'\n审核在检测后20秒截止；此前已接受记录保留，其余未完成核验，禁止过期补录或自动重试。')
+    await append_traces(conn, job['id'], [('system_review_result', receipt)])
 
 
 async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncClient | None = None) -> None:

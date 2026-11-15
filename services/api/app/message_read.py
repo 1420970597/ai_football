@@ -14,6 +14,7 @@ from .pagination import decode_cursor, encode_cursor
 from .review_tool_evidence import MAX_CHUNKS, replay_snapshot, snapshot_result
 from . import media_grants
 from .handicap_lines import line_projection
+from .review_diagnostics import message_diagnostics
 
 HEADERS = {'Cache-Control': 'private, no-store'}
 CURSOR_SECONDS = 900
@@ -207,6 +208,7 @@ async def detail(pool, request, actor, message, *, context='user'):
             traces['items'] = [{**dict(pending), 'trace_kind': 'review_state',
                                 'payload': {'note': '审核尚未保存轨迹，原文继续保留'}}]
     return {'message': message_projection(dict(message), admin=context=='admin', request=request, actor=actor), 'analysis': traces['items'],
+            'review_diagnosis': (await message_diagnostics(pool, [message['id']]))[message['id']],
             'analysis_next_cursor': traces['next_cursor'], 'analysis_has_more': traces['has_more'],
             'system_summary': None if expired else await latest_summary(pool, message['id']),
             'latest_model_result': None if expired else await latest_model_result(pool, message['id']),

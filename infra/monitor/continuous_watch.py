@@ -65,8 +65,9 @@ def main():
     if state.get('acceptance_contract')!=ACCEPTANCE_CONTRACT:
         raise ValueError('Acceptance contract mismatch')
     stop_health=threading.Event()
+    continuous = os.environ.get('EXPERT_CONTINUOUS_DIAGNOSIS') == '1'
     threading.Thread(target=health_loop,args=(source,root,stop_health),daemon=True).start()
-    while not state.get('complete'):
+    while continuous or not state.get('complete'):
         now=int(time.time())
         failure=None
         for repairfile in sorted(root.glob('repair-*.json')):
@@ -105,7 +106,7 @@ def main():
                 break
             evidence['audit_sha256']=hashlib.sha256(auditfile.read_bytes()).hexdigest()
             state=record(state,evidence);atomic(statefile,state)
-        atomic(root/'watch-status.json',failure or {'state':'completed'if state.get('complete')else'watching',
+        atomic(root/'watch-status.json',failure or {'state':'completed'if state.get('complete')and not continuous else'watching',
             'at':int(time.time()),'streak':state.get('streak',0),'last_end':state.get('last_end'),
             'next_window_end':(int(time.time())//1800+1)*1800})
         # Raw retention uses original posted_at, never file mtime or edit time.
@@ -117,7 +118,7 @@ def main():
                     if path.parent!=manifestfile.parent:raise ValueError('Invalid evidence path')
                     path.unlink(missing_ok=True)
                 manifestfile.unlink()
-        if not state.get('complete'):time.sleep(15)
+        if continuous or not state.get('complete'):time.sleep(15)
     stop_health.set()
     return state
 

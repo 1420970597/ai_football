@@ -151,7 +151,8 @@ def main():
     fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
     while True:
         statefile=root/'acceptance-state.json'
-        if statefile.exists()and json.loads(statefile.read_text()).get('complete'):return
+        if (os.environ.get('EXPERT_CONTINUOUS_DIAGNOSIS') != '1'
+                and statefile.exists()and json.loads(statefile.read_text()).get('complete')):return
         for directory in sorted(root.iterdir()):
             if not directory.is_dir()or not directory.name.isdigit():continue
             if not(directory/'snapshot-summary.json').exists()or(directory/'audit.json').exists():continue

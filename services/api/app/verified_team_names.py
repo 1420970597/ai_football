@@ -5,8 +5,13 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.18'
+REGISTRY_VERSION = '2026-11-15.1'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'日本职业联赛杯',
+        'names':('柏太阳神','柏雷素尔','柏雷素爾','Kashiwa Reysol'),
+        'reference':'nowscore:209:team25+tdl209+jleague:kashiwa:20261115',
+    },
     {
         'sport':'football','competition':'巴西甲级联赛',
         'names':('迈拉索尔SP','米拉索','米拉索尔','Mirassol','Mirassol FC'),

@@ -1240,6 +1240,8 @@ async def telegram_messages(request: Request, expert_id: uuid.UUID | None = None
         payload = json.dumps([str(expert_id) if expert_id else "all", page[-1]["posted_at"].isoformat(), str(page[-1]["id"])]).encode()
         signature = hmac.new(request.app.state.settings.encryption_key, payload, hashlib.sha256).digest()
         next_cursor = base64.urlsafe_b64encode(payload + signature).decode().rstrip("=")
+    from ..review_diagnostics import annotate_messages
+    page = await annotate_messages(database.current_pool(), page)
     items = [dict(row) | message_read.message_projection(
         dict(row), admin=True, request=request, actor=actor) for row in page]
     return JSONResponse(jsonable_encoder({"items": items, "next_cursor": next_cursor}),

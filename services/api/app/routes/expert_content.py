@@ -92,6 +92,8 @@ async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | 
         "ORDER BY m.posted_at DESC,m.id DESC LIMIT $4", expert_id, decoded[0] if decoded else None, cursor_id, limit+1,
     )
     page = rows[:limit]
+    from ..review_diagnostics import annotate_messages
+    page = await annotate_messages(database.current_pool(), page)
     return {'items': [media_links(dict(row), request, actor) for row in page],
             'next_cursor': _encode_cursor(page[-1]['posted_at'], str(page[-1]['id']), request, cursor_scope) if len(rows)>limit and page else None}
 
