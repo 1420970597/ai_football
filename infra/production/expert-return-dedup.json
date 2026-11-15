@@ -1,10 +1,10 @@
 {
   "services": {
     "api": {
-      "image": "sha256:08731837fa2c4b1cd0a86483085966045bf5a9f9ebd95da19279c179a10d7c73"
+      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366"
     },
     "web": {
-      "image": "sha256:b2c627eb449e882aa2e0bb9bcf16ae5dae925b943828f147989c5d2d6da7bf13"
+      "image": "sha256:ed4e46c830dbc0e53ca6991e306322265f8ddb390a4b9bc39163fc7d79d47101"
     }
   }
 }

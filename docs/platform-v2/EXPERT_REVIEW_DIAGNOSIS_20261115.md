@@ -1,6 +1,6 @@
 # 专家未解决与审核失败持续排查
 
-更新时间：2026-11-15 14:24 UTC。当前目标：按真实消息与审核尝试分开统计未解决、系统失败和正确拒绝，定位可修复根因，保持准确率和检测后20秒截止，验证同时发言效率。当前分支 fix/TASK-79-channel-identity，起点 e0df9498；根目录其他修改与 .omc 保留。
+更新时间：2026-11-15 14:36 UTC。当前目标：按真实消息与审核尝试分开统计未解决、系统失败和正确拒绝，定位可修复根因，保持准确率和检测后20秒截止，验证同时发言效率。当前分支 fix/TASK-79-channel-identity，起点 e0df9498；根目录其他修改与 .omc 保留。
 
 ## 工作包与验收
 
@@ -47,3 +47,29 @@
 - unsupported媒体元数据实际为webm、ogg、mp4，部分可能是贴纸或反馈，不能把81条直接等同81条遗漏推荐；必须逐条通过隔离视频帧/音频审计确定。现有独立审计覆盖该路径，业务实时管道仍只支持图文，缺口保留。
 - 6小时发现18条工具409（搜索15、读盘3），旧trace只保存tool_contract_rejected，丢失具体拒绝原因，无法从旧日志断言均为停盘或模型失败。新增固定白名单rejection_reason并在30分钟指标聚合；未知异常不导出自由文本，仍保留全部原门禁。正在冻结回归，合格后只更新local-mcp证据模块。
 - 发布后暂未出现新的自然20秒超时样本；截止汇总已隔离验证，线上真实超时验收仍待自然发言，不向生产写测试消息或重放旧投注。
+
+## 14:28 UTC 增量发布验收／持续语义分析中
+
+- 增量冻结命令：sh infra/test/run.sh test_review_tool_evidence test_review_diagnosis_watch test_review_diagnostics test_review_deadline_receipt test_review_detection_deadline test_reviews test_review_worker test_review_summary test_review_search_scope test_audit_runner test_consecutive_windows test_window_snapshot test_window_audit；262项、0跳过、74.241秒、退出0，证据.runtime/test-evidence/545311。源码8f2edbfcaa5dd1a4916b214f717384b44ae650b2已推送。
+- local-mcp证据模块增量镜像97994d54已通过import并在闲置门禁发布，门禁2.394秒，退出0；API与MCP真实readyz均ready。初次docker build --cpus不受本机buildx支持退出125，改用现有legacy builder的cpu-period/quota后构建退出0，日志保留。未安装依赖、未迁移数据。
+- 13条仍在滚动6小时内的搜索409已只读重建调用顺序：全部在相同attempt、相同完整scope已有complete=true回执后重复首查；这是模型重复调用已完成查询，非TG采集409。读盘3条旧错误缺少原始detail，保留未知；新rejection_reason只写固定枚举，后续能区分重复检索/游标顺序/未绑定/失效/截止。不能根据HTTP409推断都是停盘。
+- 首窗独立审核33/42时：27 consistent、5 uncertain、1 confirmed_omission。确认遗漏来自多场NBA来源：20秒内未完成全部独立项；另有明确足球推荐完全没有首工具即到期。它们是真实解析覆盖问题，不能把全部未解决解释成正确拒绝。此窗发生于发布前，新模型提速尚未实施，不算修复后通过。原文、图片与逐项回执在已有72小时私有清理范围内。
+- 线上45,660字节预载中文上下文/技能，模型最小输入约2.2万tokens；有工具续审约4.5万及以上。与首工具p95约17秒共同说明模型首推理和多轮往返风险，尚未做删规则/换模型的未验证修改。后续需在隔离证据集按正确率逐项验收压缩、减少重复往返；期间不放宽20秒和精确绑定。
+- 新持续指标已成功加入tool_rejections聚合，真实只读SQL退出0；三进程重启策略unless-stopped、固定镜像、资源限额与日志轮转已启用。原已停止采样周期的audit协调器已停止，历史文件保留；新独立审计持续执行，三窗完成后也不停止，尚未取得连续三窗全通过。
+- 生产覆盖中现有API/web/worker/local-mcp指针已同步，新增infra/production/review-diagnosis.json，避免后续组合回退；其他服务指针不改。脱敏结构化报告reports/expert-review-diagnosis-20261115.json。下一步由持续采样保留每窗缺口；当前未承诺自动改生产代码或已解决所有识别失败。
+
+## 14:32 UTC 持续分析发现并修复共用检索冲突（代码已写）
+
+- 对上述13条搜索409进一步比对原文双方：8条重复同一对阵，5条是不同对阵共用同一联赛/时间/项目候选范围，不能一概归咎模型。原因是搜索scope不含双方（候选可以共用），合并工具自动回退联赛检索时却再次首查已完成的scope，被API拒绝；并行两场首次还可能竞争唯一INSERT。这会损害多场效率并制造协议失败。
+- 最小修复：仅已认证MCP内部请求显式标记single-page-v1时，在同review/attempt、同完整scope、全部候选能一页完整返回、首查无cursor且原文双方成对时复用不可变候选，再按本次原文双方独立resolve；不复用旧绑定/盘口，不更新分页进度。显式路径增加任务+attempt+scope事务锁，避免并行首次插入竞争。多页未读完、缩小页导致候选不完整、跨任务/attempt继续拒绝；默认原有分页契约不变。
+- 新增真实PostgreSQL并发两对阵、已完成候选价格投影变更后不改快照、未知双方不绑定、旧attempt拒绝、分页不得跳过、内部header不进入模型工具参数测试。正在冻结Docker回归，前一步生产模块与本分支修改前完全同hash；通过后只更新local-mcp reviews与hermes-mcp server两个模块。
+- 首个13:30–14:00UTC窗口独立审计已完整结束，unexplained_outcomes=7，验收不通过，连续通过计数仍0；传输中一次RuntimeError重试后完成，未把不确定结果改成正常。后续窗口继续采样，不因失败停掉。
+
+## 14:36 UTC 共用范围修复发布／持续观测保留
+
+- 首轮223项退出1：新增两个样本将多对阵写在同一分号行，触发既有严格原文身份负证据门禁；没有删门禁，改为真实逐行对阵样本后12项针对性退出0（2.849秒，.runtime/test-evidence/573344），原223项完整重跑退出0（43.474秒、0跳过，.runtime/test-evidence/575114）。失败日志.runtime/review-diagnosis-scope-tests.log保留。
+- 源码78bbff4386c3bd90afd5722efc3969d1cd358d28已推送；候选local-mcp bdda4fca、hermes-mcp9f599d2c只覆盖上述两个模块，部署前线上源文件与修改前HEAD同hash。两服务联合Compose等待12秒超时，local-mcp已健康、hermes-mcp仍created，门禁按finally释放；立即docker start已创建候选退出0，于14:34:46UTC恢复。真实MCP initialize鉴权握手200且协议结果完整、业务工具调用0，API/MCP readyz200。不能把这次超时记为首次部署成功。
+- 最终五个业务服务逐项核对环境、命令、入口、用户、工作目录、挂载、CPU/内存/PID、端口、安全属性和重启策略均与发布前一致，changed_fields为空；运行正常、镜像与候选一致。全程未变动数据结构、实际账户、资金许可或真实投注。
+- 第二窗14:00–14:30UTC对账：16条上游信任发言、18个存储版本、缺失采集0、17来源1排除，分页与数据库完整；19条指标消息与此分母不相同（指标按created_at、审核对账按posted/detected及上游范围），禁止相减推断漏采。两个窗口累计独立审核53条时：44一致、8不确定、1确认遗漏；第二窗仍审计中，全部窗口通过=false。
+- 已写repair-78bbff43标记从最终修复之后重新计连续验收，保留旧失败窗。指标健康、采样及隔离审计仍运行，每30分钟继续输出，不因三窗完成停止。当前阶段为诊断及本次确定性修复发布验收通过，语义覆盖/20秒全量达标仍在持续真实验收，不是完整交付。
+- 主要剩余依赖：自然新消息验证新截止汇总与候选复用；大输入模型耗时的隔离准确率对照；音视频实时业务能力与未经核验译名。持续观测不会自动修改生产代码，也不补录过期推荐。最终报告与生产指针随本阶段提交推送。

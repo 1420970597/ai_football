@@ -1,0 +1,29 @@
+{
+  "services": {
+    "api": {
+      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366"
+    },
+    "local-mcp-api": {
+      "image": "sha256:bdda4fcaa0387aa2bdfad0d1a4cd9bd452d5941891300eb89790113f873d8feb"
+    },
+    "review-worker": {
+      "image": "sha256:86c1296d36771a14b92078f5192be732f952327e0ce2af49e6b9a89ce4968b04"
+    },
+    "web": {
+      "image": "sha256:ed4e46c830dbc0e53ca6991e306322265f8ddb390a4b9bc39163fc7d79d47101"
+    },
+    "hermes-mcp": {
+      "image": "sha256:9f599d2c7a932bb9b37cd28fa2564b449347f8f97b37e4bdb08642134a04656f"
+    }
+  },
+  "x-review-diagnosis": {
+    "source_revision": "78bbff4386c3bd90afd5722efc3969d1cd358d28",
+    "schema_changes": 0,
+    "funded_test_orders": 0,
+    "production_synthetic_events": 0,
+    "review_deadline_seconds": 20,
+    "continuous_monitor_compose": "infra/monitor/compose.review-diagnosis.yml",
+    "interval_seconds": 1800,
+    "semantic_acceptance": "in_progress"
+  }
+}

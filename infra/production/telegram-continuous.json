@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:08731837fa2c4b1cd0a86483085966045bf5a9f9ebd95da19279c179a10d7c73",
+      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366",
       "command": [
         "uvicorn",
         "app.main:app",
@@ -37,7 +37,7 @@
         "REVIEW_EXPERT_CONCURRENCY_FLOOR": "6",
         "REVIEW_HISTORICAL_CONCURRENCY": "0"
       },
-      "image": "sha256:b39aeeae20a2206e15d3c8a9543cefac916b9d16bbd566d34ae971f07cbb2d65",
+      "image": "sha256:86c1296d36771a14b92078f5192be732f952327e0ce2af49e6b9a89ce4968b04",
       "command": [
         "python",
         "-m",
@@ -49,7 +49,7 @@
       "cpus": 0.25
     },
     "local-mcp-api": {
-      "image": "sha256:6f4a19d0b485e8af51697fe36de49161d2998063188608ec4fb822723172059e",
+      "image": "sha256:bdda4fcaa0387aa2bdfad0d1a4cd9bd452d5941891300eb89790113f873d8feb",
       "command": [
         "uvicorn",
         "app.mcp_app:app",
@@ -67,7 +67,7 @@
       "cpus": 0.4
     },
     "hermes-mcp": {
-      "image": "sha256:31742f4d7ced29096529c29030013c15a3af3897ec2f77863aa314264622f179"
+      "image": "sha256:9f599d2c7a932bb9b37cd28fa2564b449347f8f97b37e4bdb08642134a04656f"
     },
     "hermes": {
       "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",

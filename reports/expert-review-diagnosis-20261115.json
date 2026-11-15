@@ -1,0 +1,376 @@
+{
+  "as_of": "2026-11-15T14:37:14.266083+00:00",
+  "source_revision": "78bbff4386c3bd90afd5722efc3969d1cd358d28",
+  "findings": {
+    "six_hour_jobs_at_1354utc": {
+      "unresolved": 681,
+      "failed": 54,
+      "succeeded": 39,
+      "source_edited": 49,
+      "source_deleted": 5,
+      "deadline": 76
+    },
+    "deadline_tasks_with_committed_signals_24h": 21,
+    "original_monitor_last_end_utc": "2026-11-14T23:30:00Z",
+    "original_monitor_stopped_after_three_passes": true,
+    "model_initial_prompt_tokens_approx": 22000,
+    "unsupported_media_is_not_proof_of_omitted_recommendations": true,
+    "legacy_tool_rejections_without_reason": 18,
+    "legacy_search_409_reconstructed": {
+      "same_pair": 8,
+      "different_pair_shared_scope": 5,
+      "unreconstructed": 0,
+      "read_only": true
+    }
+  },
+  "verification": {
+    "frozen_regression_tests": 262,
+    "skipped": 0,
+    "duration_seconds": 74.241,
+    "exit_code": 0,
+    "test_evidence": ".runtime/test-evidence/545311",
+    "browser_viewports": [
+      1440,
+      390
+    ],
+    "browser_labels": 4,
+    "browser_write_requests": 0,
+    "runtime_configuration_checks": [
+      {
+        "service": "/ai-football-v2-api-1",
+        "configuration_preserved": true,
+        "changed_fields": [],
+        "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366",
+        "running": true,
+        "started_at": "2026-11-15T14:15:38.412863933Z"
+      },
+      {
+        "service": "/ai-football-v2-web-1",
+        "configuration_preserved": true,
+        "changed_fields": [],
+        "image": "sha256:ed4e46c830dbc0e53ca6991e306322265f8ddb390a4b9bc39163fc7d79d47101",
+        "running": true,
+        "started_at": "2026-11-15T14:15:52.101958175Z"
+      },
+      {
+        "service": "/ai-football-v2-review-worker-1",
+        "configuration_preserved": true,
+        "changed_fields": [],
+        "image": "sha256:86c1296d36771a14b92078f5192be732f952327e0ce2af49e6b9a89ce4968b04",
+        "running": true,
+        "started_at": "2026-11-15T14:18:04.145020408Z"
+      },
+      {
+        "service": "/ai-football-v2-local-mcp-api-1",
+        "configuration_preserved": true,
+        "changed_fields": [],
+        "image": "sha256:bdda4fcaa0387aa2bdfad0d1a4cd9bd452d5941891300eb89790113f873d8feb",
+        "running": true,
+        "started_at": "2026-11-15T14:34:21.282290657Z"
+      },
+      {
+        "service": "/ai-football-v2-hermes-mcp-1",
+        "configuration_preserved": true,
+        "changed_fields": [],
+        "image": "sha256:9f599d2c7a932bb9b37cd28fa2564b449347f8f97b37e4bdb08642134a04656f",
+        "running": true,
+        "started_at": "2026-11-15T14:34:46.443173724Z"
+      }
+    ],
+    "candidate_scope_regression": {
+      "tests": 223,
+      "skipped": 0,
+      "duration_seconds": 43.474,
+      "exit_code": 0,
+      "evidence": ".runtime/test-evidence/575114"
+    },
+    "mcp_initialize": {
+      "http_status": 200,
+      "protocol_result": true,
+      "business_tools_called": 0
+    }
+  },
+  "monitor": {
+    "interval_seconds": 1800,
+    "stop_after_three_passes": false,
+    "first_closed_window": {
+      "start": 1794749400,
+      "end": 1794751200,
+      "snapshot_sha256": "3b23acca2deb2f346b66a02caba34c765b014631fca46ec2e94a6ae1b50c9e59",
+      "upstream_complete": true,
+      "database_complete": true,
+      "trusted_messages": 42,
+      "missing_messages": 0,
+      "stored_versions": 42,
+      "source_count": 17,
+      "excluded_sources": 1
+    },
+    "independently_audited_so_far": 55,
+    "verdicts_so_far": {
+      "uncertain": 9,
+      "consistent": 45,
+      "confirmed_omission": 1
+    },
+    "reason_codes_so_far": {
+      "media_unavailable": 2,
+      "source_incomplete": 2,
+      "exact_evidence_match": 14,
+      "non_recommendation": 37,
+      "incomplete_tool_evidence": 6,
+      "historical_feedback": 7,
+      "omitted_valid_selection": 1,
+      "missing_source_selection": 4,
+      "candidate_ambiguity": 3,
+      "missing_source_period": 2,
+      "upstream_unavailable": 1
+    },
+    "semantic_audit_complete": false,
+    "metrics_snapshot_30m": {
+      "messages": 42,
+      "states": {
+        "unresolved": 37,
+        "failed": 1,
+        "not_reviewed": 4
+      },
+      "diagnosis": {
+        "model_concluded_without_signal": 21,
+        "deadline_with_signals": 3,
+        "deadline_without_signals": 10,
+        "source_deleted": 1,
+        "verification_incomplete": 2,
+        "not_reviewed": 4,
+        "identity_unresolved": 1
+      },
+      "completion_issues": {
+        "text_intent_unverified": 2,
+        "source_total_review_gaps": 1
+      },
+      "tool_rejections": {
+        "legacy_unspecified": 2
+      },
+      "timing": {
+        "queue_ms": {
+          "samples": 37,
+          "p50": 263.076,
+          "p95": 757.199,
+          "max": 2278.461
+        },
+        "prompt_tokens": {
+          "samples": 24,
+          "p50": 22591.0,
+          "p95": 45346.0,
+          "max": 47085.0
+        },
+        "first_tool_ms": {
+          "samples": 10,
+          "p50": 11586.564,
+          "p95": 15726.988,
+          "max": 17592.154
+        },
+        "event_to_signal_ms": {
+          "samples": 3,
+          "p50": 13996.365,
+          "p95": 13996.365,
+          "max": 16385.595
+        }
+      },
+      "attention_refs": [
+        {
+          "message_ref": "e3e664b7d9cc",
+          "code": "deadline_with_signals",
+          "accepted_count": 1
+        },
+        {
+          "message_ref": "e2fbc244c41a",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "b577229dff7e",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "9d6b1458c270",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "e2684a390488",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "a0a429a301c0",
+          "code": "verification_incomplete",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "d4511760a4ed",
+          "code": "not_reviewed",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "6f2272d20a1e",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "e89c5247804e",
+          "code": "not_reviewed",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "70df5ce9c30b",
+          "code": "verification_incomplete",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "065d3383979f",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "f014f1591bb1",
+          "code": "not_reviewed",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "7634b613f8ca",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "fbbece533b38",
+          "code": "not_reviewed",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "a947ff6a9cab",
+          "code": "deadline_with_signals",
+          "accepted_count": 1
+        },
+        {
+          "message_ref": "188e9a0513f7",
+          "code": "identity_unresolved",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "307cc5fdee11",
+          "code": "deadline_with_signals",
+          "accepted_count": 1
+        },
+        {
+          "message_ref": "3ebcc26a4a5a",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "5d67d76ad59c",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        },
+        {
+          "message_ref": "e93fdd4fdda6",
+          "code": "deadline_without_signals",
+          "accepted_count": 0
+        }
+      ],
+      "raw_content_exported": false,
+      "business_writes": 0,
+      "model_conclusion_is_not_independent_audit": true,
+      "semantic_omission_audit_complete": false
+    },
+    "health_sample_interval_seconds": 60,
+    "windows": [
+      {
+        "start": 1794749400,
+        "end": 1794751200,
+        "snapshot_sha256": "3b23acca2deb2f346b66a02caba34c765b014631fca46ec2e94a6ae1b50c9e59",
+        "upstream_complete": true,
+        "database_complete": true,
+        "trusted_messages": 42,
+        "missing_messages": 0,
+        "stored_versions": 42,
+        "source_count": 17,
+        "excluded_sources": 1,
+        "audit": {
+          "audit_complete": true,
+          "trusted_messages": 42,
+          "recommendation_messages": 13,
+          "confirmed_omissions": 1,
+          "confirmed_misbindings": 0,
+          "deadline_violations": 13,
+          "unexplained_outcomes": 7,
+          "unreviewed_messages": 0
+        }
+      },
+      {
+        "start": 1794751200,
+        "end": 1794753000,
+        "snapshot_sha256": "177530e9c92f8c55e695050338a972a72208bd06c2fb09551568d26c1c449a91",
+        "upstream_complete": true,
+        "database_complete": true,
+        "trusted_messages": 16,
+        "missing_messages": 0,
+        "stored_versions": 18,
+        "source_count": 17,
+        "excluded_sources": 1
+      }
+    ],
+    "all_windows_passed": false,
+    "watch_status": {
+      "state": "watching",
+      "at": 1794753425,
+      "streak": 0,
+      "last_end": null,
+      "next_window_end": 1794754800
+    },
+    "metrics_status": {
+      "state": "watching",
+      "at": 1794753043,
+      "last_end": 1794753000,
+      "next_end": 1794754800,
+      "last_snapshot": "1794753000.json",
+      "interval_seconds": 1800
+    }
+  },
+  "images": {
+    "api": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366",
+    "web": "sha256:ed4e46c830dbc0e53ca6991e306322265f8ddb390a4b9bc39163fc7d79d47101",
+    "review-worker": "sha256:86c1296d36771a14b92078f5192be732f952327e0ce2af49e6b9a89ce4968b04",
+    "local-mcp-api": "sha256:bdda4fcaa0387aa2bdfad0d1a4cd9bd452d5941891300eb89790113f873d8feb",
+    "hermes-mcp": "sha256:9f599d2c7a932bb9b37cd28fa2564b449347f8f97b37e4bdb08642134a04656f"
+  },
+  "limits": {
+    "real_betting_tests": 0,
+    "production_synthetic_events": 0,
+    "expired_signal_replay": 0,
+    "business_deadline_seconds": 20,
+    "worker_concurrency": 6,
+    "remaining": [
+      "large_prompt_and_model_round_trip_latency",
+      "unsupported_audio_video_realtime_pipeline",
+      "unverified_name_aliases_and_identity_ambiguity",
+      "natural_postrelease_deadline_receipt_verification_pending"
+    ]
+  },
+  "production_overrides_updated": [
+    "homepage-dedup.json",
+    "telegram-continuous.json",
+    "expert-review.json",
+    "homepage-live-gap.json",
+    "expert-coverage.json",
+    "telegram-409.json",
+    "homepage-dates.json",
+    "telegram-onboarding.json",
+    "telegram-channel-identity.json",
+    "expert-return-dedup.json"
+  ],
+  "deployment_incident": {
+    "combined_scope_compose_timeout_seconds": 12,
+    "recovered_by_starting_prepared_container": true,
+    "mcp_protocol_after_recovery": 200,
+    "configuration_changed": false
+  }
+}

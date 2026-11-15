@@ -1,13 +1,13 @@
 {
   "services": {
     "api": {
-      "image": "sha256:08731837fa2c4b1cd0a86483085966045bf5a9f9ebd95da19279c179a10d7c73"
+      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366"
     },
     "review-worker": {
-      "image": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08"
+      "image": "sha256:86c1296d36771a14b92078f5192be732f952327e0ce2af49e6b9a89ce4968b04"
     },
     "local-mcp-api": {
-      "image": "sha256:6291c59678dc7c9f34b4b62834f62ee13b5adeeb32c726c261d35255b35d8435"
+      "image": "sha256:bdda4fcaa0387aa2bdfad0d1a4cd9bd452d5941891300eb89790113f873d8feb"
     },
     "collector": {
       "image": "sha256:1c21f2cec54d75b3812998ced074bea1af4ffe54a3f292a8769c8f587f3253ff",
@@ -49,10 +49,10 @@
       ]
     },
     "hermes-mcp": {
-      "image": "sha256:44bd067d9a41bcf72b2a5fc71cde600bc78377d22af687b1de74400a522bf800"
+      "image": "sha256:9f599d2c7a932bb9b37cd28fa2564b449347f8f97b37e4bdb08642134a04656f"
     },
     "web": {
-      "image": "sha256:b2c627eb449e882aa2e0bb9bcf16ae5dae925b943828f147989c5d2d6da7bf13"
+      "image": "sha256:ed4e46c830dbc0e53ca6991e306322265f8ddb390a4b9bc39163fc7d79d47101"
     }
   }
 }
