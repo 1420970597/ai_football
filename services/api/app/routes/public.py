@@ -17,7 +17,7 @@ from ..expert_statistics import StatisticsScope, source_options, statistics_scop
 from ..review_state import fresh_quote
 from ..handicap_lines import line_projection
 from .. import message_read
-from ..recommendation_eligibility import manual_phase_sql
+from ..recommendation_eligibility import current_selection_sql, manual_phase_sql
 from ..signal_identity import identity_columns
 
 router = APIRouter(prefix="/api/v1/public")
@@ -139,17 +139,23 @@ def _visible_recommendations_where() -> str:
     # Manual confirmation reprices this native selection at the provider.
     # Cache age is not proof that the recommendation or selection has expired.
     # EXISTS avoids duplicate recommendations for legacy NULL/zero winner lines.
-    return _VISIBLE_RECOMMENDATIONS_WHERE + (
-        " AND EXISTS(SELECT 1 FROM v2_current_quotes q WHERE q.fixture_id=s.fixture_id "
-        "AND q.market_id=s.market_id AND q.period=s.period AND q.market_kind=s.market_kind "
-        "AND (q.line IS NOT DISTINCT FROM s.line OR s.market_kind='winner' "
-        "AND COALESCE(q.line,0)=0 AND COALESCE(s.line,0)=0) AND q.selection=s.selection "
-        "AND q.status='active' AND q.price>1 AND q.price<'Infinity'::numeric "
-        "AND q.play_id IS NOT NULL AND q.play_id<>'' "
-        "AND q.market_instance_id IS NOT NULL AND q.market_instance_id<>'' "
-        "AND q.selection_id IS NOT NULL AND q.selection_id<>'' "
-        "AND (q.source_updated_at IS NULL OR q.source_updated_at<=now()) AND " + manual_phase_sql() + ")"
-    )
+    return (_VISIBLE_RECOMMENDATIONS_WHERE +
+            " AND EXISTS(SELECT 1 FROM v2_current_quotes q WHERE " +
+            current_selection_sql() + " AND " + manual_phase_sql() + ")")
+
+
+def _recommendation_ranked_sql():
+    return ("SELECT s.id,s.expert_id,e.display_nickname,s.fixture_id,s.phase,s.market_id,s.market_name,"
+            "s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,s.score_baseline,"
+            "s.outcome,s.unit_net,s.created_at,row_number() OVER(PARTITION BY s.expert_id," +
+            identity_columns('s') + " ORDER BY s.created_at DESC,s.id DESC) AS semantic_rank " +
+            _VISIBLE_RECOMMENDATIONS_FROM + "WHERE s.fixture_id=wanted.fixture_id AND " +
+            _visible_recommendations_where())
+
+
+def _recommendation_scope(fixture_id):
+    return {'kind': 'match_recommendations', 'fixture_id': fixture_id,
+            'eligibility': 'provider-reprice-v2', 'outcome': 'pending'}
 
 
 async def _recommendation_summaries(fixture_ids: list[str], limit: int) -> dict[str, list[dict]]:
@@ -157,11 +163,7 @@ async def _recommendation_summaries(fixture_ids: list[str], limit: int) -> dict[
         return {}
     rows = await database.current_pool().fetch(
         "SELECT picked.* FROM unnest($1::text[]) wanted(fixture_id) CROSS JOIN LATERAL ("
-        "SELECT ranked.* FROM (SELECT s.id,s.expert_id,e.display_nickname,s.fixture_id,s.phase,s.market_id,s.market_name,"
-        "s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,s.score_baseline,"
-        "s.outcome,s.unit_net,s.created_at,row_number() OVER(PARTITION BY s.expert_id," + identity_columns('s') +
-        " ORDER BY s.created_at DESC,s.id DESC) AS semantic_rank " + _VISIBLE_RECOMMENDATIONS_FROM +
-        "WHERE s.fixture_id=wanted.fixture_id AND " + _visible_recommendations_where() +
+        "SELECT ranked.* FROM (" + _recommendation_ranked_sql() +
         ") ranked WHERE semantic_rank=1 ORDER BY created_at DESC,id DESC LIMIT $2) picked "
         "ORDER BY picked.fixture_id,picked.created_at DESC,picked.id DESC", fixture_ids, limit+1)
     output: dict[str, list[dict]] = {}
@@ -299,10 +301,40 @@ async def matches(
             item['expert_signals'] = recommendations.get(row['id'], [])[:recommendation_limit]
             item['expert_signals_has_more'] = len(recommendations.get(row['id'], [])) > recommendation_limit
             item['recommendations_limited'] = not full_history
+            item['expert_signals_next_cursor'] = (
+                _encode_cursor(item['expert_signals'][-1]['created_at'], str(item['expert_signals'][-1]['id']),
+                               request, _recommendation_scope(row['id']))
+                if full_history and item['expert_signals_has_more'] else None)
         output.append(item)
     next_cursor = _encode_cursor(items[-1]["kickoff_at"], items[-1]["id"], request, cursor_scope) if has_more and items else None
     return {"items": output, "next_cursor": next_cursor, "page_size": page_size,
             "markets_included": include_markets, "recommended_only": recommended_only, "server_time": datetime.now(timezone.utc)}
+
+
+@router.get('/matches/{fixture_id}/recommendations')
+async def match_recommendations(fixture_id: str, request: Request, cursor: str | None = None,
+                                page_size: int = Query(default=20, ge=1, le=100)):
+    if not await _has_entitlement(request, 'expert_full_history'):
+        raise HTTPException(403, '需要完整专家记录权益')
+    scope = _recommendation_scope(fixture_id)
+    decoded = _decode_cursor(cursor, request, scope)
+    try:
+        before = uuid.UUID(decoded[1]) if decoded else None
+    except ValueError:
+        raise HTTPException(400, '专家决策分页游标无效') from None
+    rows = await database.current_pool().fetch(
+        "SELECT ranked.* FROM unnest(ARRAY[$1::text]) wanted(fixture_id) CROSS JOIN LATERAL (" +
+        _recommendation_ranked_sql() + ") ranked WHERE semantic_rank=1 "
+        "AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) "
+        "ORDER BY created_at DESC,id DESC LIMIT $4", fixture_id, decoded[0] if decoded else None, before, page_size+1)
+    items = []
+    for row in rows[:page_size]:
+        item = line_projection(row)
+        item.pop('semantic_rank', None)
+        items.append(item)
+    next_cursor = (_encode_cursor(items[-1]['created_at'], str(items[-1]['id']), request, scope)
+                   if len(rows)>page_size else None)
+    return {'items': items, 'next_cursor': next_cursor, 'fixture_id': fixture_id}
 
 
 async def _match_markets(fixture_id: str, request: Request, phase: str, *, cursor=None, page_size=500):

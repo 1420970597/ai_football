@@ -34,7 +34,7 @@ try{
       home_team:sport==='football'?'足球主队':'篮球主队',away_team:'客队',phase,clock_minute:33,
       // 篮球取三对三（加时赛真实比分），这是比分列要放下的最长内容；两对两放得下不代表它放得下。
       home_score:sport==='football'?1:108,away_score:sport==='football'?0:102,kickoff_at:instant,source_updated_at:instant,
-      markets:[],expert_signals_has_more:false,expert_signals:[0,1].map(i=>({id:sport+'-signal-'+i,expert_id:sport+'-expert',
+      markets:[],expert_signals_has_more:true,expert_signals_next_cursor:'next-expert-page',expert_signals:[0,1].map(i=>({id:sport+'-signal-'+i,expert_id:sport+'-expert',
         display_nickname:i?'另一位专家':'本场专家',phase:'scheduled',market_id:sport==='football'?'2':'38',
         market_name:sport==='football'?'全场大小':'全场总分',market_kind:'total',period:i?'first_half':'full_time',
         line:sport==='football'?'2.5':'220.5',selection_line:sport==='football'?'2.5':'220.5',selection:i?'under':'over',
@@ -53,6 +53,10 @@ try{
         return route.fulfill({json:{items,next_cursor:null,markets_included:false,recommended_only:scope==='true',server_time:instant}});
       }
       if(p==='/public/leagues')reads.push({p,date:url.searchParams.get('date')});
+      if(p==='/public/matches/football-match/recommendations') {
+        assert.equal(url.searchParams.get('cursor'),'next-expert-page');
+        return route.fulfill({json:{items:[{...match('football').expert_signals[0],id:'football-signal-2',display_nickname:'展开后的专家'}],next_cursor:null}});
+      }
       if(p==='/public/match-summaries')return route.fulfill({json:{items:url.searchParams.getAll('fixture_ids').map(id=>({fixture_id:id,phase:'live',markets:[],quote_fresh:false}))}});
       if(p==='/public/signals/basketball-signal-0')return route.fulfill({status:403,json:{detail:'需要完整原文权益'}});
       if(p==='/public/matches/basketball-match')return route.fulfill({json:{fixture:match('basketball'),markets:[],expert_signals:[],server_time:instant}});
@@ -94,6 +98,11 @@ try{
     assert.equal(await page.locator('[data-match-scope="recommended"]').getAttribute('aria-pressed'),'true');
     assert.equal(await page.locator('.match-row').count(),1);
     assert.equal(await page.locator('.match-recommendation').count(),2);
+    await page.locator('[data-more-recommendations="football-match"]').click();
+    await page.locator('[data-recommendation="football-signal-2"]').waitFor();
+    assert.equal(await page.locator('.match-recommendation').count(),3);
+    assert.match(await page.locator('#matches-list').innerText(),/展开后的专家/);
+    assert.equal(await page.locator('[data-more-recommendations="football-match"]').count(),0);
     assert.doesNotMatch(await page.locator('#matches-list').innerText(),/推荐时系统赔率|1\.95/);
     assert.equal(await page.locator('.recommendation-price').count(),0);
     assert.match(await page.locator('#matches-list').innerText(),/本场专家/);

@@ -14,3 +14,20 @@ def manual_phase_sql(s='s', f='f', q='q'):
             f"AND {s}.score_basis IN('unknown','full_period') AND "
             f"({q}.score_basis='full_period' OR ({q}.score_basis='unknown' AND "
             f"{native} AND ({total} OR ({tied_handicap}))))))")
+
+
+def current_selection_sql(s='s', q='q', *, require_active=True):
+    """Native option identity; automated execution verifies status upstream."""
+    identity = (f"{q}.fixture_id={s}.fixture_id AND {q}.market_id={s}.market_id "
+            f"AND {q}.period={s}.period AND {q}.market_kind={s}.market_kind "
+            f"AND ({q}.line IS NOT DISTINCT FROM {s}.line OR {s}.market_kind='winner' "
+            f"AND COALESCE({q}.line,0)=0 AND COALESCE({s}.line,0)=0) "
+            f"AND {q}.selection={s}.selection "
+            f"AND NULLIF({q}.play_id,'') IS NOT NULL "
+            f"AND NULLIF({q}.market_instance_id,'') IS NOT NULL "
+            f"AND NULLIF({q}.selection_id,'') IS NOT NULL")
+    if not require_active:
+        return identity
+    return (identity + f" AND {q}.status='active' AND {q}.price>1 "
+            f"AND {q}.price<'Infinity'::numeric "
+            f"AND ({q}.source_updated_at IS NULL OR {q}.source_updated_at<=now())")

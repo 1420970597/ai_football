@@ -178,6 +178,11 @@ class Executor:
                 elif work.get("kind") == "order":
                     await self.order_job(work)
                 failures = 0
+                # Drain ready work serially. Sleeping after every successful
+                # order turns a burst of experts into an avoidable queue that
+                # can outlive their five-minute permission window.
+                if work.get('kind') in {'account', 'order'}:
+                    continue
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

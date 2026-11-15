@@ -235,6 +235,30 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(item['expert_signals_has_more'])
         self.assertFalse(item['recommendations_limited'])
 
+    async def test_member_continues_all_distinct_experts_inline_with_bound_cursor(self):
+        await self.trusted()
+        for i in range(45):
+            await self.signal(line=str(i+1))
+        with patch.object(public, '_has_entitlement', AsyncMock(return_value=True)):
+            first = (await self.listing())['items'][0]
+            self.assertEqual(20, len(first['expert_signals']))
+            cursor = first['expert_signals_next_cursor']
+            collected = [s['id'] for s in first['expert_signals']]
+            while cursor:
+                response = await self.client.get('/api/v1/public/matches/fixture/recommendations', params={'cursor': cursor})
+                self.assertEqual(200, response.status_code, response.text)
+                page = response.json()
+                collected.extend(s['id'] for s in page['items'])
+                cursor = page['next_cursor']
+            self.assertEqual(45, len(collected))
+            self.assertEqual(45, len(set(collected)))
+            wrong = await self.client.get('/api/v1/public/matches/other/recommendations', params={'cursor': first['expert_signals_next_cursor']})
+            self.assertEqual(400, wrong.status_code)
+        guest = (await self.listing())['items'][0]
+        self.assertIsNone(guest['expert_signals_next_cursor'])
+        forbidden = await self.client.get('/api/v1/public/matches/fixture/recommendations')
+        self.assertEqual(403, forbidden.status_code)
+
     async def test_all_settled_outcomes_hide_fixture_without_deleting_history(self):
         await self.trusted()
         signal = await self.signal()

@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import hmac
 import json
+import logging
 import re
 import uuid
 from urllib.parse import urlsplit
@@ -24,9 +25,11 @@ from ..security import encrypt_secret
 from ..handicap_lines import line_projection
 from ..expert_profitability import PROFITABILITY_DEFINITION, profitability_rows, profitable
 from ..signal_identity import same_intent_sql
+from ..recommendation_eligibility import current_selection_sql
 
 router = APIRouter(prefix="/api/v1/accounts")
 executor_router = APIRouter(prefix="/internal/executor")
+log = logging.getLogger(__name__)
 
 
 class Input(BaseModel):
@@ -460,6 +463,7 @@ async def dispatch(request: Request):
     service_auth(request)
     settings = request.app.state.settings
     count = 0
+    skipped = {}
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             for policy in await orders.invalid_policies(conn):
@@ -478,19 +482,35 @@ async def dispatch(request: Request):
                 "AND ((s.market_id='37' AND s.market_kind='winner' AND s.selection IN('home','away')) "
                 "OR (s.market_id='38' AND s.market_kind='total') OR (s.market_id='39' AND s.market_kind='handicap'))) "
                 "JOIN v2_expert_messages m ON m.id=s.message_id "
+                "JOIN v2_experts e ON e.id=s.expert_id AND e.enabled "
+                "JOIN v2_expert_sources src ON src.id=m.source_id AND src.enabled "
+                "JOIN v2_source_experts se ON se.source_id=m.source_id AND se.expert_id=s.expert_id AND se.enabled "
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.withdrawn_at IS NULL "
+                "AND a.health_state='healthy' AND a.renewal_state='ready' AND a.encrypted_session IS NOT NULL "
+                "AND a.last_verified_at>now()-interval '120 seconds' "
+                "AND b.consent_account_id=a.id AND b.consent_binding_revision=a.binding_revision "
+                "AND b.stake_per_order>0 AND b.stake_per_order<=b.max_per_order "
+                "AND m.deleted_at IS NULL AND m.media_state='ready' "
+                "AND f.stale_projection_at IS NULL AND f.decision_context_only_at IS NULL "
+                "AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer WHERE newer.source_id=m.source_id "
+                "AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision) "
+                "AND EXISTS(SELECT 1 FROM v2_current_quotes q WHERE " + current_selection_sql(require_active=False) + ") "
                 "AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
                 "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "
                 "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o JOIN v2_expert_signals previous ON previous.id=o.signal_id "
                 "WHERE o.user_id=b.user_id AND o.account_id=a.id AND " + same_intent_sql('previous', 's') +
-                ") ORDER BY s.created_at,s.id LIMIT 30", profitable_ids)
+                # The five-minute source window bounds this queue. A global
+                # first-30 cutoff let rejected candidates starve later experts.
+                ") ORDER BY s.created_at,s.id,b.user_id", profitable_ids)
             for pair in pairs:
                 try:
                     async with conn.transaction():
                         reserved = await orders.reserve_signal(conn, pair["user_id"], pair["signal_id"], settings)
                         if reserved['signal_id'] == pair['signal_id']:
                             count += 1
-                except HTTPException:
+                except HTTPException as exc:
+                    key = str(exc.status_code)
+                    skipped[key] = skipped.get(key, 0) + 1
                     continue
         async with conn.transaction():
             rows = await conn.fetch("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state='healthy' AND a.renewal_state='ready' "
@@ -499,7 +519,9 @@ async def dispatch(request: Request):
                 "AND NOT EXISTS(SELECT 1 FROM v2_account_jobs j WHERE j.account_id=a.id AND j.state IN('queued','running')) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 20")
             for account in rows:
                 await jobs.enqueue(conn, account, "refresh")
-    return {"reserved": count}
+    if skipped:
+        log.warning('automatic dispatch blocked status_counts=%s', skipped)
+    return {"reserved": count, "blocked_status_counts": skipped}
 
 
 @executor_router.post("/jobs/{job_id}/renewal/claim")

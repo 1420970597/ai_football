@@ -366,7 +366,27 @@ function matchRecommendationMarkup(match) {
   if (!signals.length && !match.expert_signals_has_more) return '';
   return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
     `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-expert"><span class="avatar" aria-hidden="true">${esc((s.display_nickname || '?').slice(0, 1))}</span><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button></div><div class="recommendation-body"><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><div class="recommendation-meta"><span>${esc(phases[s.phase] || '阶段未知')} · 推荐 ${stamp(s.created_at)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button></div></div><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span>${betButtonMarkup(s)}<div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
-  ).join('')}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
+  ).join('')}${match.expert_signals_next_cursor ? `<button class="text-link" data-more-recommendations="${esc(match.id)}">展开其余专家决策 ›</button>` : match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
+}
+async function loadMoreRecommendations(fixtureId, button) {
+  const match = state.matches.find(item => item.id === fixtureId);
+  if (!match?.expert_signals_next_cursor) return;
+  const cursor = match.expert_signals_next_cursor;
+  button.disabled = true;
+  try {
+    const result = await api(`/public/matches/${encodeURIComponent(fixtureId)}/recommendations?` + params({cursor}));
+    // A refresh or filter change owns a different object; never merge an old page.
+    if (!state.matches.includes(match) || match.expert_signals_next_cursor !== cursor) return;
+    const ids = new Set(match.expert_signals.map(signal => signal.id));
+    match.expert_signals.push(...result.items.filter(signal => !ids.has(signal.id)));
+    match.expert_signals_next_cursor = result.next_cursor;
+    match.expert_signals_has_more = Boolean(result.next_cursor);
+    renderMatches();
+  } catch (error) {
+    toast(error.message || '专家决策读取失败，请重试');
+  } finally {
+    button.disabled = false;
+  }
 }
 const vsIcons = [];
 // Every refresh rebuilds the rows. They adopt the icon nodes already in use,
@@ -1855,6 +1875,10 @@ function events() {
         button.dataset.message,
         button.dataset.context || state.messageContext,
       );
+      return;
+    }
+    if (button.dataset.moreRecommendations) {
+      loadMoreRecommendations(button.dataset.moreRecommendations, button);
       return;
     }
     if (button.dataset.betSignal) {
