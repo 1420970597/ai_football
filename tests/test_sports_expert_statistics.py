@@ -38,7 +38,7 @@ class SportStatisticsTests(unittest.IsolatedAsyncioTestCase):
                                 "VALUES($1,1,'synthetic-statistics-only','synthetic-statistics-only','confirmed',3,1,$2,$3)",
                                 fixture,self.now,{'synthetic':True,'provider_settlement_proof':False})
         ids=[]
-        for outcome,net,stake in values:
+        for index,(outcome,net,stake) in enumerate(values):
             message=uuid.uuid4()
             await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) "
                                     "VALUES($1,$2,$3,$4,'隔离推荐',now())",message,source or self.source,self.expert,str(message))
@@ -46,6 +46,9 @@ class SportStatisticsTests(unittest.IsolatedAsyncioTestCase):
             await self.pool.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,market_kind,period,line,selection,recommendation_price,quote_time,confidence,score_basis,outcome,unit_net,effective_stake,settled_at,result_version,settlement_reason) "
                                     "VALUES($1,$2,$3,$4,'scheduled','total','大小','total','full_time',2.5,'over',2,$5,.8,'full_period',$6,$7,$8,$9,1,'synthetic-statistics-only')",
                                     identity,message,self.expert,fixture,self.now,outcome,Decimal(net)if net is not None else None,Decimal(stake),self.now if outcome!='pending'else None)
+            # Each row exercises an independent outcome. Identical intents
+            # must no longer stand in for unrelated statistical samples.
+            await self.pool.execute('UPDATE v2_expert_signals SET line=$2 WHERE id=$1',identity,Decimal('2.5')+index)
             await self.pool.execute("INSERT INTO v2_quote_evidence(id,evidence_kind,reference_id,fixture_id,market_id,market_name,period,line,selection,price,source_updated_at,evidence,score_baseline) "
                                     "SELECT $1,'expert_signal',id,fixture_id,market_id,market_name,period,line,selection,recommendation_price,quote_time,jsonb_build_object('score_basis',score_basis),score_baseline FROM v2_expert_signals WHERE id=$2",uuid.uuid4(),identity)
             if outcome!='pending':

@@ -1158,7 +1158,7 @@ async function openExpert(id) {
     const e = data.expert;
     const sportLabel = state.expertFilters.sport === 'basketball' ? '篮球' : '足球';
     const detailWindow = `${sportLabel} · 近${state.expertFilters.days}天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}`;
-    const qualityNote = `证据不足排除 ${esc(e.excluded_signals ?? 0)} 条（缺报价 ${esc(e.missing_quote_evidence ?? 0)}，结算证据无效 ${esc(e.invalid_settlement_evidence ?? 0)}，推荐意图纠错 ${esc(e.invalid_recommendation_intent ?? 0)}）。` +
+    const qualityNote = `同一专家相同决策先去重，仅计首次记录及其系统赔率。证据不足排除 ${esc(e.excluded_signals ?? 0)} 条（缺报价 ${esc(e.missing_quote_evidence ?? 0)}，结算证据无效 ${esc(e.invalid_settlement_evidence ?? 0)}，推荐意图纠错 ${esc(e.invalid_recommendation_intent ?? 0)}）。` +
       (e.statistics_reset_at ? ` 本周期重新起算于 ${esc(stamp(e.statistics_reset_at))}，旧有效结算不再计入准确率及1单位收益；原始结算与真实账户收益保留。` : "");
     $("#dialog-title").textContent = e.display_nickname;
     $("#dialog-content").innerHTML =

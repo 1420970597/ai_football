@@ -26,6 +26,25 @@ def same_intent_sql(left, right):
             f"ROW({identity_columns(right)})")
 
 
+def first_expert_intent_sql(alias='s'):
+    """Keep the first expert intent even outside a selected window or cycle.
+
+    Price, outcome, message edits and channel changes cannot choose a different
+    winner. An intent explicitly corrected as invalid cannot hide a valid pick.
+    Missing quote/settlement evidence stays missing instead of borrowing a later
+    duplicate's better price or result.
+    """
+    from .review_period_intent import INTENT_VALID_SQL
+    prior = 'canonical_prior'
+    valid = INTENT_VALID_SQL.replace('s.', prior + '.')
+    return (f"COALESCE({alias}.withdrawal_reason,'')<>'{DUPLICATE_REASON}' "
+            f"AND NOT EXISTS(SELECT 1 FROM v2_expert_signals {prior} "
+            f"WHERE {prior}.expert_id={alias}.expert_id AND {prior}.fixture_id={alias}.fixture_id "
+            f"AND ({prior}.created_at,{prior}.id)<({alias}.created_at,{alias}.id) "
+            f"AND COALESCE({prior}.withdrawal_reason,'')<>'{DUPLICATE_REASON}' "
+            f"AND {valid} AND " + same_intent_sql(prior, alias) + ')')
+
+
 async def previous_intent_order(conn, user_id, account_id, signal_id, *, excluding=None):
     """Caller holds the user's account lock, including during execution checks."""
     return await conn.fetchrow(

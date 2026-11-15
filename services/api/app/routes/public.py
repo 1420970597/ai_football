@@ -18,7 +18,7 @@ from ..review_state import fresh_quote
 from ..handicap_lines import line_projection
 from .. import message_read
 from ..recommendation_eligibility import current_selection_sql, manual_phase_sql
-from ..signal_identity import identity_columns
+from ..signal_identity import first_expert_intent_sql, identity_columns
 
 router = APIRouter(prefix="/api/v1/public")
 
@@ -426,7 +426,8 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
         "s.confidence,s.outcome,s.unit_net,s.created_at,m.raw_text "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
         "JOIN v2_fixtures f ON f.id=s.fixture_id JOIN v2_expert_messages m ON m.id=s.message_id "
-        f"WHERE ($1::text='all' OR f.sport=$1) {cursor_clause} ORDER BY s.created_at DESC,s.id DESC LIMIT ${len(args)}", *args,
+        f"WHERE ($1::text='all' OR f.sport=$1) AND " + first_expert_intent_sql() +
+        f" {cursor_clause} ORDER BY s.created_at DESC,s.id DESC LIMIT ${len(args)}", *args,
     )
     has_more = len(rows) > page_size
     items = [line_projection(row) for row in rows[:page_size]]

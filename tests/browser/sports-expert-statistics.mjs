@@ -66,6 +66,7 @@ try{
     }
     await page.goto('http://127.0.0.1:8080/#experts');
     await page.waitForSelector('#experts-list [data-expert="sport-expert"]');
+    assert.match(await page.locator('.stat-help').innerText(),/相同决策去重后/);
     assert.equal(await page.locator('#expert-stats-filter [name=sport]').inputValue(),'football');
     assert.match(await page.locator('#experts-list').innerText(),/75\.0%/);
     assert.equal(await page.locator('[data-expert-row="sport-expert"] > span').first().innerText(),'4','push and void are settled but not effective samples');
@@ -83,6 +84,7 @@ try{
     const before=reads.length;
     await page.locator('#experts-list [data-expert="sport-expert"]').click();
     await page.locator('.yield-chart').waitFor();
+    assert.match(await page.locator('#dialog-content').innerText(),/相同决策先去重，仅计首次记录/);
     assert.match(await page.locator('#dialog-content').innerText(),/篮球/);
     assert.match(await page.locator('#dialog-content').innerText(),/25\.0%/);
     assert.match(new URL(page.url()).hash,/sport=basketball/);

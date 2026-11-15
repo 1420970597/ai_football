@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, Query
 from .review_period_intent import INTENT_VALID_SQL
+from .signal_identity import first_expert_intent_sql
 
 
 def metrics(row: dict) -> dict:
@@ -63,7 +64,7 @@ SETTLEMENT_VALID_SQL = (
 )
 DEFINITIONS = {
     'accuracy': '(全赢数量 + 半赢数量 × 0.5) ÷ (全赢 + 全输 + 半赢 × 0.5 + 半输 × 0.5)，走盘和作废不入分母',
-    'unit_net': '每条推荐按本金1与推荐时系统赔率结算后的净收益之和',
+    'unit_net': '同一专家相同投注意图先去重，仅首次推荐按本金1与其推荐时系统赔率结算后的净收益之和',
     'average_unit_net': '一单位净收益合计 ÷ 已结算推荐数量（含走盘和作废）',
     'unit_roi': '一单位净收益合计 ÷ 有效结算本金（半赢半输计0.5，走盘作废计0）',
     'scope': '专家推荐统计，与真实账户成交收益分开；撤回记录保留证据并继续结算',
@@ -73,6 +74,7 @@ DEFINITIONS = {
     'effective_settled_signals': '有完整有效证据的全赢、半赢、全输、半输条数；走盘、作废和待结算不计',
     'statistics_reset': '已重新起算的专家排除重置快照中的旧有效结算，原始推荐、结算和真实账户收益保留；旧单赛果修订不重新进入新周期',
     'sport': '按来源赛事的football或basketball分别统计；all仅用于兼容既有汇总调用，不改变自动跟随的盈利专家资格',
+    'deduplication': '按稳定专家编号、比赛、原生玩法、期间、盘口线、方向、阶段、比分规则及相关滚球比分基线去重；保留创建时间与编号最早的有效意图记录，不因赔率、原文、频道、筛选窗口或统计重置改选副本；不同专家分别统计，原始台账保留',
 }
 
 
@@ -116,7 +118,7 @@ def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
     opening = 'WITH checked AS MATERIALIZED (' if classify else 'WITH scoped AS ('
     query = (
         opening + 'SELECT s.*' + columns + ' '
-        "FROM v2_expert_signals s WHERE COALESCE(s.withdrawal_reason,'')<>'duplicate_recommendation' AND "
+        'FROM v2_expert_signals s WHERE ' + first_expert_intent_sql() + ' AND ' +
         "(CASE WHEN s.outcome='pending' THEN s.created_at ELSE COALESCE(s.settled_at,s.created_at) END)>=$1 "
         "AND (CASE WHEN s.outcome='pending' THEN s.created_at ELSE COALESCE(s.settled_at,s.created_at) END)<$2 "
         'AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM v2_expert_messages m WHERE m.id=s.message_id AND m.source_id=$3)) '
