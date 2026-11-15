@@ -1,11 +1,16 @@
-"""One absolute real-time signal budget; never turn a timeout into success."""
+"""Detection latency is observed, not a business eligibility deadline.
+
+The user removed the 20-second hard requirement on 2026-11-15. Keep the
+legacy helpers for historical receipts without granting fresh timestamps.
+Worker/provider/database timeouts and active lease/quote guards remain.
+"""
 from datetime import datetime, timedelta, timezone
 
-REALTIME_SIGNAL_DEADLINE_SECONDS = 20
+REALTIME_SIGNAL_DEADLINE_SECONDS = None
 
 
 def review_deadline_at(detected_at):
-    if detected_at is None:
+    if detected_at is None or REALTIME_SIGNAL_DEADLINE_SECONDS is None:
         return None
     return detected_at.astimezone(timezone.utc) + timedelta(seconds=REALTIME_SIGNAL_DEADLINE_SECONDS)
 

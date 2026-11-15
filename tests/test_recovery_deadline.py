@@ -1,10 +1,14 @@
 from datetime import datetime,timedelta,timezone
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock,patch
 from app.review_recovery import market_recovery
 
 
 class RecoveryDeadlineTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        legacy=patch('app.review_deadline.REALTIME_SIGNAL_DEADLINE_SECONDS',20)
+        legacy.start();self.addCleanup(legacy.stop)
+
     async def test_realtime_recovery_cannot_be_scheduled_past_original_cutoff(self):
         now=datetime.now(timezone.utc)
         for age in (0,8,19,22):

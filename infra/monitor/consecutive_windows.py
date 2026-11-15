@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 PERIOD = 1800
-ACCEPTANCE_CONTRACT = 'nonempty-fully-audited-user-contract-v2'
+ACCEPTANCE_CONTRACT = 'nonempty-fully-audited-accuracy-first-v3'
 
 
 def evaluate(evidence: dict) -> tuple[bool, list[str]]:
@@ -24,7 +24,7 @@ def evaluate(evidence: dict) -> tuple[bool, list[str]]:
             or type(count) is int and recommendations > count):
         reasons.append('invalid_recommendation_count')
     for key in ('missing_messages', 'unreviewed_messages', 'confirmed_omissions',
-                'confirmed_misbindings', 'duplicate_signals', 'deadline_violations',
+                'confirmed_misbindings', 'duplicate_signals',
                 'unexplained_outcomes'):
         if type(evidence.get(key)) is not int or evidence[key] != 0:
             reasons.append(key)

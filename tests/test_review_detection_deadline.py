@@ -23,6 +23,12 @@ DETECTED = datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
 
 class ReviewDeadlineBudgetTests(unittest.TestCase):
+    def setUp(self):
+        # Retain regression coverage for legacy receipt mechanics explicitly;
+        # the production default no longer grants a 20-second deadline.
+        self.legacy=patch.object(review_deadline,'REALTIME_SIGNAL_DEADLINE_SECONDS',20)
+        self.legacy.start();self.addCleanup(self.legacy.stop)
+
     def test_budget_is_twenty_seconds_from_detection_not_start_of_each_stage(self):
         self.assertEqual(20, review_deadline.REALTIME_SIGNAL_DEADLINE_SECONDS)
         self.assertEqual(DETECTED + timedelta(seconds=20),
@@ -46,6 +52,10 @@ class ReviewDeadlineBudgetTests(unittest.TestCase):
 
 
 class ReviewWorkerDeadlineTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.legacy=patch.object(review_deadline,'REALTIME_SIGNAL_DEADLINE_SECONDS',20)
+        self.legacy.start();self.addCleanup(self.legacy.stop)
+
     def job(self, *, detected_at=DETECTED, mode='real_time'):
         return {'id': uuid.uuid4(), 'attempt_id': uuid.uuid4(), 'attempts': 1,
                 'review_mode': mode, 'message': {'detected_at': detected_at}}
@@ -178,6 +188,8 @@ class ReviewDetectionFenceTests(unittest.IsolatedAsyncioTestCase):
     read_market = support.ReviewTests.read_market
 
     async def asyncSetUp(self):
+        legacy=patch.object(review_deadline,'REALTIME_SIGNAL_DEADLINE_SECONDS',20)
+        legacy.start();self.addCleanup(legacy.stop)
         await support.ReviewTests.asyncSetUp(self)
         # Fixed UTC instants make the boundary independent of machine load.
         self.now = DETECTED

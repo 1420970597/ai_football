@@ -19,7 +19,7 @@ class ConsecutiveWindowTests(unittest.TestCase):
         self.assertTrue(state['complete'])
 
     def test_failure_empty_or_incomplete_resets(self):
-        for change in ({'trusted_messages':0},{'deadline_violations':1},
+        for change in ({'trusted_messages':0},{'confirmed_omissions':1},
                        {'recommendation_messages':-1},{'upstream_complete':False},
                        {'unexplained_outcomes':1},{'audit_sha256':''}):
             with self.subTest(change=change):
@@ -38,7 +38,7 @@ class ConsecutiveWindowTests(unittest.TestCase):
         for change in ({'unexplained_outcomes': 1}, {'audit_complete': False},
                        {'unreviewed_messages': 1}, {'missing_messages': 1},
                        {'confirmed_omissions': 1}, {'confirmed_misbindings': 1},
-                       {'duplicate_signals': 1}, {'deadline_violations': 1},
+                       {'duplicate_signals': 1},
                        {'source_health_ok': False}):
             with self.subTest(change=change):
                 self.assertFalse(evaluate(good(1800) | {'recommendation_messages': 0} | change)[0])
@@ -50,8 +50,8 @@ class ConsecutiveWindowTests(unittest.TestCase):
     def test_reassessment_uses_separate_state_and_keeps_legacy_history(self):
         from pathlib import Path
         source = (Path(__file__).resolve().parents[1] / 'infra/monitor/continuous_watch.py').read_text()
-        self.assertIn("statefile=root/'acceptance-user-contract-v2.json'", source)
-        self.assertIn("'previous_contract_state':'acceptance-state.json'", source)
+        self.assertIn("statefile=root/'acceptance-accuracy-first-v3.json'", source)
+        self.assertIn("'previous_contract_state':'acceptance-user-contract-v2.json'", source)
         self.assertIn("'acceptance_contract':ACCEPTANCE_CONTRACT", source)
 
     def test_gap_and_repair_reset(self):
@@ -61,7 +61,7 @@ class ConsecutiveWindowTests(unittest.TestCase):
         self.assertEqual(0,state['streak']);self.assertFalse(state['complete'])
 
     def test_duplicate_cannot_increase_or_reclassify_failed_window(self):
-        first=good(1800)|{'deadline_violations':1};state=record({},first)
+        first=good(1800)|{'confirmed_omissions':1};state=record({},first)
         self.assertEqual(state,record(state,good(1800)))
         with self.assertRaises(ValueError):
             record(state,good(1800)|{'snapshot_sha256':'changed'})
@@ -78,3 +78,8 @@ class ConsecutiveWindowTests(unittest.TestCase):
         self.assertEqual(0,state['streak'])
         self.assertIn('repair_during_window',state['windows']['3600']['reasons'])
         self.assertEqual(1,record(state,good(5400))['streak'])
+
+    def test_slow_but_complete_correct_window_is_not_failed_by_twenty_seconds(self):
+        value=good(1800)|{'deadline_violations':3,'latency_over_20s_messages':3}
+        self.assertEqual((True,[]),evaluate(value))
+        self.assertFalse(evaluate(value|{'confirmed_omissions':1})[0])

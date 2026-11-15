@@ -966,22 +966,20 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
             "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result')",
             self.job))
 
-    async def test_provider_backoff_beyond_real_detection_deadline_is_terminal_without_false_receipt(self):
+    async def test_provider_backoff_beyond_twenty_seconds_keeps_retry_without_false_receipt(self):
         await self.make_queued()
         job=await worker.claim_job(self.pool)
-        job['message']['detected_at']=datetime.now(timezone.utc)
+        job['message']['detected_at']=datetime.now(timezone.utc)-timedelta(seconds=90)
         with patch.object(worker,'review_message',AsyncMock(side_effect=worker.HermesProviderUnavailable())), \
              patch.object(worker,'delete_session',AsyncMock()), \
              patch.object(worker.random,'randint',return_value=0):
             await worker.process_job(self.pool,SimpleNamespace(hermes_model='isolated'),job)
         row=await self.pool.fetchrow('SELECT state,last_error,lease_until FROM v2_analysis_jobs WHERE id=$1',self.job)
-        self.assertEqual(('unresolved','retry_exceeds_detection_deadline',None),tuple(row))
+        self.assertEqual(('retry','HermesProviderUnavailable',None),tuple(row))
         evidence=await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_retry_budget_exhausted'",self.job)
-        self.assertEqual(60,evidence['retry_delay_seconds'])
-        self.assertGreater(evidence['remaining_detection_seconds'],0)
-        self.assertLessEqual(evidence['remaining_detection_seconds'],20)
-        self.assertFalse(evidence['retryable'])
-        self.assertTrue(evidence['accepted_evidence_preserved'])
+        self.assertIsNone(evidence)
+        delay=await self.pool.fetchval('SELECT extract(epoch FROM (available_at-updated_at)) FROM v2_analysis_jobs WHERE id=$1',self.job)
+        self.assertEqual(60,delay)
         self.assertEqual(0,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result')",self.job))
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals WHERE message_id=$1',self.message))
 

@@ -58,10 +58,10 @@ def main():
     # Preserve the earlier, stricter interpretation as an immutable history.
     # Re-evaluate the same hash-bound audits under the user's actual contract
     # in a separate state file, never by rewriting old failed verdicts.
-    statefile=root/'acceptance-user-contract-v2.json'
+    statefile=root/'acceptance-accuracy-first-v3.json'
     state=json.loads(statefile.read_text())if statefile.exists()else{
         'acceptance_contract':ACCEPTANCE_CONTRACT,
-        'previous_contract_state':'acceptance-state.json','streak':0,'windows':{}}
+        'previous_contract_state':'acceptance-user-contract-v2.json','streak':0,'windows':{}}
     if state.get('acceptance_contract')!=ACCEPTANCE_CONTRACT:
         raise ValueError('Acceptance contract mismatch')
     stop_health=threading.Event()

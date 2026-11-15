@@ -159,9 +159,8 @@ def _lane_condition(mode, realtime_parameter='$2', fresh_parameter='$3'):
 
 async def _claim_from_lane(conn, mode):
     lane = _lane_condition(mode)
-    # Keep posting-age lanes and legacy aging, but known detections have one
-    # absolute 20-second budget. Order those by earliest detection, rather than
-    # letting newer posts repeatedly overtake them until the old 60s threshold.
+    # Keep posting-age lanes and order known detections fairly. Latency is
+    # measured but no longer a 20-second eligibility cutoff.
     # NULL detections retain legacy ordering; lease recovery still sorts first.
     waiting_order = (
         "CASE WHEN j.state<>'running' AND j.created_at<=statement_timestamp()"
@@ -291,8 +290,9 @@ async def _claim_job(pool):
                     if message['event_persisted_at'] else None,
                 'event_to_claim_ms': event_to_claim_ms,
                 'detected_at': message['detected_at'].isoformat() if message['detected_at'] else None,
-                'signal_deadline_at': review_deadline_at(message['detected_at']).isoformat()
-                    if message['detected_at'] else None})], trace_lock_held=True)
+                'signal_deadline_at': (deadline.isoformat() if (
+                    deadline := review_deadline_at(message['detected_at'])) is not None else None),
+                'latency_policy': 'accuracy-first-no-detection-cutoff-v1'})], trace_lock_held=True)
             return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message),
                     'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until,
                     'review_mode': mode, 'scheduler_lane': scheduler_lane}

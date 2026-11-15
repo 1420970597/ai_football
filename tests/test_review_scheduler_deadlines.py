@@ -38,8 +38,7 @@ class ReviewSchedulerDeadlineTests(unittest.IsolatedAsyncioTestCase):
         job = await worker.claim_job(self.pool)
         self.assertEqual(earlier, job['id'])
         self.assertEqual(stamp, job['message']['detected_at'])
-        self.assertGreater(remaining_review_seconds(stamp), 0)
-        self.assertLessEqual(remaining_review_seconds(stamp), 10)
+        self.assertIsNone(remaining_review_seconds(stamp))
         self.assertEqual('queued', await self.pool.fetchval(
             'SELECT state FROM v2_analysis_jobs WHERE id=$1', later))
 

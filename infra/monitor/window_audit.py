@@ -56,6 +56,8 @@ def assemble(summary,snapshot,audits,health):
         confirmed_omissions=sum(a.get('verdict')=='confirmed_omission'for a in checked),
         confirmed_misbindings=sum(a.get('verdict')=='confirmed_misbinding'for a in checked),
         duplicate_signals=duplicate_count(eligible),deadline_violations=deadlines,
+        latency_over_20s_messages=deadlines,latency_is_acceptance_gate=False,
+        latency_policy='accuracy-first-no-detection-cutoff-v1',
         unexplained_outcomes=missing+sum(a.get('verdict')not in {
             'consistent','confirmed_omission','confirmed_misbinding'}for a in checked),
         semantic_messages=len(eligible),health_samples=sum(summary['start']<=s.get('at',0)<summary['end']for s in health))
