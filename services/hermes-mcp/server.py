@@ -376,6 +376,8 @@ async def _admitted_market_request(path: str, payload: dict) -> dict:
 async def _request(path: str, payload: dict) -> dict:
     try:
         response = await client.post(f"{API_URL}/{path}", json=payload,
+            headers=({'X-Football-Reuse-Complete-Search': 'single-page-v1'}
+                     if path == 'search_matches' else {}),
             timeout=httpx.Timeout(45 if path == 'record_expert_signals' else 20, connect=2))
         response.raise_for_status()
         return response.json()

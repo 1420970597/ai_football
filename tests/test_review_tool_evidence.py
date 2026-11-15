@@ -245,6 +245,64 @@ class ToolSportMCPTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires isolated database')
 class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
+    async def reused_search(self, **updates):
+        return await self.client.post('/internal/mcp/search_matches',
+            json=self.context(**updates),
+            headers={'X-Football-Reuse-Complete-Search':'single-page-v1'})
+
+    async def test_complete_league_reuse_resolves_each_source_pair_and_keeps_snapshot(self):
+        await self.fixture(1,home_team='Alpha1',away_team='Beta1')
+        await self.fixture(2,home_team='Gamma2',away_team='Delta2')
+        await self.pool.execute("UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1",
+            self.message,'Alpha1 vs Beta1\nGamma2 vs Delta2')
+        scope=dict(team_query='',competition_query='League',sport='football',
+            from_utc=self.now.isoformat(),to_utc=(self.now+timedelta(days=1)).isoformat())
+        first=await self.reused_search(**scope,team_a='Alpha1',team_b='Beta1')
+        self.assertEqual(200,first.status_code,first.text)
+        self.assertTrue(first.json()['resolution']['resolved'])
+        await self.pool.execute("UPDATE v2_fixtures SET home_team='changed after snapshot' WHERE id='fixture-2'")
+        second=await self.reused_search(**scope,team_a='Gamma2',team_b='Delta2')
+        self.assertEqual(200,second.status_code,second.text)
+        self.assertEqual('fixture-2',second.json()['resolution']['fixture']['id'])
+        self.assertEqual(first.json()['items'],second.json()['items'])
+        self.assertEqual(2,len(second.json()['items']))
+        self.assertEqual(1,await self.pool.fetchval('SELECT page_count FROM v2_match_searches'))
+        self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        wrong=await self.client.post('/internal/mcp/search_matches',
+            json=self.context(**scope,team_a='Alpha1',team_b='Beta1',attempt_id=str(uuid.uuid4())),
+            headers={'X-Football-Reuse-Complete-Search':'single-page-v1'})
+        self.assertEqual(409,wrong.status_code)
+
+    async def test_parallel_pairs_share_one_complete_scope_without_duplicate_insert(self):
+        await self.fixture(1);await self.fixture(2)
+        await self.pool.execute("UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1",
+            self.message,'Alpha1 vs Beta1\nAlpha2 vs Beta2')
+        scope=dict(team_query='Alpha',sport='football')
+        responses=await asyncio.gather(*(self.reused_search(**scope,team_a='Alpha'+str(i),
+            team_b='Beta'+str(i))for i in (1,2)))
+        for response in responses:self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual({'fixture-1','fixture-2'},
+            {r.json()['resolution']['fixture']['id']for r in responses})
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_match_searches'))
+        self.assertEqual(1,await self.pool.fetchval('SELECT page_count FROM v2_match_searches'))
+        unknown=await self.reused_search(**scope,team_a='Unknown1',team_b='Unknown2')
+        self.assertEqual(200,unknown.status_code,unknown.text)
+        self.assertFalse(unknown.json()['resolution']['resolved'])
+        self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+
+    async def test_reuse_cannot_skip_unread_pages_or_shrink_completed_page(self):
+        await self.fixture(1);await self.fixture(2)
+        scope=dict(team_query='Alpha',sport='football',team_a='Alpha1',team_b='Beta1',page_size=1)
+        first=await self.reused_search(**scope)
+        self.assertFalse(first.json()['search_complete'])
+        repeated=await self.reused_search(**scope)
+        self.assertEqual(409,repeated.status_code)
+        last=await self.reused_search(**scope,cursor=first.json()['next_cursor'])
+        self.assertTrue(last.json()['search_complete'])
+        shortened=await self.reused_search(**scope)
+        self.assertEqual(409,shortened.status_code)
+        self.assertEqual(2,await self.pool.fetchval('SELECT page_count FROM v2_match_searches'))
+
     async def test_rejections_keep_specific_codes_without_changing_gate(self):
         await self.fixture()
         first=await self.post('search_matches',team_query='Alpha',sport='football')

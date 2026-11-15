@@ -7,6 +7,19 @@ class SourceScopeFallbackTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp=support.MCPTransportTests.asyncSetUp
     asyncTearDown=support.MCPTransportTests.asyncTearDown
 
+    async def test_complete_scope_reuse_header_is_internal_and_search_only(self):
+        import httpx
+        calls=[]
+        async def upstream(request):
+            calls.append((request.url.path,request.headers.get('X-Football-Reuse-Complete-Search')))
+            return httpx.Response(200,json={})
+        await self.server.client.aclose()
+        self.server.client=httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        await self.server._request('search_matches',self.payload())
+        await self.server._request('resolve_match',{})
+        self.assertEqual([('/internal/mcp/search_matches','single-page-v1'),
+                          ('/internal/mcp/resolve_match',None)],calls)
+
     def payload(self,**updates):
         return dict(review_id='job',attempt_id='attempt',team_query='source A',team_a='source A',
             team_b='source B',competition_query='source league',sport='football',phase='all',

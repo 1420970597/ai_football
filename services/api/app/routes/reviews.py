@@ -200,6 +200,14 @@ async def search_matches(body: SearchInput, request: Request):
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
+            reuse_requested = (request.headers.get('X-Football-Reuse-Complete-Search') == 'single-page-v1'
+                               and body.cursor is None and body.team_a is not None)
+            if reuse_requested:
+                # A row lock cannot serialize two first inserts of one scope.
+                # Keep this narrow to the explicit adapter path, within the
+                # existing absolute tool deadline.
+                await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+                    str(body.review_id)+':'+str(body.attempt_id)+':'+search_key)
             search = None
             candidate_total = None
             if body.cursor:
@@ -237,9 +245,15 @@ async def search_matches(body: SearchInput, request: Request):
                 )
             if search["attempt_id"] != body.attempt_id:
                 raise HTTPException(status_code=409, detail="search belongs to an earlier attempt")
-            if body.cursor != search["expected_cursor"] and not (body.cursor is None and search["page_count"] == 0):
+            # Different source pairs may share the same bounded league/time
+            # snapshot. The internal adapter can explicitly reuse a complete
+            # single page, then resolve this pair again against that evidence.
+            # Never restart/skip pagination or reuse another attempt's scope.
+            reuse_complete = (reuse_requested and search['complete']
+                and search['total_candidates'] <= body.page_size)
+            if not reuse_complete and body.cursor != search["expected_cursor"] and not (body.cursor is None and search["page_count"] == 0):
                 raise HTTPException(status_code=409, detail="cursor is not the next page")
-            if search["complete"]:
+            if search["complete"] and not reuse_complete:
                 raise HTTPException(status_code=409, detail="search already complete; use resolution tool")
             position = _position(request, body, search_key)
             rows = await conn.fetch(
@@ -250,10 +264,11 @@ async def search_matches(body: SearchInput, request: Request):
             page = rows[:body.page_size]
             cursor = _cursor(request, body.review_id, body.attempt_id, search_key, page[-1]["position"]) if has_more else None
             total = candidate_total if candidate_total is not None else search["total_candidates"]
-            await conn.execute(
-                "UPDATE v2_match_searches SET expected_cursor=$3,complete=$4,page_count=page_count+1,total_candidates=$5,updated_at=now() WHERE job_id=$1 AND search_key=$2",
-                body.review_id, search_key, cursor, not has_more, total,
-            )
+            if not reuse_complete:
+                await conn.execute(
+                    "UPDATE v2_match_searches SET expected_cursor=$3,complete=$4,page_count=page_count+1,total_candidates=$5,updated_at=now() WHERE job_id=$1 AND search_key=$2",
+                    body.review_id, search_key, cursor, not has_more, total,
+                )
             result = {"search_key": search_key, "items": [with_verified_aliases(row["candidate_data"]) for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
             if body.team_a is not None:
                 result['resolution'] = {'resolved': False, 'reason': 'search_not_complete'}
@@ -295,6 +310,8 @@ async def search_matches(body: SearchInput, request: Request):
                     }
             summary = {"scope": scope, "search_key": search_key, "after": position,
                        "returned": len(page), "total": total, "complete": not has_more}
+            if reuse_complete:
+                summary['reused_complete_search'] = True
             if 'resolution' in result:
                 summary['resolution'] = {key: result['resolution'][key]
                     for key in ('resolved', 'candidate_count') if key in result['resolution']}
