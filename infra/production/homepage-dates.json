@@ -1,7 +1,7 @@
 {
   "services": {
     "web": {
-      "image": "sha256:97f4a4cb596ae5dcd027ceb0a732bfac7f71cbb3ffceb23130ecf95a27dc71d3",
+      "image": "sha256:b2c627eb449e882aa2e0bb9bcf16ae5dae925b943828f147989c5d2d6da7bf13",
       "command": [
         "nginx",
         "-g",

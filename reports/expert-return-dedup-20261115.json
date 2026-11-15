@@ -1,0 +1,142 @@
+{
+  "source_commit": "981ad8e76bec82b3529a5338df23d9e3f0fb04c3",
+  "scope": "expert recommendation unit-net evidence; not actual account returns",
+  "production_readonly_preview": {
+    "at": "2026-11-15T10:33:07.322110+00:00",
+    "scope_days": 30,
+    "before_settled": 856,
+    "after_settled": 751,
+    "before_net": -11.375,
+    "after_net": -7.97,
+    "changed_experts": [
+      {
+        "expert_ref": "fd86c5c28f32",
+        "before_count": 41,
+        "after_count": 39,
+        "before_net": 10.34,
+        "after_net": 8.5
+      },
+      {
+        "expert_ref": "ce03a20feb9e",
+        "before_count": 15,
+        "after_count": 10,
+        "before_net": 1.59,
+        "after_net": 0.25
+      },
+      {
+        "expert_ref": "7aae2cd00648",
+        "before_count": 162,
+        "after_count": 110,
+        "before_net": 5.775,
+        "after_net": -0.625
+      },
+      {
+        "expert_ref": "cfe91217860c",
+        "before_count": 32,
+        "after_count": 28,
+        "before_net": -0.955,
+        "after_net": -1.105
+      },
+      {
+        "expert_ref": "d96f1924f144",
+        "before_count": 81,
+        "after_count": 79,
+        "before_net": -2.855,
+        "after_net": -2.685
+      },
+      {
+        "expert_ref": "a3fad91133e3",
+        "before_count": 45,
+        "after_count": 41,
+        "before_net": -2.155,
+        "after_net": -3.915
+      },
+      {
+        "expert_ref": "802930c5cc44",
+        "before_count": 46,
+        "after_count": 36,
+        "before_net": -7.4,
+        "after_net": -4.015
+      },
+      {
+        "expert_ref": "6948e572bded",
+        "before_count": 317,
+        "after_count": 293,
+        "before_net": -16.105,
+        "after_net": -5.025
+      },
+      {
+        "expert_ref": "264a4f4a59d0",
+        "before_count": 69,
+        "after_count": 67,
+        "before_net": -6.65,
+        "after_net": -6.39
+      }
+    ],
+    "remaining_duplicate_groups": 0,
+    "new_summary_seconds": 0.03773794276639819,
+    "production_writes": 0
+  },
+  "post_deployment": {
+    "at": "2026-11-15T10:38:17.142560+00:00",
+    "health": "ready",
+    "summary_api_matches_database": true,
+    "summary_detail_trend_verified_experts": 3,
+    "profitability_matches_dedup_stats": true,
+    "duplicate_groups": 0,
+    "settled_count": 751,
+    "unit_net": "-7.970",
+    "by_sport": [
+      {
+        "sport": "football",
+        "settled": 682,
+        "net": "13.610"
+      },
+      {
+        "sport": "basketball",
+        "settled": 69,
+        "net": "-21.58"
+      }
+    ],
+    "feed_records": 5,
+    "dedup_definition_visible": true,
+    "writes": 0
+  },
+  "browser": [
+    {
+      "width": 1440,
+      "statistics_visible": true,
+      "first_price_dedup_explanation": true,
+      "trend_visible": true,
+      "no_horizontal_overflow": true,
+      "errors": [],
+      "writes": []
+    },
+    {
+      "width": 390,
+      "statistics_visible": true,
+      "first_price_dedup_explanation": true,
+      "trend_visible": true,
+      "no_horizontal_overflow": true,
+      "errors": [],
+      "writes": []
+    }
+  ],
+  "image_changes": {
+    "api": {
+      "before": "sha256:2340e2ad06bd3b48cb7d56908998b4959e25e3dc92a6ac552c401bf739432e7e",
+      "after": "sha256:08731837fa2c4b1cd0a86483085966045bf5a9f9ebd95da19279c179a10d7c73"
+    },
+    "web": {
+      "before": "sha256:97f4a4cb596ae5dcd027ceb0a732bfac7f71cbb3ffceb23130ecf95a27dc71d3",
+      "after": "sha256:b2c627eb449e882aa2e0bb9bcf16ae5dae925b943828f147989c5d2d6da7bf13"
+    }
+  },
+  "configuration_preserved": true,
+  "regressions": {
+    "tests": 118,
+    "skipped": 0,
+    "exit_code": 0,
+    "evidence": ".runtime/test-evidence/24911"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "services": {
+    "api": {
+      "image": "sha256:08731837fa2c4b1cd0a86483085966045bf5a9f9ebd95da19279c179a10d7c73"
+    },
+    "web": {
+      "image": "sha256:b2c627eb449e882aa2e0bb9bcf16ae5dae925b943828f147989c5d2d6da7bf13"
+    }
+  }
+}

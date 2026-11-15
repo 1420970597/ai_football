@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:2340e2ad06bd3b48cb7d56908998b4959e25e3dc92a6ac552c401bf739432e7e",
+      "image": "sha256:08731837fa2c4b1cd0a86483085966045bf5a9f9ebd95da19279c179a10d7c73",
       "command": [
         "uvicorn",
         "app.main:app",
