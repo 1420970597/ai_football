@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366",
+      "image": "sha256:da78e813898324860d46251ee6e0a19f00ef666b05bf09455c263f0308aec7ee",
       "command": [
         "uvicorn",
         "app.main:app",
@@ -58,9 +58,10 @@
     "source_refresh_seconds": 5,
     "lease_refresh_seconds": 30,
     "minimum_background_read_interval_seconds": 2,
-    "review_detection_deadline_seconds": 20,
+    "review_detection_deadline_seconds": null,
     "scope": "explicit-verified-broadcast-onboarding-hot-refresh-signed-posts-and-budgeted-history",
     "production_synthetic_events": 0,
-    "funded_test_orders": 0
+    "funded_test_orders": 0,
+    "latency_policy": "accuracy-first-no-detection-cutoff-v1"
   }
 }

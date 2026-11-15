@@ -13,7 +13,7 @@
       "cpus": 0.5
     },
     "api": {
-      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366",
+      "image": "sha256:da78e813898324860d46251ee6e0a19f00ef666b05bf09455c263f0308aec7ee",
       "command": [
         "uvicorn",
         "app.main:app",

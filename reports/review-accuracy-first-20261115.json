@@ -1,0 +1,84 @@
+{
+  "as_of": "2026-11-15T15:58:26.671905+00:00",
+  "source_revision": "474291c6b01dcdb81ce8e9689a95cba766ca0c50",
+  "policy": {
+    "source_revision": "474291c6b01dcdb81ce8e9689a95cba766ca0c50",
+    "detection_deadline_seconds": null,
+    "latency_observation_threshold_seconds": 20,
+    "task_resource_timeout_seconds": 600,
+    "acceptance_contract": "nonempty-fully-audited-accuracy-first-v3",
+    "schema_changes": 0,
+    "funded_test_orders": 0,
+    "historical_replay": false
+  },
+  "verification": {
+    "tests": 197,
+    "skipped": 0,
+    "exit_code": 0,
+    "duration_seconds": 48.267,
+    "evidence": ".runtime/test-evidence/776931",
+    "late_detection_seconds": 90,
+    "current_quote_accepted": true,
+    "closed_quote_and_expired_lease_still_rejected": true
+  },
+  "runtime_checks": [
+    {
+      "service": "api",
+      "image": "sha256:da78e813898324860d46251ee6e0a19f00ef666b05bf09455c263f0308aec7ee",
+      "configuration_preserved": true,
+      "changed_fields": [],
+      "running": true,
+      "started_at": "2026-11-15T15:55:21.727295373Z"
+    },
+    {
+      "service": "review-worker",
+      "image": "sha256:78479fb18b09536d0b89b5e5204352483b15101978ea8d1f94b640ae53e8543e",
+      "configuration_preserved": true,
+      "changed_fields": [],
+      "running": true,
+      "started_at": "2026-11-15T15:56:29.865187141Z"
+    },
+    {
+      "service": "local-mcp-api",
+      "image": "sha256:9e8b076eb88daad32250d17cbc695a9dc08116a4c9bec5a754fc8061440bf84d",
+      "configuration_preserved": true,
+      "changed_fields": [],
+      "running": true,
+      "started_at": "2026-11-15T15:56:14.344309734Z"
+    }
+  ],
+  "production_overrides_updated": [
+    "homepage-dedup.json",
+    "telegram-continuous.json",
+    "expert-review.json",
+    "homepage-live-gap.json",
+    "review-diagnosis.json",
+    "expert-coverage.json",
+    "telegram-409.json",
+    "telegram-onboarding.json",
+    "telegram-channel-identity.json",
+    "expert-return-dedup.json"
+  ],
+  "natural_postrelease_slow_signal_verified": false,
+  "original_state_and_failed_windows_preserved": true,
+  "readiness_checks": [
+    {
+      "service": "ai-football-v2-api-1",
+      "http_status": 200,
+      "exit_code": 0
+    },
+    {
+      "service": "ai-football-v2-local-mcp-api-1",
+      "http_status": 200,
+      "exit_code": 0
+    }
+  ],
+  "readiness_checked_at": "2026-11-15T16:00:40.495412+00:00",
+  "monitoring": {
+    "acceptance_contract": "nonempty-fully-audited-accuracy-first-v3",
+    "state_file": "acceptance-accuracy-first-v3.json",
+    "previous_state_preserved": true,
+    "streak_at_release": 0,
+    "complete": false
+  }
+}

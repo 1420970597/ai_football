@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366",
+      "image": "sha256:da78e813898324860d46251ee6e0a19f00ef666b05bf09455c263f0308aec7ee",
       "command": [
         "uvicorn",
         "app.main:app",
@@ -37,7 +37,7 @@
         "REVIEW_EXPERT_CONCURRENCY_FLOOR": "6",
         "REVIEW_HISTORICAL_CONCURRENCY": "0"
       },
-      "image": "sha256:86c1296d36771a14b92078f5192be732f952327e0ce2af49e6b9a89ce4968b04",
+      "image": "sha256:78479fb18b09536d0b89b5e5204352483b15101978ea8d1f94b640ae53e8543e",
       "command": [
         "python",
         "-m",
@@ -49,7 +49,7 @@
       "cpus": 0.25
     },
     "local-mcp-api": {
-      "image": "sha256:bdda4fcaa0387aa2bdfad0d1a4cd9bd452d5941891300eb89790113f873d8feb",
+      "image": "sha256:9e8b076eb88daad32250d17cbc695a9dc08116a4c9bec5a754fc8061440bf84d",
       "command": [
         "uvicorn",
         "app.mcp_app:app",
@@ -105,8 +105,9 @@
     "funded_test_orders": 0,
     "production_synthetic_events": 0,
     "required_nonempty_contiguous_windows": 3,
-    "review_deadline_seconds": 20,
+    "review_deadline_seconds": null,
     "acceptance_state": "in_progress",
-    "source_revision": "ba6f61ca"
+    "source_revision": "ba6f61ca",
+    "latency_policy": "accuracy-first-no-detection-cutoff-v1"
   }
 }

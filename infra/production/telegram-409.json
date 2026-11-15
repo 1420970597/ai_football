@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:ceee032beea509c3ba9e8790703490c025e27c912620b404ceb3a447f960a366",
+      "image": "sha256:da78e813898324860d46251ee6e0a19f00ef666b05bf09455c263f0308aec7ee",
       "command": [
         "uvicorn",
         "app.main:app",
@@ -38,7 +38,8 @@
     "schema_changes": 0,
     "raw_retention_hours": 72,
     "history_floor_cache_seconds": 300,
-    "review_detection_deadline_seconds": 20,
-    "automatic_betting_permissions_unchanged_by_release": true
+    "review_detection_deadline_seconds": null,
+    "automatic_betting_permissions_unchanged_by_release": true,
+    "latency_policy": "accuracy-first-no-detection-cutoff-v1"
   }
 }

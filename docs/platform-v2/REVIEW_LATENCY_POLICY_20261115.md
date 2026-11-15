@@ -17,3 +17,9 @@
 15:54 UTC：第二轮197项1失败（.runtime/test-evidence/772442）是旧provider退避测试仍要求超过20秒变终态；依新需求改为90秒检测年龄后保留60秒退避、无虚假成功/信号。冻结原命令完整重跑197项、0跳过、48.267秒、退出0（.runtime/test-evidence/776931，.runtime/review-accuracy-first-final.log）。命令：sh infra/test/run.sh test_review_accuracy_first test_review_detection_deadline test_review_scheduler_deadlines test_review_deadline_receipt test_recovery_deadline test_review_worker test_review_tool_evidence test_consecutive_windows test_window_audit test_audit_runner test_expert_iteration_supervisor。
 
 当前阶段：隔离验证通过，正在固定父镜像逐项构建并发布API/local-mcp/worker，不变更模型、并发、600秒任务资源保护、数据结构或交易许可。旧数据不重审，持续观察采用新验收文件与最终发布后repair标记。
+
+16:02 UTC：发布验收完成。源码提交 474291c6b01dcdb81ce8e9689a95cba766ca0c50 已推送当前任务分支。按现有闲置租约门禁顺序发布API、local-mcp和worker，退出码均为0；三项实际镜像和配置逐字段核验见 reports/review-accuracy-first-20261115.json，环境、挂载、权限、资源与端口无漂移。生产进程导入默认检测截止为None，worker任务资源超时仍600秒。实际8080端口readyz两项HTTP200；先前手工探测误用8000端口连接被拒，已按容器健康检查的实际8080端口纠正，不作为业务失败。
+
+持续监控采样与审核容器已重启，accuracy-first-v3账本已建立，旧v2账本及失败窗口保留；最终发布repair标记474291c6后从0连续合格周期起算，不将旧窗口套用新政策宣称通过。当前自然消息超过20秒仍成功录入的上线后样本尚未取得，因此仅报告197项隔离回归通过、运行策略及就绪核验通过，持续窗口验收仍进行中。未迁移结构、未重放历史推荐、未执行实盘测试。
+
+阶段状态：本次政策变更已发布并核验；整体专家识别准确率与完整性持续排查不视为完成。剩余依赖：有真实发言的30分钟窗口及逐项语义复核。下一步：持续按准确率、完整性、去重和有效盘口验收，20秒仅记录观测。发布证据与生产覆盖清单随独立后续提交同步远端。
