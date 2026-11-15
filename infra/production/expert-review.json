@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:4f68b3a80cbad7d96aa1b761214f8ded8d25e24ba610f46c0d24797d383b8136"
+      "image": "sha256:2340e2ad06bd3b48cb7d56908998b4959e25e3dc92a6ac552c401bf739432e7e"
     },
     "review-worker": {
       "image": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08"
@@ -52,7 +52,7 @@
       "image": "sha256:44bd067d9a41bcf72b2a5fc71cde600bc78377d22af687b1de74400a522bf800"
     },
     "web": {
-      "image": "sha256:098d1ebf2edf1728becaa08e8293f4d88014c1f0570ee400f1245908194914dc"
+      "image": "sha256:97f4a4cb596ae5dcd027ceb0a732bfac7f71cbb3ffceb23130ecf95a27dc71d3"
     }
   }
 }
