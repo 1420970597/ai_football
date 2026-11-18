@@ -31,6 +31,8 @@ For each settled order the monitor compares the projection to the latest stored 
 
 If an order has no native settlement time, the observed receipt timestamp still groups it for diagnostics. Every closed window overlapping the possible interval, from the earliest recorded placement bound to the observed receipt, remains unverified. An overlap count can include the same order in successive windows. Its receipt amount is counted only once in the diagnostic totals.
 
+`undated_settlements_bounded_within_window` counts overlapping orders whose earliest local placement bound and first matching settled receipt both fall inside that window. The receipt must carry the same native placement time, which must precede or equal receipt observation. The count indicates that the available timing evidence is confined to one window. Verification still requires a native settlement timestamp.
+
 The snapshot also marks closed windows unverified when an unresolved submission could predate the cutoff, or when an accepted order still lacks a settlement receipt and the latest fixture result available by that cutoff was confirmed or void. The accepted-order check concerns completeness of receipts. A fixture result does not establish a wallet movement or a settlement timestamp.
 
 # Execution price diagnostic

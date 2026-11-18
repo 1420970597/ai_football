@@ -27,12 +27,15 @@ WITH bounds AS (
 ), orders AS MATERIALIZED (
     SELECT o.id, o.account_id, o.provider_identity_hash, o.state, o.manual, o.stake, o.provider_stake, o.reserved_stake,
            o.settled_net, o.provider_payout, o.provider_currency, o.provider_fees, o.pnl_basis,
-           o.settled_at, o.receipt_observed_at,
+           o.settled_at, o.receipt_observed_at, o.provider_placed_at,
            coalesce(o.provider_placed_at, o.submitted_at, o.created_at) AS placed_at,
            least(o.provider_placed_at, o.submitted_at, o.created_at) AS earliest_placement,
            coalesce(o.settled_at, o.receipt_observed_at) AS booked_at,
            f.sport, s.fixture_id, s.phase, s.market_kind, s.period, s.selection,
            receipt.observed_at IS NOT NULL AS has_settled_evidence,
+           first_receipt.observed_at AS first_settled_observed_at,
+           CASE WHEN pg_input_is_valid(first_receipt.payload->>'placed_at', 'timestamptz')
+                THEN (first_receipt.payload->>'placed_at')::timestamptz END AS first_receipt_placement,
            o.provider_order_no IS NOT NULL AND receipt.payload->>'order_no' = o.provider_order_no
                AND receipt.observed_at = o.receipt_observed_at
                AND receipt.payload->>'pnl_basis' = o.pnl_basis
@@ -56,6 +59,12 @@ WITH bounds AS (
         WHERE e.order_id = o.id AND e.payload->>'state' = 'settled'
         ORDER BY e.observed_at DESC, e.id DESC LIMIT 1
     ) receipt ON o.state = 'settled'
+    LEFT JOIN LATERAL (
+        SELECT e.payload, e.observed_at FROM v2_order_receipt_evidence e
+        WHERE o.state = 'settled' AND o.settled_at IS NULL AND e.order_id = o.id
+          AND e.payload->>'state' = 'settled' AND e.payload->>'order_no' = o.provider_order_no
+        ORDER BY e.observed_at, e.id LIMIT 1
+    ) first_receipt ON true
     CROSS JOIN bounds b
     WHERE o.state IN ('submitting', 'unknown', 'accepted')
        OR (o.state = 'settled' AND (coalesce(o.settled_at, o.receipt_observed_at) >= b.anchor - interval '48 hours'
@@ -92,7 +101,12 @@ WITH bounds AS (
         FROM orders o WHERE state IN ('accepted', 'submitting', 'unknown') AND placed_at >= w.since AND placed_at < w.until
     ) pending
     CROSS JOIN LATERAL (
-        SELECT count(*) AS undated_settlements_overlapping_window
+        SELECT count(*) AS undated_settlements_overlapping_window,
+               count(*) FILTER (WHERE o.earliest_placement >= w.since
+                   AND o.provider_placed_at = o.first_receipt_placement
+                   AND o.provider_placed_at <= o.first_settled_observed_at
+                   AND o.first_settled_observed_at < least(w.until, b.observed_at))
+                   AS undated_settlements_bounded_within_window
         FROM orders o
         WHERE o.state = 'settled' AND o.settled_at IS NULL
           AND o.earliest_placement < least(w.until, b.observed_at)
