@@ -16,6 +16,7 @@ WITH bounds AS (
 ), settled AS MATERIALIZED (
     SELECT CASE WHEN coalesce(b.settled_at,b.receipt_observed_at) < a.anchor THEN 'prior_48h'
                 ELSE 'initial_48h' END AS cohort,
+           date_bin(interval '12 hours',coalesce(b.settled_at,b.receipt_observed_at),a.anchor) AS window_start,
            f.sport, s.phase, s.market_kind, s.period, s.id AS signal_id, s.score_basis, b.manual,
            b.provider_stake, b.provider_price,
            b.settled_net, b.provider_placed_at, s.created_at AS signal_at,
@@ -150,7 +151,8 @@ WITH bounds AS (
             round(provider_stake * (win_fraction * (provider_price - 1) - loss_fraction), 2) END AS at_fill
     FROM comparable
 ), summary AS (
-    SELECT cohort, sport, phase, market_kind, manual, grouping(sport,phase,market_kind,manual) = 15 AS all_markets,
+    SELECT cohort, window_start, sport, phase, market_kind, manual,
+           grouping(sport,phase,market_kind,manual) = 15 AS all_markets,
            count(*) AS settled, count(provider_price) AS fill_prices, count(preflight_price) AS preflight_prices,
            count(*) FILTER (WHERE provider_price < preflight_price) AS worse_than_preflight,
            count(*) FILTER (WHERE provider_price = preflight_price) AS equal_to_preflight,
@@ -180,18 +182,30 @@ WITH bounds AS (
            count(*) FILTER (WHERE abs(settled_net - at_fill) > 0.01) AS residuals_over_one_cent,
            count(*) FILTER (WHERE settled_net = 0 AND abs(at_fill) > 0.01) AS zero_receipts_with_nonzero_reconstruction
     FROM priced
-    GROUP BY GROUPING SETS ((cohort), (cohort,sport,phase,market_kind,manual))
+    GROUP BY GROUPING SETS ((cohort), (cohort,sport,phase,market_kind,manual), (cohort,window_start))
 ), exclusions AS (
-    SELECT cohort, sport, phase, market_kind, period, price_bridge_exclusion AS reason, signal_settlement_reason,
+    SELECT cohort, window_start, sport, phase, market_kind, period, price_bridge_exclusion AS reason, signal_settlement_reason,
            count(*) AS orders, count(settled_net) AS with_receipt_net, sum(settled_net) AS provider_net
     FROM priced
     WHERE price_bridge_exclusion IS NOT NULL
-    GROUP BY 1,2,3,4,5,6,7
+    GROUP BY cohort, sport, phase, market_kind, period, price_bridge_exclusion, signal_settlement_reason,
+             GROUPING SETS ((), (window_start))
 )
 SELECT jsonb_build_object('anchor',anchor,'observed_at',observed_at,'analysis_end',analysis_end,
     'receipt_as_of',receipt_as_of,'cohorts',coalesce((
-    SELECT jsonb_agg(to_jsonb(s) ORDER BY cohort, all_markets DESC, sport, phase, market_kind, manual) FROM summary s
+    SELECT jsonb_agg(to_jsonb(s) - 'window_start' ORDER BY cohort, all_markets DESC, sport, phase, market_kind, manual)
+    FROM summary s WHERE s.window_start IS NULL
 ), '[]'::jsonb), 'price_bridge_exclusions', coalesce((
-    SELECT jsonb_agg(to_jsonb(e) ORDER BY cohort, reason, sport, phase, market_kind, period, signal_settlement_reason) FROM exclusions e
+    SELECT jsonb_agg(to_jsonb(e) - 'window_start' ORDER BY cohort, reason, sport, phase, market_kind, period, signal_settlement_reason)
+    FROM exclusions e WHERE e.window_start IS NULL
+), '[]'::jsonb), 'windows', coalesce((
+    SELECT jsonb_agg(to_jsonb(s) - ARRAY['sport','phase','market_kind','manual','all_markets'] ||
+        jsonb_build_object('window_end',s.window_start + interval '12 hours',
+                           'closed',s.window_start + interval '12 hours' <= analysis_end)
+        ORDER BY s.window_start)
+    FROM summary s WHERE s.window_start IS NOT NULL
+), '[]'::jsonb), 'window_price_bridge_exclusions', coalesce((
+    SELECT jsonb_agg(to_jsonb(e) ORDER BY window_start, reason, sport, phase, market_kind, period, signal_settlement_reason)
+    FROM exclusions e WHERE e.window_start IS NOT NULL
 ), '[]'::jsonb)) FROM bounds;
 ROLLBACK;
