@@ -37,10 +37,13 @@ WITH bounds AS (
            count(DISTINCT currency) AS known_currencies
     FROM candidates
 ), training AS (
-    SELECT source_id, expert_id, count(DISTINCT fixture_id) AS fixtures,
-           count(DISTINCT (placed_at AT TIME ZONE 'UTC')::date) AS days,
-           sum(net / nullif(stake, 0)) AS flat_units
-    FROM candidates
+    SELECT source_id, expert_id,
+           count(DISTINCT fixture_id) FILTER (WHERE placed_at < midpoint) >= 5
+           AND count(DISTINCT fixture_id) FILTER (WHERE placed_at >= midpoint) >= 5
+           AND sum(net / nullif(stake, 0)) FILTER (WHERE placed_at < midpoint) < 0
+           AND sum(net / nullif(stake, 0)) FILTER (WHERE placed_at >= midpoint) < 0 AS persistent_loss
+    FROM candidates CROSS JOIN bounds b
+    CROSS JOIN LATERAL (SELECT b.begin_at + (b.split_at - b.begin_at) / 2 AS midpoint) halves
     WHERE training AND net IS NOT NULL
     GROUP BY GROUPING SETS ((source_id), (source_id, expert_id))
     HAVING count(DISTINCT fixture_id) >= 20
@@ -48,7 +51,9 @@ WITH bounds AS (
         AND sum(net / nullif(stake, 0)) < 0
 ), holdout AS (
     SELECT c.*, source_loss.source_id IS NOT NULL AS exclude_source,
-           author_loss.source_id IS NOT NULL AS exclude_source_author
+           author_loss.source_id IS NOT NULL AS exclude_source_author,
+           source_loss.persistent_loss IS TRUE AS exclude_source_persistent_loss,
+           author_loss.persistent_loss IS TRUE AS exclude_source_author_persistent_loss
     FROM candidates c CROSS JOIN coverage e
     LEFT JOIN training source_loss ON source_loss.source_id = c.source_id AND source_loss.expert_id IS NULL
     LEFT JOIN training author_loss ON (author_loss.source_id, author_loss.expert_id) = (c.source_id, c.expert_id)
@@ -63,13 +68,17 @@ WITH bounds AS (
            round(avg(net / nullif(stake, 0)) FILTER (WHERE NOT removed) * 100, 2) AS equal_stake_receipt_pct
     FROM holdout
     CROSS JOIN LATERAL (VALUES ('baseline', false), ('exclude_source', exclude_source),
-                              ('exclude_source_author', exclude_source_author)) AS rules(rule, removed)
+                              ('exclude_source_author', exclude_source_author),
+                              ('exclude_source_persistent_loss', exclude_source_persistent_loss),
+                              ('exclude_source_author_persistent_loss', exclude_source_author_persistent_loss)) AS rules(rule, removed)
     GROUP BY rule, GROUPING SETS ((), (phase))
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
     'training_exclusions', (SELECT jsonb_build_object(
         'sources', count(*) FILTER (WHERE expert_id IS NULL),
-        'source_authors', count(*) FILTER (WHERE expert_id IS NOT NULL)) FROM training),
+        'source_authors', count(*) FILTER (WHERE expert_id IS NOT NULL),
+        'persistent_loss_sources', count(*) FILTER (WHERE expert_id IS NULL AND persistent_loss),
+        'persistent_loss_source_authors', count(*) FILTER (WHERE expert_id IS NOT NULL AND persistent_loss)) FROM training),
     'results', coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY rule, phase) FROM results r), '[]'::jsonb))
 FROM bounds b CROSS JOIN coverage c;
 ROLLBACK;
