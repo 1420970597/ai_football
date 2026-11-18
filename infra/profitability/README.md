@@ -9,6 +9,8 @@ Run `reconcile_upstream.py` in the executor environment with scoped, authenticat
 
 Supply the input through a private process pipe. The result contains counts, window boundaries, and error categories. It omits order numbers, account identifiers, credentials, and monetary amounts.
 
+On the production Docker host, `bash infra/profitability/reconcile_live_window.sh <UTC start>` runs the single-window check through the existing API and executor containers. It uses the healthy session for the one account binding present in the order ledger and opens a read-only database transaction. Credentials and order identifiers travel only through the process pipe. The command can run after the boundary without changing the account, order ledger, or deployment.
+
 The check compares reported stake, payout, and profit with decimal arithmetic. `complete_page` describes the full scan, which reads up to three pages per window. It requires a consistent provider total matching the count of distinct valid settled orders. `pages_read` and `scan_issue` expose interrupted, repeated, or limited scans. Mismatched or unknown settlement times and missing costs remain visible in each window. Separate wallet evidence is required to establish the currency, fee treatment, and account-level net result.
 
 # Continuous snapshots
