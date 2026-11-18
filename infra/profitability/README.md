@@ -21,7 +21,7 @@ The check compares reported stake, payout, profit, currency and fees. `complete_
 
 # Continuous snapshots
 
-The monitor stores its first available observation of each closed window under `state/window-closes/<ordinal>.json`. The initial 48-hour file is linked from the fourth window's archive. These files survive the routine checkpoint rotation. After downtime the monitor also queries up to four windows beginning at the earliest unarchived ordinal per poll. The actual observation time remains in the snapshot, so a recovery sample taken after the boundary shows when the monitor obtained it. The current snapshot continues to reflect late receipts.
+The monitor stores its first available observation of each closed window under `state/window-closes/<ordinal>.json`. Between normal five-minute polls, PostgreSQL shortens the wait when the next fixed boundary is closer. A failed poll retries after five minutes. The initial 48-hour file is linked from the fourth window's archive. These files survive the routine checkpoint rotation. After downtime the monitor also queries up to four windows beginning at the earliest unarchived ordinal per poll. The actual observation time remains in the snapshot, so a recovery sample taken after the boundary shows when the monitor obtained it. The current snapshot continues to reflect late receipts.
 
 Order snapshots and their health timestamp are written independently of optional wallet samples. A wallet query error is recorded in `state/last_wallet_failure` until the next successful wallet sample.
 

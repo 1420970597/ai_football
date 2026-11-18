@@ -10,14 +10,17 @@ trap 'exit 0' INT TERM
 mkdir -p /state/checkpoints /state/window-closes /state/wallet-observations
 archive_from=0
 while :; do
+    next_poll=300
     while test -s "/state/window-closes/$archive_from.json"; do
         archive_from=$((archive_from + 1))
     done
     if psql -X -qAt -v ON_ERROR_STOP=1 -v "anchor=$PROFITABILITY_ANCHOR" -v watch_mode=1 \
-        -v "archive_from=$archive_from" \
+        -v "archive_from=$archive_from" -v align_window_poll=1 \
         -f /watch/snapshot.sql > /state/.watch.tmp 2>/dev/null \
-        && IFS= read -r closed_ordinals < /state/.watch.tmp \
-        && tail -n +2 /state/.watch.tmp > /state/.latest.tmp && test -s /state/.latest.tmp; then
+        && { IFS= read -r window_delay && IFS= read -r closed_ordinals; } < /state/.watch.tmp \
+        && test "$window_delay" -ge 1 && test "$window_delay" -le 300 \
+        && tail -n +3 /state/.watch.tmp > /state/.latest.tmp && test -s /state/.latest.tmp; then
+        next_poll=$window_delay
         snapshot_at=$(date -u +%Y%m%dT%H%M%SZ)
         mv /state/.latest.tmp /state/latest.json
         checkpoint="/state/checkpoints/$snapshot_at.json"
@@ -55,6 +58,6 @@ while :; do
         printf '%s\n' 'profitability snapshot failed' >&2
     fi
     rm -f /state/.watch.tmp
-    sleep 300 &
+    sleep "$next_poll" &
     wait "$!"
 done

@@ -162,6 +162,16 @@ SELECT jsonb_build_object(
 ) AS snapshot FROM bounds
 \if :{?watch_mode}
 \gset
+\if :{?align_window_poll}
+WITH timing AS (
+    SELECT (:'snapshot'::jsonb->>'anchor')::timestamptz AS anchor,
+           (:'snapshot'::jsonb->>'observed_at')::timestamptz AS observed_at
+)
+SELECT greatest(1, least(300, ceil(extract(epoch FROM
+    greatest(anchor, date_bin(interval '12 hours', observed_at, anchor)) + interval '12 hours'
+        - clock_timestamp()))))::integer
+FROM timing;
+\endif
 SELECT CASE WHEN :archive_from < 0 THEN coalesce(max((item->>'ordinal')::integer), -1)::text
             ELSE coalesce(string_agg(item->>'ordinal', ' ' ORDER BY (item->>'ordinal')::integer), '') END
 FROM jsonb_array_elements(:'snapshot'::jsonb->'windows') AS windows(item)
