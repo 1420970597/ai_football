@@ -5,7 +5,7 @@ Run `reconcile_upstream.py` in the executor environment with scoped, authenticat
 - `start`: timezone-aware first boundary. The last requested window must have closed.
 - `windows`: an optional integer between 1 and 4. Defaults to 4. Use 1 to reconcile an individual window as it closes.
 - `scope`, `base_url`, `request_id`, `origin`: the authorized account session accepted by `VenueSession`.
-- `local`: order rows for that same account and binding. Each row requires `order_no`, `stake`, `payout`, `net_profit`, `settled_at`, and `booked_at`. Supply `currency` and `fees` when available and use null for unknown values. Use the provider's settlement time as `booked_at` when present and the receipt observation time otherwise. Include earlier placements that settled in the audited window.
+- `local`: order rows for that same account and binding. Each row requires `order_no`, `stake`, `payout`, `net_profit`, `settled_at`, and `booked_at`. Supply `currency` and `fees` when available and use null for unknown values. Use the provider's settlement time as `booked_at` when present and the receipt observation time otherwise. Include earlier placements that settled in the audited window. With no native settlement time, include `placed_at` from the venue and `first_settled_observed_at` from the stored receipt for that order when available.
 
 Supply the input through a private process pipe. The result contains counts, window boundaries, and error categories. It omits order numbers, account identifiers, credentials, and monetary amounts.
 
@@ -16,6 +16,8 @@ The first four one-shot timers save their reports in the private reconciliation 
 The production transient timer uses the UTC calendar `*-*-* 02,14:25,45:00 UTC`. Register it again after a host reboot. The reconciliation directory retains both reports across reboots.
 
 The check compares reported stake, payout, profit, currency and fees. `complete_page` describes the full scan, which reads up to three pages per window. It requires a consistent provider total matching the count of distinct valid settled orders. `pages_read` and `scan_issue` expose interrupted, repeated, or limited scans. `order_receipt_fields_reconciled` also requires a nonempty, one-to-one match with native settlement times, amounts, fees and one currency. The report counts mismatches and fields available upstream for possible recovery. Separate wallet evidence is required to establish fee treatment and the account-level net result.
+
+`settlement_window_attribution_complete` checks membership in the requested window for a nonempty, one-to-one match. For a missing native settlement time, it requires agreement on native placement time and a stored settled receipt for the same order. Both bounds must be within the window and in sequence. `bounded_without_upstream_time` counts these orders. The missing native time remains visible and still prevents `order_receipt_fields_reconciled` from passing.
 
 # Continuous snapshots
 

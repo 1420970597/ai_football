@@ -38,6 +38,7 @@ def reconcile_window(page, local, begin, end):
     orders = [row for row in page['items'] if row['identifier_kind'] == 'order' and row['state'] == 'settled']
     upstream = index_orders(orders)
     counts = Counter()
+    bounded_without_upstream_time = 0
     currencies = {order['currency'] for order in orders if order['currency'] is not None}
     if len(currencies) > 1:
         counts['mixed_upstream_currencies'] = len(currencies)
@@ -47,7 +48,8 @@ def reconcile_window(page, local, begin, end):
             counts['missing_upstream_settlement_time'] += 1
         elif not begin <= at < end:
             counts['outside_settlement_window'] += 1
-        if order['placed_at'] and instant(order['placed_at']) < begin:
+        placed = instant(order['placed_at']) if order['placed_at'] else None
+        if placed is not None and placed < begin:
             counts['placed_before_window'] += 1
         if order['currency'] is None:
             counts['missing_currency'] += 1
@@ -56,6 +58,12 @@ def reconcile_window(page, local, begin, end):
         if number not in expected:
             continue
         prior = expected[number]
+        if at is None and prior['settled_at'] is None and placed is not None:
+            local_placement = prior.get('placed_at')
+            first_settled = prior.get('first_settled_observed_at')
+            if (local_placement and first_settled and instant(local_placement) == placed
+                    and begin <= placed <= instant(first_settled) < end):
+                bounded_without_upstream_time += 1
         if at is not None and prior['settled_at'] is None:
             counts['recoverable_local_settlement_time'] += 1
         elif at is not None and at != instant(prior['settled_at']):
@@ -78,10 +86,14 @@ def reconcile_window(page, local, begin, end):
     extra = upstream.keys() - expected.keys()
     complete_page = (not page['has_more'] and not page['malformed_records'] and
                      page['total'] == len(orders) == len(page['items']) and not page.get('scan_issue'))
+    matched_complete_page = complete_page and bool(orders) and not (missing or extra)
     return {
         'begin': begin.isoformat(), 'end': end.isoformat(), 'complete_page': complete_page,
-        'order_receipt_fields_reconciled': complete_page and bool(orders) and not (missing or extra)
-            and not (counts.keys() - {'placed_before_window'}),
+        'settlement_window_attribution_complete': matched_complete_page
+            and not counts['outside_settlement_window']
+            and counts['missing_upstream_settlement_time'] == bounded_without_upstream_time,
+        'bounded_without_upstream_time': bounded_without_upstream_time,
+        'order_receipt_fields_reconciled': matched_complete_page and not (counts.keys() - {'placed_before_window'}),
         'local_settled': len(expected), 'upstream_settled': len(upstream),
         'matched': len(expected.keys() & upstream.keys()), 'local_only': len(missing),
         'upstream_only': len(extra), 'issues': dict(counts),

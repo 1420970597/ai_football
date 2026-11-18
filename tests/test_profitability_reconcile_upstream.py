@@ -24,10 +24,40 @@ class ReconcileUpstreamTests(unittest.TestCase):
         next_window = dict(self.local, order_no='next', booked_at=END.isoformat())
         output = reconcile_window(self.page, [self.local, next_window], START, END)
         self.assertTrue(output['complete_page'])
+        self.assertTrue(output['settlement_window_attribution_complete'])
         self.assertFalse(output['order_receipt_fields_reconciled'])
         self.assertEqual(output['matched'], 1)
         self.assertEqual(output['local_only'], 0)
         self.assertEqual(output['issues'], {'placed_before_window': 1, 'missing_currency': 1, 'missing_fees': 1})
+
+    def test_matched_placement_and_first_settled_receipt_bound_missing_native_time(self):
+        placed = START + timedelta(hours=2)
+        observed = placed + timedelta(seconds=19)
+        self.upstream.update(placed_at=placed.isoformat(), settled_at=None, currency='CNY', fees='0')
+        local = dict(self.upstream, booked_at=observed.isoformat(), first_settled_observed_at=observed.isoformat())
+        output = reconcile_window(self.page, [local], START, END)
+        self.assertTrue(output['settlement_window_attribution_complete'])
+        self.assertEqual(output['bounded_without_upstream_time'], 1)
+        self.assertEqual(output['issues']['missing_upstream_settlement_time'], 1)
+        self.assertFalse(output['order_receipt_fields_reconciled'])
+
+        for change in (
+            {'placed_at': None},
+            {'placed_at': (placed - timedelta(seconds=1)).isoformat()},
+            {'first_settled_observed_at': None},
+            {'first_settled_observed_at': (placed - timedelta(microseconds=1)).isoformat()},
+            {'first_settled_observed_at': END.isoformat()},
+        ):
+            with self.subTest(change=change):
+                output = reconcile_window(self.page, [local | change], START, END)
+                self.assertFalse(output['settlement_window_attribution_complete'])
+                self.assertEqual(output['bounded_without_upstream_time'], 0)
+
+        self.upstream['placed_at'] = (START - timedelta(microseconds=1)).isoformat()
+        local['placed_at'] = self.upstream['placed_at']
+        output = reconcile_window(self.page, [local], START, END)
+        self.assertFalse(output['settlement_window_attribution_complete'])
+        self.assertEqual(output['bounded_without_upstream_time'], 0)
 
     def test_matching_currency_and_decimal_fee_reconcile_order_fields(self):
         self.upstream.update(currency='CNY', fees='0.10')
@@ -64,6 +94,7 @@ class ReconcileUpstreamTests(unittest.TestCase):
         self.upstream['settled_at'] = None
         output = reconcile_window(self.page, [self.local], START, END)
         self.assertFalse(output['complete_page'])
+        self.assertFalse(output['settlement_window_attribution_complete'])
         self.assertEqual(output['issues']['payout_difference'], 1)
         self.assertEqual(output['issues']['missing_upstream_settlement_time'], 1)
 
@@ -73,6 +104,7 @@ class ReconcileUpstreamTests(unittest.TestCase):
         output = reconcile_window(self.page, [self.local], START, END)
         self.assertEqual((output['matched'], output['upstream_only'], output['local_only']), (0, 1, 1))
         self.assertEqual(output['issues']['outside_settlement_window'], 1)
+        self.assertFalse(output['settlement_window_attribution_complete'])
 
     def test_duplicate_order_cannot_match_twice(self):
         self.page['items'].append(self.upstream)

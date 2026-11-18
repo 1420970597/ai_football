@@ -49,8 +49,14 @@ async def read_window():
             rows = await conn.fetch("""
                 SELECT provider_order_no AS order_no, provider_stake AS stake, provider_payout AS payout,
                        settled_net AS net_profit, provider_fees AS fees, provider_currency AS currency,
-                       settled_at, coalesce(settled_at, receipt_observed_at) AS booked_at
-                FROM v2_bet_orders
+                       settled_at, coalesce(settled_at, receipt_observed_at) AS booked_at,
+                       provider_placed_at AS placed_at,
+                       CASE WHEN settled_at IS NULL THEN (
+                           SELECT min(e.observed_at) FROM v2_order_receipt_evidence e
+                           WHERE e.order_id = o.id AND e.payload->>'state' = 'settled'
+                             AND e.payload->>'order_no' = o.provider_order_no
+                       ) END AS first_settled_observed_at
+                FROM v2_bet_orders o
                 WHERE account_id=$1 AND provider_identity_hash=$2 AND state='settled'
                   AND coalesce(settled_at,receipt_observed_at)>=$3
                   AND coalesce(settled_at,receipt_observed_at)<$4
