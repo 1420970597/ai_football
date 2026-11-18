@@ -22,29 +22,31 @@ async def evidence(conn, begin, end, same_intent_sql):
             SELECT DISTINCT account_id,provider_identity_hash
             FROM v2_bet_orders WHERE provider_order_no IS NOT NULL
         ), scoped AS (
-            SELECT a.id,a.user_id,a.provider_identity_hash,p.auto_sport_scope,
-                   (SELECT al.details->>'auto_sport_scope' FROM v2_audit_log al
-                    WHERE al.action='auto_betting_authorized' AND al.resource_type='leyu_account'
-                      AND al.actor_id=a.user_id AND al.resource_id=a.id::text AND al.created_at<$1
-                    ORDER BY al.created_at DESC,al.id DESC LIMIT 1) AS previous_scope,
-                   NOT EXISTS (
-                       SELECT 1 FROM v2_audit_log al WHERE al.actor_id=a.user_id AND al.created_at>=$1
-                         AND al.action IN ('auto_betting_authorized','automatic_betting_suspended',
-                                           'emergency_stop','user_disabled')
-                   ) AS no_later_policy_event
+            SELECT a.id,a.user_id,a.provider_identity_hash,p.auto_sport_scope
             FROM bindings b JOIN v2_leyu_accounts a ON (a.id,a.provider_identity_hash)=(b.account_id,b.provider_identity_hash)
             JOIN v2_user_bet_settings p ON p.user_id=a.user_id
             WHERE (SELECT count(*) FROM bindings)=1
+        ), authorizations AS MATERIALIZED (
+            SELECT al.id,al.created_at,al.details->>'auto_sport_scope' AS sport_scope
+            FROM scoped a JOIN v2_audit_log al ON al.actor_id=a.user_id AND al.resource_id=a.id::text
+            WHERE al.action='auto_betting_authorized' AND al.resource_type='leyu_account'
         ), reasons AS (
             SELECT s.id,s.message_id,s.created_at,m.source_id,m.posted_at,
                 f.sport,s.phase,s.market_kind,s.period, CASE
                 WHEN prior_order.created_at<s.created_at THEN 'prior_same_intent_order'
                 WHEN prior_order.created_at IS NOT NULL THEN 'same_intent_reserved_within_source_window'
-                WHEN a.no_later_policy_event AND a.previous_scope=a.auto_sport_scope
-                    AND a.previous_scope IN ('football','basketball') AND a.previous_scope<>f.sport
-                    THEN 'outside_audited_sport_scope'
+                WHEN s.withdrawn_at<=s.created_at THEN 'withdrawn_at_recommendation'
                 WHEN m.posted_at < s.created_at - interval '5 minutes'
                     THEN 'source_window_expired_on_recommendation'
+                WHEN policy.sport_scope IN ('football','basketball') AND policy.sport_scope<>f.sport
+                    AND m.posted_at IS NOT NULL
+                    AND NOT EXISTS (SELECT 1 FROM authorizations t WHERE t.created_at>=s.created_at
+                                    AND t.created_at<=m.posted_at+interval '5 minutes')
+                    AND (policy.sport_scope=a.auto_sport_scope OR EXISTS (SELECT 1 FROM authorizations t
+                                    WHERE t.created_at>m.posted_at+interval '5 minutes'))
+                    THEN 'outside_audited_sport_scope'
+                WHEN f.sport='football' AND s.market_kind='team_total'
+                    THEN 'football_team_total_outside_current_dispatch'
                 ELSE 'unconfirmed' END AS evidence,
                 CASE
                     WHEN prior_order.created_at IS NULL THEN 'no_same_intent_order'
@@ -55,6 +57,10 @@ async def evidence(conn, begin, end, same_intent_sql):
                 END AS order_evidence
             FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id
             LEFT JOIN v2_expert_messages m ON m.id=s.message_id CROSS JOIN scoped a
+            LEFT JOIN LATERAL (
+                SELECT t.sport_scope FROM authorizations t WHERE t.created_at<s.created_at
+                ORDER BY t.created_at DESC,t.id DESC LIMIT 1
+            ) policy ON true
             LEFT JOIN LATERAL (
                 SELECT min(o.created_at) AS created_at,
                        bool_or(o.state IN ('accepted','settled') AND

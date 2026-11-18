@@ -13,7 +13,7 @@ CREATE TABLE v2_analysis_traces (job_id uuid, trace_kind text, created_at timest
 CREATE TABLE v2_expert_signals (
     id integer PRIMARY KEY, fixture_id text, market_id text, market_kind text, period text,
     selection text, phase text, score_basis text, line numeric, score_baseline jsonb, created_at timestamptz,
-    message_id integer
+    message_id integer, withdrawn_at timestamptz
 );
 CREATE TABLE v2_bet_orders (
     id integer PRIMARY KEY, signal_id integer, user_id integer, account_id integer, provider_identity_hash text,
@@ -27,7 +27,7 @@ CREATE TABLE v2_audit_log (
 INSERT INTO v2_fixtures VALUES ('football-fixture','football'),('basketball-fixture','basketball');
 INSERT INTO v2_leyu_accounts VALUES (1,1,'binding'),(2,2,'other');
 INSERT INTO v2_user_bet_settings VALUES (1,'football'),(2,'both');
-INSERT INTO v2_expert_signals
+INSERT INTO v2_expert_signals (id,fixture_id,market_id,market_kind,period,selection,phase,score_basis,line,score_baseline,created_at,message_id)
 SELECT n, CASE WHEN n=4 THEN 'basketball-fixture' ELSE 'football-fixture' END,
        '2','total','full_time','over','live','unknown',2.5,
        CASE WHEN n=3 THEN '{"home":1,"away":0}'::jsonb ELSE '{"home":0,"away":0}'::jsonb END,
@@ -39,7 +39,7 @@ INSERT INTO v2_bet_orders VALUES
 INSERT INTO v2_audit_log VALUES
     (1,'auto_betting_authorized','leyu_account',1,'1','{"auto_sport_scope":"football"}','2025-12-31T23:58:00Z');
 
-INSERT INTO v2_expert_signals
+INSERT INTO v2_expert_signals (id,fixture_id,market_id,market_kind,period,selection,phase,score_basis,line,score_baseline,created_at,message_id)
 SELECT n, 'football-fixture','2','total','full_time','over','live','unknown',line,
        '{"home":0,"away":0}',created_at::timestamptz,n
 FROM (VALUES (6,3.5,'2026-01-01T01:00:00Z'),(7,3.5,'2026-01-01T01:00:04Z'),
@@ -74,6 +74,27 @@ FROM (VALUES
     ('attempt_claimed','2026-01-01T07:29:59.5Z','{"attempt_id":"success"}'),
     ('hermes_request','2026-01-01T07:29:59.8Z','{"attempt_id":"success","message_id":"20"}')
 ) AS t(trace_kind,created_at,payload);
+
+INSERT INTO v2_expert_signals (id,fixture_id,market_id,market_kind,period,selection,phase,score_basis,line,score_baseline,created_at,message_id)
+SELECT n,fixture,'2',kind,'full_time','over','scheduled','whole_period',n,
+       '{"home":0,"away":0}',created_at::timestamptz,n
+FROM (VALUES
+    (24,'football-fixture','team_total','2026-01-01T07:56:00Z'),
+    (25,'football-fixture','total','2026-01-01T07:56:10Z'),
+    (26,'football-fixture','total','2026-01-01T07:57:00Z'),
+    (27,'basketball-fixture','total','2026-01-01T07:57:20Z'),
+    (28,'football-fixture','total','2026-01-01T08:04:30Z'),
+    (29,'basketball-fixture','total','2026-01-01T08:05:30Z'),
+    (30,'basketball-fixture','total','2026-01-01T08:16:00Z')
+) AS s(n,fixture,kind,created_at);
+UPDATE v2_expert_signals SET withdrawn_at=created_at WHERE id=25;
+INSERT INTO v2_expert_messages (id,posted_at)
+SELECT message_id,created_at-interval '10 seconds' FROM v2_expert_signals WHERE id>=24;
+INSERT INTO v2_audit_log VALUES
+    (2,'auto_betting_authorized','leyu_account',1,'1','{"auto_sport_scope":"basketball"}','2026-01-01T07:56:20Z'),
+    (3,'auto_betting_authorized','leyu_account',1,'1','{"auto_sport_scope":"football"}','2026-01-01T08:05:00Z'),
+    (4,'auto_betting_authorized','leyu_account',1,'1','{}','2026-01-01T08:15:00Z');
+
 INSERT INTO v2_bet_orders VALUES
     (3,6,1,1,'binding','native-3',false,'2026-01-01T01:00:05Z','accepted'),
     (4,8,1,1,'binding','native-4',false,'2026-01-01T02:05:00Z','settled'),
