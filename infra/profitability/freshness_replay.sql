@@ -12,6 +12,16 @@ WITH bounds AS (
                 THEN (receipt.payload->>'net_profit')::numeric END AS net,
            (permit.captured_at >= s.created_at AND s.created_at >= m.posted_at
                 AND permit.captured_at <= o.provider_placed_at) IS TRUE AS time_verified,
+           CASE WHEN s.phase IS DISTINCT FROM 'live' THEN 'outside_live'
+                WHEN (permit.captured_at BETWEEN s.created_at AND o.provider_placed_at) IS NOT TRUE
+                    THEN 'unverified_permit'
+                WHEN (s.score_baseline->>'home' ~ '^[0-9]+$' AND s.score_baseline->>'away' ~ '^[0-9]+$') IS NOT TRUE
+                    THEN 'missing_recommendation_score'
+                WHEN (permit.score->>'home' ~ '^[0-9]+$' AND permit.score->>'away' ~ '^[0-9]+$') IS NOT TRUE
+                    THEN 'missing_permit_score'
+                WHEN s.score_baseline->>'home' <> permit.score->>'home'
+                  OR s.score_baseline->>'away' <> permit.score->>'away' THEN 'score_changed'
+                ELSE 'score_matches' END AS score_evidence,
            s.created_at - m.posted_at AS publication_to_signal,
            permit.captured_at - s.created_at AS signal_age,
            o.provider_placed_at - permit.captured_at AS authorization_to_fill,
@@ -20,7 +30,7 @@ WITH bounds AS (
     LEFT JOIN v2_expert_signals s ON s.id = o.signal_id
     LEFT JOIN v2_expert_messages m ON m.id = s.message_id
     LEFT JOIN LATERAL (
-        SELECT q.captured_at
+        SELECT q.captured_at, q.evidence->'score_baseline' AS score
         FROM v2_quote_evidence q
         WHERE q.reference_id = o.id AND q.evidence_kind = 'order_attempt'
             AND q.evidence->>'stage' = 'submission_authorized'
@@ -60,6 +70,12 @@ WITH bounds AS (
         ('signal_to_authorization', signal_age), ('authorization_to_fill', authorization_to_fill)) AS stages(stage, elapsed)
     WHERE time_verified
     GROUP BY period, stage, GROUPING SETS ((), (phase))
+), live_score_coverage AS (
+    SELECT period, score_evidence, count(*) AS fills, count(net) AS settled,
+           count(DISTINCT fixture_id) FILTER (WHERE net IS NOT NULL) AS settled_fixtures,
+           sum(net) AS receipt_net
+    FROM scoped_fills WHERE phase = 'live'
+    GROUP BY period, score_evidence
 ), results AS (
     SELECT period, CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase, rule,
            count(*) AS opportunities,
@@ -76,12 +92,15 @@ WITH bounds AS (
     CROSS JOIN LATERAL (VALUES
        ('baseline', true),
        ('signal_age_60s', time_verified AND signal_age <= interval '60 seconds'),
-       ('message_age_120s', time_verified AND message_age <= interval '120 seconds')
+       ('message_age_120s', time_verified AND message_age <= interval '120 seconds'),
+       ('live_score_matches', score_evidence IN ('outside_live','score_matches'))
     ) rules(rule, keep)
     GROUP BY period, rule, GROUPING SETS ((), (phase))
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
     'results', coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY period, phase, rule) FROM results r), '[]'::jsonb),
-    'timings', coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY period, phase, stage) FROM timings t), '[]'::jsonb))
+    'timings', coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY period, phase, stage) FROM timings t), '[]'::jsonb),
+    'live_score_coverage', coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY period, score_evidence)
+        FROM live_score_coverage s), '[]'::jsonb))
 FROM bounds b CROSS JOIN coverage c;
 ROLLBACK;
