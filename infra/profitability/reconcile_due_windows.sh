@@ -139,7 +139,7 @@ else:
         original = reports.get(f"{index}.json", {})
         retry = reports.get(f"{index}.retry.json", {})
         counts = [r.get("local_settled") for r in (original, retry)
-                  if matched(r) and matches_bounds(r, "begin", "end", start, end)]
+                  if matches_bounds(r, "begin", "end", start, end)]
         counts = [count for count in counts if type(count) is int and count >= 0]
         if counts and settled > max(counts):
             print(index, f"late-{settled}")

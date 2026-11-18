@@ -115,7 +115,7 @@ for direction in local_only upstream_only; do
 done
 printf '%s\n' 'Reconciliation scheduling checks passed.'
 
-# Recheck recent matched windows only when a fresh fixed-window snapshot gains receipts.
+# Recheck recent windows only when a fresh fixed-window snapshot gains receipts.
 mkdir -p watch/reconciliations watch/state
 state_path="$test_dir/watch/reconciliations"
 export test_now=$((base + window_us + delay_us))
@@ -157,6 +157,27 @@ bash ./reconcile_due_windows.sh "$anchor" "$state_path"
 test -s "$state_path/0.late-53.json"
 cmp "$state_path/0.json" original_late
 printf '%s\n' 'Late settlement reconciliation checks passed.'
+
+# Both previous scans can miss upstream orders while the local ledger advances.
+state_path="$test_dir/watch/unmatched"
+calls_before=$(wc -l < calls)
+snapshot "$anchor" "$fresh" "$boundary" 51
+export test_report='[{"complete_page":false,"local_only":2,"upstream_only":0,"local_settled":50,"begin":"2026-11-18T02:14:09.845374Z","end":"2026-11-18T14:14:09.845374Z"}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.json" unmatched_original
+export test_report='[{"complete_page":true,"local_only":1,"upstream_only":0,"local_settled":51,"begin":"2026-11-18T02:14:09.845374Z","end":"2026-11-18T14:14:09.845374Z"}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.retry.json" unmatched_retry
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 2))"
+snapshot "$anchor" "$fresh" "$boundary" 52
+export test_report='[{"complete_page":true,"local_only":0,"upstream_only":0,"local_settled":52}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test -s "$state_path/0.late-52.json"
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 3))"
+cmp "$state_path/0.json" unmatched_original
+cmp "$state_path/0.retry.json" unmatched_retry
 
 mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
 cp "$root/infra/profitability/restore_reconciliation_timer.sh" infra/profitability/
