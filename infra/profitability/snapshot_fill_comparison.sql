@@ -43,12 +43,26 @@ WITH bounds AS (
              AND options.valid_prices = cardinality(options.sides)
              AND options.unique_ids = cardinality(options.sides) AS valid_options,
            options.inverse_sum,
+           e.captured_at = s.created_at AND e.evidence->>'market_kind' = s.market_kind
+             AND e.evidence->>'score_basis' = s.score_basis AS same_signal_snapshot,
+           s.outcome,
+           CASE s.outcome WHEN 'win' THEN 1 WHEN 'half_win' THEN 0.5 ELSE 0 END AS win_fraction,
+           CASE s.outcome WHEN 'loss' THEN 1 WHEN 'half_loss' THEN 0.5 ELSE 0 END AS loss_fraction,
+           s.settled_at IS NOT NULL AND EXISTS (
+               SELECT 1 FROM v2_signal_settlements settled
+               JOIN v2_fixture_results result ON result.fixture_id=settled.fixture_id AND result.version=settled.result_version
+               WHERE settled.signal_id=s.id AND settled.fixture_id=s.fixture_id AND settled.result_version=s.result_version
+                 AND settled.outcome=s.outcome AND settled.unit_net IS NOT DISTINCT FROM s.unit_net
+                 AND settled.effective_stake=s.effective_stake AND settled.reason=s.settlement_reason
+                 AND result.status IN ('confirmed','void')
+                 AND result.version=(SELECT max(version) FROM v2_fixture_results WHERE fixture_id=s.fixture_id)
+           ) AS settlement_valid,
            o.settled_net, o.provider_stake, o.provider_payout, o.settled_at,
            o.provider_fees, o.provider_currency, o.account_id, o.provider_identity_hash
     FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id = o.signal_id
     LEFT JOIN v2_fixtures f ON f.id = s.fixture_id CROSS JOIN bounds b
     LEFT JOIN LATERAL (
-        SELECT q.id, q.evidence
+        SELECT q.id, q.evidence, q.captured_at
         FROM v2_quote_evidence q
         WHERE q.reference_id = s.id AND q.evidence_kind = 'expert_signal' AND q.evidence ? 'market_snapshot'
           AND q.fixture_id = s.fixture_id AND q.market_id = s.market_id AND q.period = s.period
@@ -95,6 +109,47 @@ WITH bounds AS (
     FROM fills
 ), compared AS (
     SELECT *, exclusion IS NULL AS comparable FROM classified
+), margin_payouts AS (
+    SELECT *, provider_stake * win_fraction AS winning_stake,
+           provider_stake * (win_fraction * (fill_price - 1) - loss_fraction) AS gross_net_at_fill
+    FROM compared WHERE state='settled' AND comparable
+), margin_evidence AS (
+    SELECT *, CASE
+        WHEN same_signal_snapshot IS NOT TRUE THEN 'snapshot_identity_unverified'
+        WHEN settlement_valid IS NOT TRUE
+          OR (outcome IN ('win','half_win','loss','half_loss','push','void')) IS NOT TRUE THEN 'settlement_unverified'
+        WHEN (provider_stake > 0 AND provider_payout >= 0) IS NOT TRUE THEN 'payout_unavailable'
+        WHEN abs(provider_payout - round(provider_stake + gross_net_at_fill,2)) > 0.01
+          THEN 'payout_conflicts_with_reconstruction'
+    END AS margin_exclusion
+    FROM margin_payouts
+), margin_summary AS (
+    SELECT CASE WHEN grouping(phase)=1 THEN 'all' ELSE phase END AS phase,
+           count(*) AS price_comparable_settled,
+           count(*) FILTER (WHERE margin_exclusion IS NULL) AS with_verified_payout,
+           count(DISTINCT fixture_id) FILTER (WHERE margin_exclusion IS NULL) AS verified_fixtures,
+           count(*) FILTER (WHERE margin_exclusion='snapshot_identity_unverified') AS snapshot_identity_unverified,
+           count(*) FILTER (WHERE margin_exclusion='settlement_unverified') AS settlement_unverified,
+           count(*) FILTER (WHERE margin_exclusion='payout_unavailable') AS payout_unavailable,
+           count(*) FILTER (WHERE margin_exclusion='payout_conflicts_with_reconstruction')
+               AS payout_conflicts_with_reconstruction,
+           count(*) FILTER (WHERE margin_exclusion IS NULL AND (provider_currency IS NULL OR provider_fees IS NULL))
+               AS verified_payout_missing_cost_fields,
+           CASE WHEN count(DISTINCT (account_id,provider_identity_hash))=1
+                     AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
+                     AND count(DISTINCT provider_currency)<=1 THEN
+               jsonb_build_object(
+                   'stake', sum(provider_stake) FILTER (WHERE margin_exclusion IS NULL),
+                   'observed_payout_minus_stake', sum(provider_payout-provider_stake) FILTER (WHERE margin_exclusion IS NULL),
+                   'quoted_margin_drag', round(sum(winning_stake * recommendation_price * (inverse_sum-1))
+                       FILTER (WHERE margin_exclusion IS NULL),2),
+                   'recommendation_to_preflight_effect', round(sum(winning_stake * (preflight_price-recommendation_price))
+                       FILTER (WHERE margin_exclusion IS NULL),2),
+                   'preflight_to_fill_effect', round(sum(winning_stake * (fill_price-preflight_price))
+                       FILTER (WHERE margin_exclusion IS NULL),2)
+               )
+           END AS amounts
+    FROM margin_evidence GROUP BY GROUPING SETS ((), (phase))
 ), exclusions AS (
     SELECT sport, phase, market_kind, period, exclusion, count(*) AS fills,
            count(*) FILTER (WHERE state = 'settled') AS settled
@@ -193,6 +248,7 @@ SELECT jsonb_build_object('bounds',to_jsonb(b),
         FROM preflight_results WHERE NOT automatic_only),'[]'::jsonb),
     'automatic_preflight_outcomes',coalesce((SELECT jsonb_agg(data ORDER BY phase,direction)
         FROM preflight_results WHERE automatic_only),'[]'::jsonb),
+    'realized_quote_margin',coalesce((SELECT jsonb_agg(to_jsonb(m) ORDER BY phase) FROM margin_summary m),'[]'::jsonb),
     'automatic_coverage',(SELECT jsonb_agg(to_jsonb(a) ORDER BY phase) FROM automatic_coverage a)
 ) FROM bounds b;
 ROLLBACK;
