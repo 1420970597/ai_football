@@ -44,3 +44,20 @@ class ReferenceHistoryTests(unittest.TestCase):
         self.assertEqual(report['candle']['age_seconds'], 55.3)
         self.assertEqual(report['candle']['yes_ask'], '0.60')
         self.assertIsNone(report['candle']['price'])
+
+    def test_shared_candle_requires_the_same_closed_minute_and_valid_bid_ask(self):
+        minute = int(self.cutoff.timestamp()) // 60 * 60
+
+        def candle(stamp, bid='0.31', ask='0.33'):
+            return {'end_period_ts': stamp, 'yes_bid': {'close_dollars': bid}, 'yes_ask': {'close_dollars': ask}}
+
+        rows = {
+            'A': [candle(minute), candle(minute - 60), candle(minute + 60)],
+            'B': [candle(minute, ask=None), candle(minute - 60), candle(minute + 60)],
+            'C': [candle(minute, bid='0.45'), candle(minute - 60), candle(minute + 60)],
+        }
+        report = reference_history.shared_kalshi_candle(rows, self.cutoff)
+        self.assertEqual(report['candle']['age_seconds'], 115.3)
+        self.assertEqual(set(report['candle']['quotes']), {'A', 'B', 'C'})
+        rows['B'].append(candle(minute - 60))
+        self.assertIsNone(reference_history.shared_kalshi_candle(rows, self.cutoff)['candle'])
