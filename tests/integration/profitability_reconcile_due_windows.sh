@@ -115,6 +115,21 @@ for direction in local_only upstream_only; do
 done
 printf '%s\n' 'Reconciliation scheduling checks passed.'
 
+# Recheck contradictory same-order receipts, while preserving the archived primary scan.
+export test_now=$((base + window_us + delay_us))
+for issue in net_profit_difference payout_difference settlement_time_difference placement_time_difference; do
+    path="$test_dir/discrepancies/$issue"
+    export test_report="[{\"complete_page\":true,\"local_only\":0,\"upstream_only\":0,\"issues\":{\"$issue\":1}}]"
+    bash ./reconcile_due_windows.sh "$anchor" "$path"
+    cp "$path/0.json" original_discrepancy
+    bash ./reconcile_due_windows.sh "$anchor" "$path"
+    test -s "$path/0.retry.json"
+    cmp "$path/0.json" original_discrepancy
+    calls_before=$(wc -l < calls)
+    bash ./reconcile_due_windows.sh "$anchor" "$path"
+    test "$(wc -l < calls)" = "$calls_before"
+done
+
 # Recheck recent windows only when a fresh fixed-window snapshot gains receipts.
 mkdir -p watch/reconciliations watch/state
 state_path="$test_dir/watch/reconciliations"

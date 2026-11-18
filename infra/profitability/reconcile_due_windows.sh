@@ -80,8 +80,16 @@ import tarfile
 def window_report(data):
     return data[0] if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) else {}
 
-def matched(report):
-    return report.get("complete_page") is True and report.get("local_only") == report.get("upstream_only") == 0
+def requires_retry(report):
+    if report.get("complete_page") is not True or report.get("local_only") != 0 or report.get("upstream_only") != 0:
+        return True
+    discrepancies = {
+        "stake_difference", "payout_difference", "net_profit_difference", "currency_difference", "fees_difference",
+        "placement_time_difference", "settlement_time_difference", "outside_settlement_window",
+        "upstream_settlement_before_placement",
+    }
+    issues = report.get("issues", {})
+    return not isinstance(issues, dict) or any(issues.get(key) for key in discrepancies)
 
 def matches_bounds(item, start_key, end_key, start, end):
     try:
@@ -110,7 +118,7 @@ for name, report in reports.items():
     if name.endswith(".retry.json"):
         continue
     index = name.removesuffix(".json")
-    if not matched(report) and f"{index}.retry.json" not in reports:
+    if requires_retry(report) and f"{index}.retry.json" not in reports:
         print(index, "retry")
         break
 else:
