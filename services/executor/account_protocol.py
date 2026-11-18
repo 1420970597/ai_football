@@ -156,6 +156,12 @@ def normalize_order(row: Mapping[str, Any], state: str) -> dict[str, Any]:
     # These are the decimal execution-price fields used by the verified protocol.
     # The unrelated `odds` integer uses ODDS_SCALE and is not a decimal price.
     price = price if price is not None and Decimal(price) > 1 else None
+    settlement_codes = {}
+    if state == "settled":
+        for key in ("betResult", "betStatus", "orderStatus", "cancelType"):
+            value = merged.get(key)
+            if type(value) in (int, str) and re.fullmatch(r"[0-9]{1,4}", str(value)):
+                settlement_codes[key] = int(value)
     return {"order_no": str(identifier), "identifier_kind": "order" if parent_id else "detail",
             "state": state, "stake": stake, "payout": payout, "net_profit": profit, "pnl_basis": basis, "fees": None,
             "price": price, "currency": currency,
@@ -164,7 +170,8 @@ def normalize_order(row: Mapping[str, Any], state: str) -> dict[str, Any]:
             "match_id": str(_first(merged, "matchId", "eventId", "mid") or "") or None,
             "market_name": _first(merged, "playNameCn", "marketName", "playName"),
             "selection_name": _first(merged, "playOptionNameCn", "optionName", "playOptionsName", "playOptionName"),
-            "result": _first(merged, "result", "betResult", "settleResult", "winStatus")}
+            "result": _first(merged, "result", "betResult", "settleResult", "winStatus"),
+            **({"provider_settlement_codes": settlement_codes} if settlement_codes else {})}
 
 
 def order_page(payload: Any, state: str, page: int, size: int) -> dict[str, Any]:

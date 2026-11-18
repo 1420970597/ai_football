@@ -1031,7 +1031,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 state=json.loads(request.content)['orderStatus']
                 return httpx.Response(200,json={'code':0,'data':{'total':1 if state==1 else 0,'records':[{
                     'orderNo':'EXACT','betAmount':'1.75','backAmount':'3.50','profitAmount':'1.75',
-                    'oddFinally':'2.00','currencyCode':'CNY','betTime':placed,'settleTime':settled
+                    'oddFinally':'2.00','currencyCode':'CNY','betTime':placed,'settleTime':settled,
+                    'orderStatus':'1','detailList':[{'betResult':4,'betStatus':'1','cancelType':0}]
                 }] if state==1 else []}})
             return original(request)
         executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',
@@ -1049,6 +1050,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         evidence=await self.pool.fetchrow('SELECT * FROM v2_order_receipt_evidence WHERE order_id=$1',row['id'])
         self.assertEqual('2.00',evidence['payload']['price'])
         self.assertEqual('CNY',evidence['payload']['currency'])
+        self.assertEqual({'betResult':4,'betStatus':1,'orderStatus':1,'cancelType':0},
+                         evidence['payload']['provider_settlement_codes'])
         visible=(await self.api.get('/api/v1/accounts/orders')).json()['items'][0]
         self.assertEqual(Decimal('2'),Decimal(str(visible['provider_price'])))
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
@@ -1162,7 +1165,10 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_receipt_rejects_invalid_official_fields(self):
         from pydantic import ValidationError
-        for extra in ({'price':'NaN'},{'price':'1'},{'stake':'-1'},{'settled_at':'2026-10-20T10:00:00'},{'currency':'usd'}):
+        for extra in ({'price':'NaN'},{'price':'1'},{'stake':'-1'},{'settled_at':'2026-10-20T10:00:00'},{'currency':'usd'},
+                      {'provider_settlement_codes':{'betResult':True}},
+                      {'provider_settlement_codes':{'cancelType':'41'}},
+                      {'provider_settlement_codes':{'provider_text':'unexpected'}}):
             with self.subTest(extra=extra), self.assertRaises(ValidationError):
                 accounts.Receipt(order_no='O',state='settled',**extra)
 
@@ -1245,6 +1251,14 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200,finished.status_code,finished.text)
         original=dict(await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id']))
         evidence=dict(await self.pool.fetchrow('SELECT * FROM v2_order_receipt_evidence WHERE order_id=$1',row['id']))
+        self.assertNotIn('provider_settlement_codes',evidence['payload'])
+        legacy_document=accounts.JobFinish.model_validate(body).model_dump(mode='json')
+        for key in ('provider_code','reconciliation_errors'):
+            legacy_document.pop(key)
+        legacy_document['receipts'][0]=evidence['payload']
+        legacy_digest=hashlib.sha256(json.dumps(legacy_document,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        self.assertEqual(legacy_digest,await self.pool.fetchval(
+            "SELECT details->>'finish_sha256' FROM v2_account_jobs WHERE id=$1",uuid.UUID(work['job_id'])))
         replay=await self.worker_api.post(url,json=body)
         self.assertEqual(200,replay.status_code,replay.text)
         self.assertTrue(replay.json()['idempotent'])

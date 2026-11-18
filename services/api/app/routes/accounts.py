@@ -91,6 +91,13 @@ class RenewalFinish(AttemptInput):
     metadata: dict = Field(default_factory=dict)
 
 
+class ProviderSettlementCodes(Input):
+    betResult: int | None = Field(default=None, ge=0, le=9999, strict=True)
+    betStatus: int | None = Field(default=None, ge=0, le=9999, strict=True)
+    orderStatus: int | None = Field(default=None, ge=0, le=9999, strict=True)
+    cancelType: int | None = Field(default=None, ge=0, le=9999, strict=True)
+
+
 class Receipt(Input):
     order_no: str = Field(min_length=1, max_length=160)
     state: str = Field(pattern="^(settled|unsettled)$")
@@ -103,6 +110,7 @@ class Receipt(Input):
     currency: str | None = Field(default=None, pattern="^[A-Z]{3}$")
     placed_at: AwareDatetime | None = None
     settled_at: AwareDatetime | None = None
+    provider_settlement_codes: ProviderSettlementCodes | None = None
 
 
 class ReconciliationError(Input):
@@ -588,6 +596,10 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
         finish_document.pop('provider_code')
     if not body.reconciliation_errors:
         finish_document.pop('reconciliation_errors')
+    receipts = finish_document['receipts']
+    for receipt in receipts:
+        if receipt['provider_settlement_codes'] is None:
+            receipt.pop('provider_settlement_codes')
     finish_sha256=hashlib.sha256(json.dumps(finish_document,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
@@ -621,7 +633,7 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',renewal_state='ready',renewal_attempt=NULL,"
                                    "renewal_lease_until=NULL,renewal_retry_after=NULL,last_verified_at=now(),available_balance=$2,"
                                    "balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
-                await jobs.reconcile_receipts(conn,account,[receipt.model_dump(mode='json') for receipt in body.receipts])
+                await jobs.reconcile_receipts(conn,account,receipts)
                 # Timestamp failed reads too: preserve financial state/exposure,
                 # while the scheduler rotates accounts/orders and backs off.
                 attempted = body.scanned_orders + [item.order_id for item in body.reconciliation_errors]

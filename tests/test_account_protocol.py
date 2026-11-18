@@ -406,6 +406,16 @@ class OrderNormalizationTests(unittest.TestCase):
         self.assertEqual("0", normalize_order({"orderNo": "O", "profitAmount": 0}, "settled")["net_profit"])
         self.assertIsNone(normalize_order({"orderNo": "O"}, "settled")["settled_at"])
 
+    def test_settlement_codes_preserve_zero_and_only_native_numeric_fields(self):
+        row = {"orderNo": "O", "orderStatus": "4", "detailList": [
+            {"betResult": 0, "betStatus": "5", "cancelType": "41", "settleType": 7},
+        ]}
+        self.assertEqual({"betResult": 0, "betStatus": 5, "orderStatus": 4, "cancelType": 41},
+                         normalize_order(row, "settled")["provider_settlement_codes"])
+        self.assertNotIn("provider_settlement_codes", normalize_order(row, "unsettled"))
+        invalid = {"orderNo": "O", "betResult": True, "betStatus": "-1", "orderStatus": 4.0, "cancelType": "10000"}
+        self.assertNotIn("provider_settlement_codes", normalize_order(invalid, "settled"))
+
     def test_duplicate_missing_and_malformed_records_are_explicit(self):
         result = order_page({"total": 4, "records": [{"orderNo": "O"}, {"orderNo": "O"}, {}, "invalid"]}, "settled", 1, 100)
         self.assertEqual(1, len(result["items"]))
