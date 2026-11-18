@@ -23,6 +23,9 @@ export -f date docker
 printf '%s\n' 'set -eu' 'printf "%s\n" "$1" >> calls' \
     'if [[ ${test_fail:-0} == 1 ]]; then exit 41; fi' \
     'printf "%s\n" "$test_report"' > reconcile_live_window.sh
+printf '%s\n' 'set -eu' 'printf "%s\n" "$1" >> wallet_calls' \
+    'if [[ ${test_wallet_fail:-0} == 1 ]]; then exit 42; fi' \
+    'printf "%s\n" "{\"samples\":0}"' > reconcile_wallet_window.sh
 
 anchor=2026-11-18T02:14:09.845374Z
 base=$(date -u -d "$anchor" +%s%6N)
@@ -38,16 +41,25 @@ export test_report='[{"complete_page": false, "scan_issue": "upstream_total_chan
 : > state/0.json
 run
 test ! -e calls
+test ! -e wallet_calls
 export test_now=$((test_now + 1))
-run
+export test_wallet_fail=1
+result=0
+run || result=$?
+test "$result" = 42
 test "$(sed -n '1p' calls)" = "$anchor"
+test "$(sed -n '1p' wallet_calls)" = "$anchor"
+test ! -e state/0.wallet.json
 cp state/0.json original
 
 # An unsuccessful attempt is retried and the original report survives.
 export test_fail=1
+export test_wallet_fail=0
 result=0
 run || result=$?
 test "$result" = 41
+test "$(stat -c %a state/0.wallet.json)" = 600
+test "$(sed -n '2p' wallet_calls)" = "$anchor"
 test ! -e state/0.retry.json
 test -z "$(find state -name '.rolling.??????' -print)"
 cmp state/0.json original
@@ -58,6 +70,7 @@ test "$(stat -c %a state/0.retry.json)" = 600
 cmp state/0.json original
 run
 test "$(wc -l < calls)" = 3
+test "$(wc -l < wallet_calls)" = 2
 
 # Missing reports come first, then malformed reports. Missing receipt fields do not cause a retry.
 export test_now=$((base + 4 * window_us + delay_us))
@@ -78,6 +91,7 @@ export test_now=$((base + 5 * window_us + delay_us))
 run
 test "$(sed -n '6p' calls)" = 2026-11-20T02:14:09.845374Z
 test -s state/4.json
+test -s state/4.wallet.json
 run
 test "$(wc -l < calls)" = 6
 printf '%s\n' 'Reconciliation scheduling checks passed.'

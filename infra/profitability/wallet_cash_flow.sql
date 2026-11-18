@@ -1,6 +1,17 @@
 -- Diagnostic only. The provider's available balance does not enumerate wallet movements.
+\if :{?window_start}
+\else
+\set window_start ''
+\endif
+\if :{?window_end}
+\else
+\set window_end ''
+\endif
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
-WITH samples AS (
+WITH bounds AS (
+    SELECT nullif(:'window_start', '')::timestamptz AS window_start,
+           nullif(:'window_end', '')::timestamptz AS window_end
+), samples AS (
     SELECT DISTINCT ON (observed_at) observed_at, balance
     FROM jsonb_array_elements(convert_from(decode(:'wallet_samples', 'base64'), 'UTF8')::jsonb) AS data(sample)
     CROSS JOIN LATERAL (
@@ -8,7 +19,10 @@ WITH samples AS (
                (sample->'wallet'->>'available_balance')::numeric AS balance,
                (sample->>'sampled_at')::timestamptz AS sampled_at
     ) parsed
+    CROSS JOIN bounds b
     WHERE balance IS NOT NULL AND observed_at BETWEEN sampled_at - interval '10 minutes' AND sampled_at
+      AND (b.window_start IS NULL OR observed_at >= b.window_start)
+      AND (b.window_end IS NULL OR observed_at <= b.window_end)
     ORDER BY observed_at, sampled_at DESC
 ), points AS (
     SELECT observed_at, balance,
@@ -64,11 +78,13 @@ WITH samples AS (
     FROM intervals
 )
 SELECT jsonb_build_object(
+    'window_start', b.window_start,
+    'window_end', b.window_end,
     'samples', (SELECT count(*) FROM samples),
     'first_at', (SELECT min(observed_at) FROM samples),
     'last_at', (SELECT max(observed_at) FROM samples),
     'bindings', c.bindings,
     'missing_identity', c.missing_identity,
     'intervals', coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY start_at) FROM result r), '[]'::jsonb)
-) FROM coverage c;
+) FROM coverage c CROSS JOIN bounds b;
 ROLLBACK;

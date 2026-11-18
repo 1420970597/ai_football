@@ -23,6 +23,31 @@ install -d -m 700 -- "$state_dir"
 exec 9>"$state_dir/.rolling.lock"
 flock -n 9 || exit 0
 
+record_report() (
+    ordinal=$1
+    suffix=$2
+    collector=$3
+    start_us=$((anchor + ordinal * window_us))
+    start_seconds=$((start_us / 1000000))
+    start_fraction=$(printf '%06d' "$((start_us % 1000000))")
+    start=$(date -u -d "@$start_seconds.$start_fraction" +%Y-%m-%dT%H:%M:%S.%6NZ) || exit
+    draft=$(mktemp -- "$state_dir/.rolling.XXXXXX") || exit
+    trap 'rm -f -- "$draft"' EXIT
+    bash "$root/$collector" "$start" > "$draft" || exit
+    test -s "$draft" || exit
+    mv -T -- "$draft" "$state_dir/$ordinal$suffix" || exit
+    printf 'Recorded window %s starting at %s in %s\n' "$ordinal" "$start" "$ordinal$suffix"
+)
+
+# A full missing wallet period needs its oldest samples to be within the 72-hour retention.
+wallet_status=0
+for ((index=latest_due; index>=0 && index>latest_due-5; index--)); do
+    if [ ! -s "$state_dir/$index.wallet.json" ]; then
+        record_report "$index" .wallet.json reconcile_wallet_window.sh || wallet_status=$?
+        break
+    fi
+done
+
 ordinal=
 candidates=()
 for ((index=0; index<=latest_due; index++)); do
@@ -61,14 +86,7 @@ with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as archive:
     suffix=.retry.json
 fi
 
-[ -n "$ordinal" ] || exit 0
-start_us=$((anchor + ordinal * window_us))
-start_seconds=$((start_us / 1000000))
-start_fraction=$(printf '%06d' "$((start_us % 1000000))")
-start=$(date -u -d "@$start_seconds.$start_fraction" +%Y-%m-%dT%H:%M:%S.%6NZ)
-draft=$(mktemp -- "$state_dir/.rolling.XXXXXX")
-trap 'rm -f -- "$draft"' EXIT
-bash "$root/reconcile_live_window.sh" "$start" > "$draft"
-test -s "$draft"
-mv -T -- "$draft" "$state_dir/$ordinal$suffix"
-printf 'Recorded window %s starting at %s in %s\n' "$ordinal" "$start" "$ordinal$suffix"
+if [ -n "$ordinal" ]; then
+    record_report "$ordinal" "$suffix" reconcile_live_window.sh
+fi
+exit "$wallet_status"
