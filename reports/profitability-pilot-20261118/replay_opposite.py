@@ -1,0 +1,115 @@
+"""Replay opposite directions at the original immutable two-sided quote."""
+
+import argparse
+import asyncio
+from collections import defaultdict
+from datetime import datetime, timezone
+from decimal import Decimal
+import json
+
+import asyncpg
+
+from app.config import database_url
+from app.expert_statistics import QUOTE_VALID_SQL, SETTLEMENT_VALID_SQL
+
+
+def observed_returns(row):
+    kind = row['market_kind']
+    selection = row['selection']
+    if kind in {'total', 'team_total'}:
+        pair = {'over': 'under', 'under': 'over'}
+    elif kind == 'handicap':
+        if row['evidence'].get('line_basis') != 'provider_home':
+            return 'line_basis_unverified', None
+        pair = {'home': 'away', 'away': 'home'}
+    elif (kind, row['sport'], row['period'], row['market_id']) == ('winner', 'basketball', 'full_time', '37'):
+        pair = {'home': 'away', 'away': 'home'}
+    else:
+        return 'not_a_verified_two_way_market', None
+    if selection not in pair:
+        return 'not_a_verified_two_way_market', None
+
+    snapshot = row['evidence'].get('market_snapshot') or {}
+    if not isinstance(snapshot, dict):
+        return 'two_sided_snapshot_invalid', None
+    options = snapshot.get('options')
+    if not isinstance(options, list) or len(options) != 2:
+        return 'two_sided_snapshot_unavailable', None
+    try:
+        prices = {option['selection']: Decimal(option['price']) for option in options}
+        identities = {option['selection_id'] for option in options if option['selection_id']}
+    except (KeyError, TypeError, ArithmeticError, ValueError):
+        return 'two_sided_snapshot_invalid', None
+    opposite = pair[selection]
+    if (prices.keys() != {selection, opposite} or len(identities) != 2
+            or any(not price.is_finite() or price <= 1 for price in prices.values())
+            or prices[selection] != row['recommendation_price']):
+        return 'two_sided_snapshot_invalid', None
+    if not row['settlement_valid'] or row['outcome'] not in {
+            'win', 'half_win', 'loss', 'half_loss', 'push', 'void'}:
+        return 'settlement_unavailable', None
+
+    opposite_return = Decimal(0)
+    if row['outcome'] in {'win', 'half_win'}:
+        opposite_return = -row['effective_stake']
+    elif row['outcome'] in {'loss', 'half_loss'}:
+        opposite_return = row['effective_stake'] * (prices[opposite] - 1)
+    return 'comparable', (row['unit_net'], opposite_return, row['unit_net'] + opposite_return, row['effective_stake'])
+
+
+def summarize(rows, split):
+    groups = defaultdict(lambda: defaultdict(int))
+    fixtures = defaultdict(set)
+    for row in rows:
+        window = 'earlier' if row['created_at'] < split else 'later'
+        row['evidence'] = json.loads(row['evidence'] or '{}')
+        status, values = observed_returns(row)
+        for phase in ('all', row['phase']):
+            group = groups[(window, phase)]
+            group[status] += 1
+            if values is not None:
+                fixtures[(window, phase)].add(row['fixture_id'])
+                for key, value in zip(('follow_units', 'opposite_units', 'paired_units', 'effective_stake'), values):
+                    group[key] += value
+    return [{'window': window, 'phase': phase, 'comparable_fixtures': len(fixtures[(window, phase)]), **values}
+            for (window, phase), values in sorted(groups.items())]
+
+
+async def replay(begin, split, end):
+    connection = await asyncpg.connect(database_url(), timeout=5, command_timeout=12)
+    try:
+        async with connection.transaction(isolation='repeatable_read', readonly=True):
+            now = await connection.fetchval('SELECT now()')
+            rows = await connection.fetch(f"""
+                SELECT s.created_at, s.fixture_id, s.phase, s.market_kind, s.market_id, s.period, s.selection, f.sport,
+                       s.recommendation_price, s.outcome, s.unit_net, s.effective_stake, q.evidence,
+                       ({SETTLEMENT_VALID_SQL}) AS settlement_valid
+                FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id
+                LEFT JOIN LATERAL (
+                    SELECT evidence FROM v2_quote_evidence ev
+                    WHERE ev.reference_id=s.id AND ev.evidence_kind='expert_signal' AND ev.fixture_id=s.fixture_id
+                      AND ev.market_id=s.market_id AND ev.period=s.period AND ev.selection=s.selection
+                      AND ev.line IS NOT DISTINCT FROM s.line AND ev.price=s.recommendation_price
+                      AND ev.source_updated_at=s.quote_time AND ev.score_baseline IS NOT DISTINCT FROM s.score_baseline
+                      AND ev.evidence->>'market_kind'=s.market_kind AND ev.evidence->>'score_basis'=s.score_basis
+                      AND ev.captured_at=s.created_at
+                    ORDER BY ev.captured_at,ev.id LIMIT 1
+                ) q ON true
+                WHERE s.created_at >= $1 AND s.created_at < least($2, now())
+                  AND s.withdrawn_at IS NULL AND ({QUOTE_VALID_SQL})
+                """, begin, end)
+            return {'begin': begin, 'split': split, 'end': end, 'observed_at': now,
+                    'groups': summarize([dict(row) for row in rows], split)}
+    finally:
+        await connection.close()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    for label in ('begin', 'split', 'end'):
+        parser.add_argument(label, type=datetime.fromisoformat)
+    args = parser.parse_args()
+    dates = args.begin, args.split, args.end
+    if any(value.utcoffset() is None for value in dates) or not args.begin < args.split < args.end:
+        parser.error('Expected three increasing timestamps with timezones')
+    print(json.dumps(asyncio.run(replay(*(value.astimezone(timezone.utc) for value in dates))), default=str))
