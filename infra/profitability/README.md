@@ -97,6 +97,8 @@ The `price_exclusions` rows count the first failed evidence check for each nonco
 
 Use `-v end=<exclusive UTC recommendation cutoff>` for a fixed cohort. The report takes order states at the actual observation time. Keep the time-stamped reports to compare how the same cohort settles. `automatic_preflight_outcomes` applies the same checks to automatic fills. Both reports count distinct fixtures with a usable settlement amount within each bucket. A fixture can occur in several buckets.
 
+`automatic_coverage` gives the denominator for the automatic-only direction rows, including pending and settled fills excluded from price comparison. It reports the excluded settled receipt total where the phase or overall group can be scoped to a single account and at most one known currency. Missing receipt amounts and costs are counted separately. This is coverage of existing fills.
+
 `bash infra/profitability/collect_preflight_cohorts.sh <UTC start ending in Z> <private archive directory>` records two adjacent, fixed 24-hour recommendation cohorts. Use a dedicated directory for each experiment. It runs both queries in one read-only transaction that requires a single complete ledger account binding. Reports retain their observation timestamp and the comparison SQL checksum. The hourly job keeps observing through the first capture at or after 72 hours after the second cohort closes. That capture is additionally linked as `final.json`. It can still contain pending orders. Rerun the collector after an outage to record the actual observation timestamp. Existing snapshots stay in the archive.
 
 From the repository root on the production Docker host, register or restore the transient timer for the November 18 pilot when it is absent.

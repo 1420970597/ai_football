@@ -131,6 +131,25 @@ WITH bounds AS (
     SELECT automatic_only, phase, direction, to_jsonb(p) - 'automatic_only' ||
            jsonb_build_object('receipt_roi_percent',round(100 * receipt_net / nullif(settled_stake,0),2)) AS data
     FROM preflight_outcomes p
+), automatic_coverage AS (
+    SELECT CASE WHEN grouping(phase)=1 THEN 'all' ELSE phase END AS phase,
+           count(*) AS fills,
+           count(*) FILTER (WHERE comparable) AS comparable_fills,
+           count(*) FILTER (WHERE NOT comparable) AS excluded_fills,
+           count(*) FILTER (WHERE state='accepted') AS pending,
+           count(*) FILTER (WHERE state='settled' AND comparable) AS comparable_settled,
+           count(*) FILTER (WHERE state='settled' AND NOT comparable) AS excluded_settled,
+           count(*) FILTER (WHERE state='settled' AND NOT comparable AND settled_net IS NULL)
+               AS excluded_missing_receipt_net,
+           count(*) FILTER (WHERE state='settled' AND NOT comparable AND (provider_fees IS NULL OR provider_currency IS NULL))
+               AS excluded_missing_cost_fields,
+           CASE WHEN count(DISTINCT (account_id, provider_identity_hash))=1
+                     AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
+                     AND count(DISTINCT provider_currency)<=1
+                THEN sum(settled_net) FILTER (WHERE state='settled' AND NOT comparable)
+           END AS excluded_receipt_net
+    FROM compared WHERE manual IS FALSE
+    GROUP BY GROUPING SETS ((), (phase))
 ), summary AS (
     SELECT sport,phase,market_kind,period,grouping(sport,phase,market_kind,period)=15 AS all_markets,
            count(*) AS fills,count(*) FILTER(WHERE state='settled') AS settled,
@@ -165,6 +184,7 @@ SELECT jsonb_build_object('bounds',to_jsonb(b),
     'preflight_outcomes',coalesce((SELECT jsonb_agg(data ORDER BY phase,direction)
         FROM preflight_results WHERE NOT automatic_only),'[]'::jsonb),
     'automatic_preflight_outcomes',coalesce((SELECT jsonb_agg(data ORDER BY phase,direction)
-        FROM preflight_results WHERE automatic_only),'[]'::jsonb)
+        FROM preflight_results WHERE automatic_only),'[]'::jsonb),
+    'automatic_coverage',(SELECT jsonb_agg(to_jsonb(a) ORDER BY phase) FROM automatic_coverage a)
 ) FROM bounds b;
 ROLLBACK;

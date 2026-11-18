@@ -66,6 +66,12 @@ assert datetime.fromisoformat(first["bounds"]["begin_at"])==start
 assert datetime.fromisoformat(second["bounds"]["begin_at"])==middle
 assert first["bounds"]["observed_at"]==second["bounds"]["observed_at"]==data["observed_at"]
 assert first["comparison"][0]["fills"]==12 and second["comparison"][0]["fills"]==0
+automatic, live = first["automatic_coverage"]
+assert automatic["phase"]=="all" and live["phase"]=="live"
+assert automatic["fills"]==11 and automatic["comparable_fills"]==1 and automatic["excluded_fills"]==10
+assert automatic["excluded_settled"]==10 and automatic["excluded_receipt_net"]==55
+assert automatic["excluded_missing_cost_fields"]==10 and automatic["excluded_missing_receipt_net"]==0
+assert second["automatic_coverage"][0]["fills"]==0 and second["automatic_coverage"][0]["excluded_receipt_net"] is None
 ' < "$archive/$test_now.json"
 
 export test_now=2026-01-05T23:59:59Z
