@@ -117,6 +117,55 @@ class VerifiedReferenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     price_from_verified_references(data)
 
+    def live_request(self, period='first_half'):
+        data = deepcopy(self.data)
+        state = {'period': period, 'status': 'playing', 'home_score': 1, 'away_score': 1,
+                 'home_red_cards': 0, 'away_red_cards': 0, 'confirmed_at': '2026-11-18T11:48:29Z',
+                 'received_at': '2026-11-18T11:48:30Z'}
+        contract_period = 'first_half' if period == 'first_half' else 'full_time'
+        data.update(event_state=state, offer_status='active', offer_quoted_at='2026-11-18T11:48:31Z',
+                    offer_received_at='2026-11-18T11:48:32Z')
+        data['contract'].update(phase='live', period=contract_period)
+        for quote in data['references'].values():
+            quote['contract'].update(phase='live', period=contract_period)
+            quote['event_state'] = dict(state)
+        return data
+
+    def test_live_periods_preserve_the_same_binary_price(self):
+        for period in ('first_half', 'second_half'):
+            with self.subTest(period=period):
+                output = price_from_verified_references(self.live_request(period))
+                self.assertEqual(output['minimum_odds'], Decimal('2.06'))
+                self.assertFalse(output['passes_price_test'])
+
+    def test_live_event_mismatch_or_unavailable_confirmation_is_rejected(self):
+        for changes, reason in (
+            ({'status': 'pending_confirmation'}, 'playing and confirmed'),
+            ({'period': 'second_half'}, 'playing and confirmed'),
+            ({'away_score': 2}, 'live state differs'),
+            ({'home_red_cards': 1}, 'live state differs'),
+            ({'away_score': True}, 'nonnegative integers'),
+            ({'received_at': '2026-11-18T11:49:01Z'}, 'state was unavailable'),
+            ({'confirmed_at': '2026-11-18T11:48:31Z', 'received_at': '2026-11-18T11:48:31Z'}, 'quote predates'),
+        ):
+            with self.subTest(changes=changes):
+                data = self.live_request()
+                data['references']['b']['event_state'].update(changes)
+                with self.assertRaisesRegex(ValueError, reason):
+                    price_from_verified_references(data)
+
+    def test_closed_offer_and_already_determined_totals_are_rejected(self):
+        data = self.live_request()
+        with self.assertRaisesRegex(ValueError, 'offered quote is not active'):
+            price_from_verified_references(data | {'offer_status': 'suspended'})
+        with self.assertRaisesRegex(ValueError, 'stale or unavailable'):
+            price_from_verified_references(data | {'offer_quoted_at': '2026-11-18T11:48:29Z'})
+        data['contract']['line'] = '1.5'
+        for quote in data['references'].values():
+            quote['contract']['line'] = '1.50'
+        with self.assertRaisesRegex(ValueError, 'already exceeds the line'):
+            price_from_verified_references(data)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -21,12 +21,36 @@ def identity(value):
     return value.strip().casefold()
 
 
+def live_state(state, contract_period, cutoff):
+    period = state['period']
+    if (state['status'] != 'playing' or period not in {'first_half', 'second_half'}
+            or contract_period == 'first_half' and period != 'first_half'):
+        raise ValueError('the live period must be playing and confirmed')
+    values = tuple(state[key] for key in ('home_score', 'away_score', 'home_red_cards', 'away_red_cards'))
+    if any(type(value) is not int or value < 0 for value in values):
+        raise ValueError('live scores and red card counts must be nonnegative integers')
+    confirmed = aware_time(state['confirmed_at'])
+    received = aware_time(state['received_at'])
+    if not confirmed <= received <= cutoff:
+        raise ValueError('live state was unavailable at the decision time')
+    return (period, *values), confirmed
+
+
+def quote_time(quoted_at, received_at, oldest, cutoff):
+    quoted = aware_time(quoted_at)
+    received = aware_time(received_at)
+    if not oldest <= quoted <= received <= cutoff:
+        raise ValueError('reference quote is stale or unavailable at the decision time')
+    return quoted
+
+
 def price_from_verified_references(document):
     contract = document['contract']
     if (not isinstance(contract['fixture_id'], str) or not contract['fixture_id'].strip()
-            or (contract['sport'], contract['phase'], contract['kind'], contract['period'],
-                contract['score_basis']) != ('football', 'scheduled', 'total', 'full_time', 'full_period')):
-        raise ValueError('a mapped prematch football full-time total is required')
+            or (contract['sport'], contract['kind'], contract['score_basis']) != ('football', 'total', 'full_period')
+            or contract['phase'] not in {'scheduled', 'live'}
+            or contract['period'] not in {'full_time', 'first_half'}):
+        raise ValueError('a mapped football full-period total is required')
     max_age = document['max_age_seconds']
     if type(max_age) is not int or max_age <= 0:
         raise ValueError('max_age_seconds must be a positive integer')
@@ -40,6 +64,13 @@ def price_from_verified_references(document):
 
     keys = ('fixture_id', 'sport', 'phase', 'kind', 'period', 'score_basis')
     line = decimal(contract['line'])
+    state = None
+    quoted_times = []
+    if contract['phase'] == 'live':
+        if document['offer_status'] != 'active':
+            raise ValueError('offered quote is not active')
+        state, latest_confirmation = live_state(document['event_state'], contract['period'], cutoff)
+        quoted_times.append(quote_time(document['offer_quoted_at'], document['offer_received_at'], oldest, cutoff))
     for quote in references.values():
         venue = identity(quote['venue'])
         origin = identity(quote['feed_origin'])
@@ -53,20 +84,35 @@ def price_from_verified_references(document):
             raise ValueError('reference contract differs from the offered contract')
         if quote['status'] != 'active':
             raise ValueError('reference quote is not active')
-        quoted = aware_time(quote['quoted_at'])
-        received = aware_time(quote['received_at'])
-        if not oldest <= quoted <= received <= cutoff:
-            raise ValueError('reference quote is stale or unavailable at the decision time')
+        quoted = quote_time(quote['quoted_at'], quote['received_at'], oldest, cutoff)
+        if state is not None:
+            reference_state, confirmed = live_state(quote['event_state'], contract['period'], cutoff)
+            if reference_state != state:
+                raise ValueError('reference live state differs from the offered state')
+            latest_confirmation = max(latest_confirmation, confirmed)
+            quoted_times.append(quoted)
 
-    return price_from_references(document | {'line': line, 'direction': contract['selection']})
+    if state is not None and min(quoted_times) < latest_confirmation:
+        raise ValueError('quote predates the latest confirmed live state')
+    score = state[1:3] if state is not None else (0, 0)
+    return price_half_goal_totals(document, contract | {'line': line}, score)
 
 
 def price_from_references(document):
     """Price odds from a caller that has already verified source and contract alignment."""
-    line = decimal(document['line'])
+    contract = {'sport': 'football', 'phase': 'scheduled', 'kind': 'total',
+                'period': 'full_time', 'line': decimal(document['line']),
+                'selection': document['direction'], 'score_basis': 'full_period'}
+    return price_half_goal_totals(document, contract, (0, 0))
+
+
+def price_half_goal_totals(document, contract, score):
+    line = contract['line']
     if (line <= 0 or line % 1 != Decimal('0.5')
-            or document['direction'] not in {'over', 'under'}):
+            or contract['selection'] not in {'over', 'under'}):
         raise ValueError('a positive half-goal total and an over/under direction are required')
+    if line < sum(score):
+        raise ValueError('the live total already exceeds the line')
     references = document['references']
     if not isinstance(references, dict) or len(references) < 2:
         raise ValueError('two independent reference sources are required')
@@ -77,18 +123,16 @@ def price_from_references(document):
         if min(over, under) <= 1:
             raise ValueError('decimal reference odds must exceed one')
         probability_over = under / (over + under)
-        # Representative scores on either side suffice for a half-goal total.
-        scenarios[source] = [
-            {'home': int(line) + 1, 'away': 0, 'probability': probability_over},
-            {'home': int(line), 'away': 0, 'probability': 1 - probability_over},
-        ]
+        scenarios[source] = []
+        # Both representative outcomes preserve the known live score.
+        for total, probability in ((int(line) + 1, probability_over), (int(line), 1 - probability_over)):
+            home, away = total - score[1], score[1]
+            result = {'home': home, 'away': away, 'probability': probability}
+            if contract['period'] == 'first_half':
+                result.update(half_home=home, half_away=away)
+            scenarios[source].append(result)
 
-    return price_contract(document | {
-        'contract': {'sport': 'football', 'phase': 'scheduled', 'kind': 'total',
-                     'period': 'full_time', 'line': line, 'selection': document['direction'],
-                     'score_basis': 'full_period'},
-        'scenarios': scenarios,
-    })
+    return price_contract(document | {'contract': contract, 'scenarios': scenarios})
 
 
 if __name__ == '__main__':
