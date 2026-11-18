@@ -59,6 +59,12 @@ Run `source_holdout.sql` with the same four UTC parameters as the fixture exposu
 
 The two persistent-loss comparisons additionally require at least five distinct settled fixtures and negative equal-stake receipt net in each half of the training placement interval. The midpoint comes from the supplied training dates. These rows are retrospective comparisons of retained real fills.
 
+# Cross-source recommendation replay
+
+Run `cross_source_replay.sql` with the same four UTC parameters as the source holdout. It compares existing automatic fills across all observed markets. A peer must have a different author and source, an exact match on recorded contract fields, and a recommendation and underlying message already available within the five minutes before the matching send authorization. Withdrawn or deleted picks are excluded as of that authorization. Live peers must have matching recorded scores at recommendation, and the filled order needs the same known full-match score in its permit. A missing permit or live score is reported separately from an eligible order with no peers.
+
+The comparison uses native placement to assign cohorts and reported receipt net available before the observation cutoff. Counts and money stay separate from unsettled and missing cost evidence. A cross-source match establishes agreement or disagreement in the records. Copying and shared sources can induce correlation. The replay covers existing fills and does not estimate the chance of filling a different set of opportunities.
+
 # Recommendation freshness replay
 
 Run `freshness_replay.sql` with the same four UTC parameters as the fixture exposure replay. It compares all observed automatic fills against two pre-send limits, 60 seconds since signal creation and 120 seconds since the original message. It uses the authorization timestamp for the execution attempt that filled the order. Missing or inconsistent timestamps stay visible in the baseline and fail the candidate limits. This replay covers existing fills and does not capture new opportunities that faster processing might make available.
