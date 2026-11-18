@@ -144,9 +144,13 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         return SubmissionPermit(**{"scope": self.owner, "execution_id": str(uuid.uuid4()), "prepared_digest": prepared.digest, **changes})
 
     async def test_balance_plain_and_wrapped_zero_distinguished_from_missing(self):
-        self.assertEqual("111.86", (await self.client.balance())["available"])
+        balance = await self.client.balance()
+        self.assertEqual("111.86", balance["available"])
+        self.assertIsNone(balance["currency"])
         self.responses[AMOUNT_PATH] = {"code": "0", "data": {"amount": "0"}}
-        self.assertEqual("0", (await self.client.balance())["available"])
+        balance = await self.client.balance()
+        self.assertEqual("0", balance["available"])
+        self.assertIsNone(balance["currency"])
         for invalid in ({}, {"amount": "NaN"}, {"amount": -1}, {"amount": "2", "balance": "3"}):
             self.responses[AMOUNT_PATH] = invalid
             with self.assertRaises(LeyuError):

@@ -285,7 +285,7 @@ class AccountProtocolClient:
                       if payload.get(key) not in (None, "")]
         if not candidates or len(set(candidates)) != 1:
             raise LeyuError("account_balance_unavailable")
-        return {"available": str(candidates[0]), "currency": "CNY", "observed_at": datetime.now(timezone.utc).isoformat()}
+        return {"available": str(candidates[0]), "currency": None, "observed_at": datetime.now(timezone.utc).isoformat()}
 
     async def orders(self, state: str, *, page: int = 1, size: int = 100, begin: datetime, end: datetime) -> dict[str, Any]:
         if (state not in {"settled", "unsettled"} or not 1 <= page <= 1000000 or not 1 <= size <= 100

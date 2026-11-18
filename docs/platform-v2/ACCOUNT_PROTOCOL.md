@@ -35,12 +35,14 @@ finish(scope, attempt_id, status, safe_metadata) -> None
 `AccountProtocolClient(scope, session, transport=None, live_orders_enabled=False)` 支持异步上下文及关闭。默认关闭写入。仅提供有限路径，没有任意 URL/SQL/代理能力：
 
 ```text
-balance() -> {available, currency, observed_at}
+balance() -> {available, currency|null, observed_at}
 orders(state, page, size, begin, end) -> {items,total,has_more,malformed_records,...}
 lookup(order_no, begin, end, max_pages) -> {found,receipt,scan_complete,absence_proves_rejection:false}
 preflight(NativeSelection, Decimal stake, device_imei="") -> PreparedBet
 submit_once(PreparedBet, SubmissionPermit) -> {state,order_no,provider_status,provider_code,execution_id}
 ```
+
+余额响应只提供金额时，币种为未知。已核对的金额响应没有币种字段，bet 请求中的 `currencyCode` 常量不能用来推断账户余额币种。
 
 `NativeSelection` 接受系统已绑定的原生比赛、盘口实例、玩法、选项、方向、项目、盘口分类、期间、十进制线及系统价格，禁止用 TG 原文赔率。预检并发读取三个无资金接口，精确校验后生成 15 秒有效的不可变准备结果。只使用原始当前盘口的请求线；市场显示格式变化用十进制比较，不能改成其它盘口。数据读取和下单网络异常不内联续期或重放。
 
