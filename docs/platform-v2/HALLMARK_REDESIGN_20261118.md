@@ -21,4 +21,8 @@
 - Docker 网页候选已构建。环回只读预览为 `http://127.0.0.1:3018/`，首页及公开赛事读取探针均成功。正式服务仍通过 3003 提供。本轮将网页候选交付为本机预览，下一步为正式发布及 Android 安装验收。
 - 实现提交 `12fb20eff64506fec71f135670cc9774cd7b8bb0` 已推送到 `fix/TASK-78-hermes-telegram-sync`。推送及 `git ls-remote` 核验均退出 0，远端引用返回同一提交。开始实现前分支推进到 `06341a5d`，重构提交基于该最新版本。
 
+## 2026-11-18 05:39 UTC，预览发布验收
+
+按用户要求将预览发布到全部 IPv4 接口。使用原镜像和只读配置，以 `docker create -p 0.0.0.0:3018:80` 重建预览容器。启动、`docker port` 和 `ss -ltn 'sport = :3018'` 均退出 0。容器化 HTTP 探针分别通过环回和宿主机 IPv4 请求首页及公开赛事接口，均成功。访问地址使用服务器实际 IP 和端口 3018。正式发布和 Android 真机验收仍待完成。
+
 状态为设计已记录。`git status --short --branch`、`git ls-remote origin refs/heads/fix/TASK-78-hermes-telegram-sync`、`docker ps` 均退出 0。安装器从 Hallmark 固定提交 `04977e15f3dfd6ee4b74c887dac3eb52665d6c92` 安装至 `/root/.agents/skills/hallmark`，退出 0。Docker 中 `theme.mjs deal --genre modern-minimal` 退出 0，三项为 Wayfind、Console 和 Dose。采用 Wayfind 的冷灰、蓝黑和钴蓝，沿用球讯中文名称和紧凑阅读节奏，以数据行和对阵本身作为视觉内容。下一步保存重构前截图与交互清单，再实现各页面。
