@@ -407,6 +407,14 @@
                     type="checkbox"
                   />我本人启用自动投注</label
                 >
+                <label>
+                  自动投注项目
+                  <select name="auto_sport_scope">
+                    <option value="both">足球和篮球</option>
+                    <option value="football">仅足球</option>
+                    <option value="basketball">仅篮球</option>
+                  </select>
+                </label>
                 <div id="betting-expert-mode-control">
                 <label
                   >专家跟随模式<select
@@ -477,7 +485,7 @@
                   ><input
                     name="confirmed"
                     type="checkbox"
-                  />我了解自动投注会使用本人账户资金，支持足球赛前与滚球、篮球全场胜负及大小让分的赛前与滚球，并确认以上专家、每单本金与限额。</label
+                  />我确认按所选项目、专家、每单本金与限额，使用本人账户资金进行自动投注。</label
                 ><button class="primary-button">保存投注设置</button>
               </form>
               <button id="emergency-stop" class="danger-button">

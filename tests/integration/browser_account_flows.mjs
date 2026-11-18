@@ -77,13 +77,14 @@ async function pollAccount(check) {
   for(let i=0;i<40;i++) { const value = await api("/accounts/leyu"); if(check(value.data)) return value.data; await page.waitForTimeout(250); }
   throw new Error("synthetic account did not reach expected state");
 }
-async function configure({stake="2",single="3",daily="10",exposure="5",enabled=true}={}) {
+async function configure({stake="2",single="3",daily="10",exposure="5",enabled=true,sportScope="both"}={}) {
   await expanded(page.locator("#betting-form"));
   await page.locator("#betting-form [name=enabled]").setChecked(enabled);
   if(enabled) {
     for(const [name,value] of Object.entries({stake_per_order:stake,max_per_order:single,daily_limit:daily,open_exposure_limit:exposure}))
       await page.locator('#betting-form [name='+name+']').fill(value);
     await page.locator("#betting-form [name=daily_timezone]").selectOption("Europe/Berlin");
+    await page.locator("#betting-form [name=auto_sport_scope]").selectOption(sportScope);
     await page.locator("#betting-form [name=expert]").first().check();
     await page.locator("#betting-form [name=confirmed]").check();
   }
@@ -226,12 +227,20 @@ try {
     let value=await api("/accounts/leyu"); assert.equal(value.data.betting.auto_enabled,true);
     assert.equal(value.data.betting.daily_timezone,"Europe/Berlin"); assert.equal(value.data.betting.allowed_experts.length,1);
     assert.equal(Number(value.data.betting.stake_per_order),2);
+    assert.equal(value.data.betting.auto_sport_scope,"both");
     assert.equal((await configure({enabled:false})).status,200);
     value=await api("/accounts/leyu"); assert.equal(value.data.betting.auto_enabled,false);
     for (const width of [390, 1440]) {
       await page.setViewportSize({width,height:960});
-      assert.equal((await configure()).status,200);
-      assert.equal((await api('/accounts/leyu')).data.betting.auto_enabled,true);
+      const sportScope=width===390?"basketball":"football";
+      const saved=await configure({sportScope});
+      assert.equal(saved.status,200);
+      assert.equal(saved.request.auto_sport_scope,sportScope);
+      value=await api('/accounts/leyu');
+      assert.equal(value.data.betting.auto_enabled,true);
+      assert.equal(value.data.betting.auto_sport_scope,sportScope);
+      await page.waitForFunction(label=>document.querySelector("#betting-status").textContent.includes(label),
+        width===390?"仅篮球":"仅足球");
       assert.equal((await configure({enabled:false})).status,200);
       assert.equal((await api('/accounts/leyu')).data.betting.auto_enabled,false);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);

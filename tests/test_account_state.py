@@ -192,13 +192,14 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                                 "VALUES($1,$2,$3,$4,'live','2','全场大小',2.5,'over',1.95,now(),0.9,'full_time','total',$5)",signal,message,expert,fixture,{'home_score':0,'away_score':0})
         return signal,expert,message,quote
 
-    async def enable(self,experts,daily='4',exposure='4',tz='Asia/Shanghai'):
+    async def enable(self,experts,daily='4',exposure='4',tz='Asia/Shanghai',sport_scope=None):
         self.settings.live_orders_enabled=True
         await self.pool.execute("INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES('auto_betting_enabled',$1) ON CONFLICT(setting_key) DO UPDATE SET encrypted_value=EXCLUDED.encrypted_value",encrypt_secret(b'k'*32,'true'))
         plan=uuid.uuid4()
         await self.pool.execute("INSERT INTO v2_membership_plans(id,code,name,price,duration_days,enabled,entitlements) VALUES($1,$2,'VIP',10,30,TRUE,$3)",plan,str(plan),{'automatic_betting':True})
         await self.pool.execute("INSERT INTO v2_memberships(id,user_id,plan_id,status,starts_at,ends_at,grant_source) VALUES($1,$2,$3,'active',now()-interval '1 minute',now()+interval '1 day','test')",uuid.uuid4(),self.user['id'],plan)
         response=await self.api.put('/api/v1/accounts/leyu/auto-betting',json={'enabled':True,'confirmation_phrase':'I_UNDERSTAND','allowed_experts':[str(value) for value in experts],
+            **({'auto_sport_scope':sport_scope} if sport_scope is not None else {}),
             'stake_per_order':'2','max_per_order':'2','daily_limit':daily,'open_exposure_limit':exposure,'daily_timezone':tz})
         self.assertEqual(200,response.status_code,response.text)
         self.assertEqual(tz,response.json()['daily_timezone'])

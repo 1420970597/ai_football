@@ -1357,9 +1357,11 @@ async function loadAccount() {
     $("#leyu-form").elements.account_label.value =
       data.account?.account_label || "";
     const b = data.betting || {};
+    const sportScope = $("#betting-form").elements.auto_sport_scope;
+    sportScope.value = b.auto_sport_scope ?? "both";
     $("#betting-status").textContent =
       b.auto_enabled && !b.emergency_stopped
-        ? `自动投注已启用（${b.expert_selection_mode === "profitable" ? "近30天全部盈利专家" : "手动专家名单"}）；执行前仍会核验专家资格、信号与敞口。`
+        ? `自动投注已启用 · ${sportScope.selectedOptions[0]?.textContent || "项目未知"} · ${b.expert_selection_mode === "profitable" ? "近30天全部盈利专家" : "手动专家名单"}`
         : "自动投注已关闭。紧急停止始终可用。";
     if (data.execution_capability?.live_enabled === false)
       $("#betting-status").textContent += " 当前实盘执行未开放。";
@@ -1935,7 +1937,10 @@ function events() {
         throw new Error("请先确认本人账户资金与投注风险");
       const body = {
         enabled,
-        ...(enabled ? { daily_timezone: fd.get("daily_timezone") } : {}),
+        ...(enabled ? {
+          daily_timezone: fd.get("daily_timezone"),
+          auto_sport_scope: fd.get("auto_sport_scope"),
+        } : {}),
         confirmation_phrase: enabled ? "I_UNDERSTAND" : "",
         expert_selection_mode: mode,
         allowed_experts: selectedExperts,

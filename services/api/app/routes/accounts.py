@@ -50,6 +50,7 @@ class AutoBetInput(Input):
     confirmation_phrase: str = ""
     allowed_experts: list[uuid.UUID] = Field(default_factory=list, max_length=100)
     expert_selection_mode: Literal['manual', 'profitable'] = 'manual'
+    auto_sport_scope: Literal['both', 'football', 'basketball'] | None = None
     stake_per_order: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     max_per_order: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     daily_limit: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
@@ -144,7 +145,7 @@ async def get_leyu_account(request: Request):
     pool = database.current_pool()
     row = await pool.fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state,renewal_retry_after "
                               "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
-    policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,expert_selection_mode,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
+    policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,expert_selection_mode,auto_sport_scope,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
                                                    "FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
     tasks = await pool.fetch("SELECT id,kind,state,last_error,created_at,updated_at,binding_revision,details "
                              "FROM v2_account_jobs WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 5", user["id"])
@@ -305,14 +306,16 @@ async def configure_auto_betting(body: AutoBetInput, request: Request):
             valid = await conn.fetchval("SELECT count(*) FROM v2_experts WHERE id=ANY($1::uuid[]) AND enabled", list(set(body.allowed_experts)))
             if body.expert_selection_mode == 'manual' and valid != len(set(body.allowed_experts)):
                 raise HTTPException(422, "允许专家包含无效条目")
-            await conn.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,consent_account_id,consent_binding_revision,daily_timezone,expert_selection_mode) "
-                "VALUES($1,TRUE,$2,$3,$4,$5,$6,FALSE,$7,$8,$9,$10) ON CONFLICT(user_id) DO UPDATE SET auto_enabled=TRUE,allowed_experts=EXCLUDED.allowed_experts,expert_selection_mode=EXCLUDED.expert_selection_mode,"
+            sport_scope = await conn.fetchval(
+                "INSERT INTO v2_user_bet_settings(user_id,auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,consent_account_id,consent_binding_revision,daily_timezone,expert_selection_mode,auto_sport_scope) "
+                "VALUES($1,TRUE,$2,$3,$4,$5,$6,FALSE,$7,$8,$9,$10,COALESCE($11,'both')) ON CONFLICT(user_id) DO UPDATE SET auto_enabled=TRUE,allowed_experts=EXCLUDED.allowed_experts,expert_selection_mode=EXCLUDED.expert_selection_mode,"
                 "stake_per_order=EXCLUDED.stake_per_order,max_per_order=EXCLUDED.max_per_order,daily_limit=EXCLUDED.daily_limit,open_exposure_limit=EXCLUDED.open_exposure_limit,"
-                "emergency_stopped=FALSE,consent_account_id=EXCLUDED.consent_account_id,consent_binding_revision=EXCLUDED.consent_binding_revision,daily_timezone=EXCLUDED.daily_timezone,revision=v2_user_bet_settings.revision+1,updated_at=now()",
-                user["id"], list(set(body.allowed_experts)), body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit, account["id"], account["binding_revision"], body.daily_timezone, body.expert_selection_mode)
+                "emergency_stopped=FALSE,consent_account_id=EXCLUDED.consent_account_id,consent_binding_revision=EXCLUDED.consent_binding_revision,daily_timezone=EXCLUDED.daily_timezone,"
+                "auto_sport_scope=COALESCE($11,v2_user_bet_settings.auto_sport_scope),revision=v2_user_bet_settings.revision+1,updated_at=now() RETURNING auto_sport_scope",
+                user["id"], list(set(body.allowed_experts)), body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit, account["id"], account["binding_revision"], body.daily_timezone, body.expert_selection_mode, body.auto_sport_scope)
             await orders.cancel_unsent(conn, user["id"], "policy_changed")
-            await audit(conn, user["id"], "user", "auto_betting_authorized", "leyu_account", str(account["id"]), details={"binding_revision": account["binding_revision"], "daily_timezone": body.daily_timezone, 'expert_selection_mode': body.expert_selection_mode, 'profitability_definition': PROFITABILITY_DEFINITION if body.expert_selection_mode == 'profitable' else None})
-    return {"enabled": True, "emergency_stopped": False, "state": "armed", "daily_timezone": body.daily_timezone, 'expert_selection_mode': body.expert_selection_mode, 'profitability_definition': PROFITABILITY_DEFINITION}
+            await audit(conn, user["id"], "user", "auto_betting_authorized", "leyu_account", str(account["id"]), details={"binding_revision": account["binding_revision"], "daily_timezone": body.daily_timezone, 'expert_selection_mode': body.expert_selection_mode, 'auto_sport_scope': sport_scope, 'profitability_definition': PROFITABILITY_DEFINITION if body.expert_selection_mode == 'profitable' else None})
+    return {"enabled": True, "emergency_stopped": False, "state": "armed", "daily_timezone": body.daily_timezone, 'expert_selection_mode': body.expert_selection_mode, 'auto_sport_scope': sport_scope, 'profitability_definition': PROFITABILITY_DEFINITION}
 
 
 @router.get("/leyu/manual-betting")
@@ -472,6 +475,7 @@ async def dispatch(request: Request):
                 "((b.expert_selection_mode='manual' AND s.expert_id=ANY(b.allowed_experts)) OR "
                 "(b.expert_selection_mode='profitable' AND s.expert_id=ANY($1::uuid[]))) "
                 "JOIN v2_fixtures f ON f.id=s.fixture_id AND f.phase IN('scheduled','live') AND s.phase=f.phase "
+                "AND b.auto_sport_scope IN('both', f.sport) "
                 "AND (f.sport='football' AND s.market_kind IN('winner','total','handicap') "
                 "AND s.period IN('full_time','first_half','second_half') OR f.sport='basketball' AND s.period='full_time' "
                 "AND ((s.market_id='37' AND s.market_kind='winner' AND s.selection IN('home','away')) "

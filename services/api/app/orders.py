@@ -126,6 +126,11 @@ async def manual_policy(conn, user_id, settings):
     return account, policy
 
 
+def require_auto_sport(policy, sport):
+    if policy["auto_sport_scope"] not in {"both", sport}:
+        raise OrderEligibilityError(409, "该项目不在本人自动投注范围内", "sport_not_authorized")
+
+
 async def exposure_totals(conn, user_id, daily_timezone: str, at: datetime | None = None):
     """Sum the selected local calendar day and every still-reserved order."""
     moment = at if at is not None else datetime.now(timezone.utc)
@@ -171,6 +176,7 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
         if not manual_limits_valid(stake, policy["daily_limit"], policy["open_exposure_limit"]):
             raise HTTPException(409, "手动下注金额或限额无效，请先保存合法金额")
     else:
+        require_auto_sport(policy, signal["sport"])
         await require_expert_permission(conn, policy, signal['expert_id'])
         stake = policy["stake_per_order"]
         if stake <= 0 or stake > policy["max_per_order"]:
@@ -236,6 +242,7 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
         if order["stake"] != policy["manual_stake"]:
             raise HTTPException(409, "手动下注金额已变更")
     else:
+        require_auto_sport(policy, signal["sport"])
         await require_expert_permission(conn, policy, signal['expert_id'])
         if order["stake"] > policy["max_per_order"]:
             raise HTTPException(409, "推荐或单笔许可已失效")

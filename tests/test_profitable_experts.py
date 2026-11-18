@@ -52,9 +52,10 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
             await self.pool.execute("UPDATE v2_expert_signals SET settled_at=now()-$2::int*interval '1 day' WHERE id=$1", signal, age_days)
         return signal
 
-    async def mode(self, value, experts=()):
+    async def mode(self, value, experts=(), sport_scope='both'):
         response = await self.api.put('/api/v1/accounts/leyu/auto-betting', json={
             'enabled': True, 'confirmation_phrase':'I_UNDERSTAND', 'expert_selection_mode':value,
+            'auto_sport_scope': sport_scope,
             'allowed_experts':[str(x) for x in experts], 'stake_per_order':'2', 'max_per_order':'2',
             'daily_limit':'4', 'open_exposure_limit':'4', 'daily_timezone':'Asia/Shanghai'})
         return response
@@ -113,6 +114,17 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_profitable_unselected_candidate_after_31_unsupported_is_not_starved(self):
         await self.assert_unsupported_candidates_do_not_starve('profitable')
+
+    async def test_profitable_mode_limits_dispatch_to_user_selected_sport(self):
+        await self.healthy()
+        football, expert, _, _ = await self.signal()
+        await self.history(expert)
+        await self.enable([expert])
+        self.assertEqual(200, (await self.mode('profitable', sport_scope='basketball')).status_code)
+        self.assertEqual(0, (await self.worker_api.post('/internal/executor/dispatch')).json()['reserved'])
+        self.assertEqual(200, (await self.mode('profitable', sport_scope='football')).status_code)
+        self.assertEqual(1, (await self.worker_api.post('/internal/executor/dispatch')).json()['reserved'])
+        self.assertEqual(football, await self.pool.fetchval('SELECT signal_id FROM v2_bet_orders'))
 
     async def test_dispatch_preserves_supported_order_and_owner_exposure(self):
         await self.healthy()

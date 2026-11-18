@@ -9,6 +9,7 @@ import httpx
 
 import test_account_protocol as protocol_fixture
 import test_account_state as account_fixture
+from services.api.app import orders
 from services.collector.leyu_protocol import LeyuError
 from services.executor.account_protocol import (
     AccountProtocolClient, NativeSelection, LATEST_MARKET_PATH, LIMITS_PATH, BET_PATH,
@@ -143,6 +144,40 @@ class PrematchOrderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('scheduled', '2', '38'), tuple(work['selection'][k] for k in ('phase', 'sport_id', 'chpid')))
         response = await self.authorize(order, work, prepared)
         self.assertEqual(200, response.status_code, response.text)
+        self.assertNotIn(BET_PATH, [r.url.path for r in self.native_requests])
+
+    async def test_sport_policy_filters_dispatch_and_reservation_and_preserves_legacy_updates(self):
+        await self.healthy()
+        football, football_expert, *_ = await self.scheduled_signal()
+        basketball, basketball_expert, *_ = await self.scheduled_signal(sport='basketball', market='38')
+        experts = [football_expert, basketball_expert]
+        await self.enable(experts)
+        self.assertEqual('both', (await self.api.get('/api/v1/accounts/leyu')).json()['betting']['auto_sport_scope'])
+        await self.enable(experts, sport_scope='football')
+        await self.enable(experts)
+        self.assertEqual('football', (await self.api.get('/api/v1/accounts/leyu')).json()['betting']['auto_sport_scope'])
+        invalid = await self.api.put('/api/v1/accounts/leyu/auto-betting', json={
+            'enabled': True, 'auto_sport_scope': 'tennis',
+        })
+        self.assertEqual(422, invalid.status_code)
+        with self.assertRaises(orders.OrderEligibilityError) as denied:
+            await self.reserve(basketball)
+        self.assertEqual('sport_not_authorized', denied.exception.reason)
+        self.assertEqual(1, (await self.worker_api.post('/internal/executor/dispatch')).json()['reserved'])
+        await self.enable(experts, sport_scope='basketball')
+        self.assertEqual(1, (await self.worker_api.post('/internal/executor/dispatch')).json()['reserved'])
+        rows = await self.pool.fetch('SELECT signal_id,state FROM v2_bet_orders')
+        self.assertEqual({football: 'cancelled', basketball: 'pending'}, {r['signal_id']: r['state'] for r in rows})
+        self.assertEqual([], self.native_requests)
+
+    async def test_send_rechecks_current_sport_scope_before_authorizing(self):
+        order, work, prepared, _ = await self.ready_order(sport='basketball', market='38')
+        # Keep the original revision in this fixture to exercise the sport check itself.
+        await self.pool.execute("UPDATE v2_user_bet_settings SET auto_sport_scope='football' WHERE user_id=$1",
+                                self.user['id'])
+        response = await self.authorize(order, work, prepared)
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertIn('该项目不在本人自动投注范围内', response.text)
         self.assertNotIn(BET_PATH, [r.url.path for r in self.native_requests])
 
     async def test_payload_cannot_change_match_type_or_sport(self):
