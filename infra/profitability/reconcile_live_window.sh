@@ -48,7 +48,8 @@ async def read_window():
             account = accounts[0]
             rows = await conn.fetch("""
                 SELECT provider_order_no AS order_no, provider_stake AS stake, provider_payout AS payout,
-                       settled_net AS net_profit, settled_at, coalesce(settled_at, receipt_observed_at) AS booked_at
+                       settled_net AS net_profit, provider_fees AS fees, provider_currency AS currency,
+                       settled_at, coalesce(settled_at, receipt_observed_at) AS booked_at
                 FROM v2_bet_orders
                 WHERE account_id=$1 AND provider_identity_hash=$2 AND state='settled'
                   AND coalesce(settled_at,receipt_observed_at)>=$3

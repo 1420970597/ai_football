@@ -24,9 +24,39 @@ class ReconcileUpstreamTests(unittest.TestCase):
         next_window = dict(self.local, order_no='next', booked_at=END.isoformat())
         output = reconcile_window(self.page, [self.local, next_window], START, END)
         self.assertTrue(output['complete_page'])
+        self.assertFalse(output['order_receipt_fields_reconciled'])
         self.assertEqual(output['matched'], 1)
         self.assertEqual(output['local_only'], 0)
         self.assertEqual(output['issues'], {'placed_before_window': 1, 'missing_currency': 1, 'missing_fees': 1})
+
+    def test_matching_currency_and_decimal_fee_reconcile_order_fields(self):
+        self.upstream.update(currency='CNY', fees='0.10')
+        self.local.update(currency='CNY', fees='0.100')
+        output = reconcile_window(self.page, [self.local], START, END)
+        self.assertTrue(output['order_receipt_fields_reconciled'])
+        self.assertEqual({'placed_before_window': 1}, output['issues'])
+
+    def test_cost_differences_and_missing_local_fields_block_reconciliation(self):
+        self.upstream.update(currency='CNY', fees='0.10')
+        for local, issues in [
+            (dict(currency='USD', fees='0'), {'currency_difference': 1, 'fees_difference': 1}),
+            (dict(currency=None, fees=None), {'recoverable_local_currency': 1, 'recoverable_local_fees': 1}),
+        ]:
+            with self.subTest(local=local):
+                output = reconcile_window(self.page, [self.local | local], START, END)
+                self.assertTrue(output['complete_page'])
+                self.assertFalse(output['order_receipt_fields_reconciled'])
+                self.assertEqual({'placed_before_window': 1, **issues}, output['issues'])
+
+    def test_multiple_currencies_cannot_reconcile_a_single_currency_window(self):
+        self.upstream.update(currency='CNY', fees='0')
+        self.local.update(currency='CNY', fees='0')
+        another = dict(self.upstream, order_no='second', currency='USD')
+        self.page.update(total=2, items=[self.upstream, another])
+        output = reconcile_window(self.page, [self.local, dict(another, booked_at=START.isoformat())], START, END)
+        self.assertTrue(output['complete_page'])
+        self.assertFalse(output['order_receipt_fields_reconciled'])
+        self.assertEqual(2, output['issues']['mixed_upstream_currencies'])
 
     def test_incomplete_page_and_money_disagreement_are_visible(self):
         self.page.update(total=2, has_more=True)

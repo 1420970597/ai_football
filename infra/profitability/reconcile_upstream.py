@@ -38,6 +38,9 @@ def reconcile_window(page, local, begin, end):
     orders = [row for row in page['items'] if row['identifier_kind'] == 'order' and row['state'] == 'settled']
     upstream = index_orders(orders)
     counts = Counter()
+    currencies = {order['currency'] for order in orders if order['currency'] is not None}
+    if len(currencies) > 1:
+        counts['mixed_upstream_currencies'] = len(currencies)
     for number, order in upstream.items():
         at = instant(order['settled_at']) if order['settled_at'] else None
         if at is None:
@@ -63,12 +66,22 @@ def reconcile_window(page, local, begin, end):
                 counts[f'{key}_missing'] += 1
             elif Decimal(left) != Decimal(right):
                 counts[f'{key}_difference'] += 1
+        for key in ('currency', 'fees'):
+            left, right = order[key], prior.get(key)
+            if left is None:
+                continue
+            if right is None:
+                counts[f'recoverable_local_{key}'] += 1
+            elif (left != right if key == 'currency' else Decimal(left) != Decimal(right)):
+                counts[f'{key}_difference'] += 1
     missing = expected.keys() - upstream.keys()
     extra = upstream.keys() - expected.keys()
     complete_page = (not page['has_more'] and not page['malformed_records'] and
                      page['total'] == len(orders) == len(page['items']) and not page.get('scan_issue'))
     return {
         'begin': begin.isoformat(), 'end': end.isoformat(), 'complete_page': complete_page,
+        'order_receipt_fields_reconciled': complete_page and bool(orders) and not (missing or extra)
+            and not (counts.keys() - {'placed_before_window'}),
         'local_settled': len(expected), 'upstream_settled': len(upstream),
         'matched': len(expected.keys() & upstream.keys()), 'local_only': len(missing),
         'upstream_only': len(extra), 'issues': dict(counts),

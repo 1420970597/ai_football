@@ -5,13 +5,13 @@ Run `reconcile_upstream.py` in the executor environment with scoped, authenticat
 - `start`: timezone-aware first boundary. The last requested window must have closed.
 - `windows`: an optional integer between 1 and 4. Defaults to 4. Use 1 to reconcile an individual window as it closes.
 - `scope`, `base_url`, `request_id`, `origin`: the authorized account session accepted by `VenueSession`.
-- `local`: order rows for that same account and binding. Each row requires `order_no`, `stake`, `payout`, `net_profit`, `settled_at`, and `booked_at`. Use the provider's settlement time as `booked_at` when present and the receipt observation time otherwise. Include earlier placements that settled in the audited window.
+- `local`: order rows for that same account and binding. Each row requires `order_no`, `stake`, `payout`, `net_profit`, `settled_at`, and `booked_at`. Supply `currency` and `fees` when available and use null for unknown values. Use the provider's settlement time as `booked_at` when present and the receipt observation time otherwise. Include earlier placements that settled in the audited window.
 
 Supply the input through a private process pipe. The result contains counts, window boundaries, and error categories. It omits order numbers, account identifiers, credentials, and monetary amounts.
 
 On the production Docker host, `bash infra/profitability/reconcile_live_window.sh <UTC start>` runs the single-window check through the existing API and executor containers. It uses the healthy session for the one account binding present in the order ledger and opens a read-only database transaction. Credentials and order identifiers travel only through the process pipe. The command can run after the boundary without changing the account, order ledger, or deployment.
 
-The check compares reported stake, payout, and profit with decimal arithmetic. `complete_page` describes the full scan, which reads up to three pages per window. It requires a consistent provider total matching the count of distinct valid settled orders. `pages_read` and `scan_issue` expose interrupted, repeated, or limited scans. Mismatched or unknown settlement times and missing costs remain visible in each window. Separate wallet evidence is required to establish the currency, fee treatment, and account-level net result.
+The check compares reported stake, payout, profit, currency and fees. `complete_page` describes the full scan, which reads up to three pages per window. It requires a consistent provider total matching the count of distinct valid settled orders. `pages_read` and `scan_issue` expose interrupted, repeated, or limited scans. `order_receipt_fields_reconciled` also requires a nonempty, one-to-one match with native settlement times, amounts, fees and one currency. The report counts mismatches and fields available upstream for possible recovery. Separate wallet evidence is required to establish fee treatment and the account-level net result.
 
 # Continuous snapshots
 
