@@ -114,3 +114,57 @@ for direction in local_only upstream_only; do
     test "$(wc -l < calls)" = "$((6 + 2 * (ordinal - 4)))"
 done
 printf '%s\n' 'Reconciliation scheduling checks passed.'
+
+mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
+cp "$root/infra/profitability/restore_reconciliation_timer.sh" infra/profitability/
+
+systemctl() {
+    case "$1" in
+        is-active) test -e timer_active || return 3 ;;
+        show) printf '%s\n' "$timer_load_state" ;;
+        start) touch timer_active ;;
+        *) return 2 ;;
+    esac
+}
+systemd-run() {
+    printf '%s\n' "$@" > timer_arguments
+    touch timer_active
+}
+docker() {
+    [[ "$*" == 'exec ai-football-v2-profitability-watch printenv PROFITABILITY_ANCHOR' ]] || return 2
+    printf '%s\n' "$restore_anchor"
+}
+export -f systemctl systemd-run docker
+
+restore() {
+    bash infra/profitability/restore_reconciliation_timer.sh
+}
+
+export timer_load_state=not-found
+export restore_anchor=invalid
+result=0
+restore || result=$?
+test "$result" = 2
+test ! -e timer_arguments
+test ! -e timer_active
+
+export restore_anchor="$anchor"
+restore
+state_path="$test_dir/.runtime/profitability-watch/reconciliations"
+printf '%s\n' '--unit=ai-football-profitability-reconcile-rolling' '--collect' '--on-active=15s' \
+    '--on-calendar=*-*-* 02,14:25,45:00 UTC' '--timer-property=AccuracySec=1s' \
+    '--property=Type=oneshot' '--property=TimeoutStartSec=75s' /usr/bin/bash \
+    "$test_dir/infra/profitability/reconcile_due_windows.sh" "$anchor" "$state_path" > expected_arguments
+cmp timer_arguments expected_arguments
+
+rm timer_arguments
+export restore_anchor=invalid
+restore
+test ! -e timer_arguments
+
+rm timer_active
+export restore_anchor="$anchor" timer_load_state=loaded
+restore
+test -e timer_active
+test ! -e timer_arguments
+printf '%s\n' 'Reconciliation timer recovery checks passed.'
