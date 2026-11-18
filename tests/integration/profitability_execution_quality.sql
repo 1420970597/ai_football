@@ -53,3 +53,49 @@ SELECT id, fixture_id, CASE WHEN id=4 THEN 1 ELSE result_version END, outcome, u
         'score_basis',CASE WHEN id IN (2,3) THEN 'remaining_period' ELSE 'full_period' END),
         'effective_signal',jsonb_build_object('score_basis',CASE WHEN id IN (2,3) THEN 'remaining_period' ELSE 'full_period' END)),
     created_at + interval '7 hours', 'verified-test' FROM v2_expert_signals;
+
+ALTER TABLE v2_bet_orders ADD COLUMN provider_order_no text;
+CREATE TABLE v2_order_receipt_evidence (
+    id integer PRIMARY KEY, order_id integer, payload jsonb, observed_at timestamptz
+);
+
+INSERT INTO v2_expert_signals
+SELECT n, fixture_id, phase, market_kind, '18', 'first_half', line, selection,
+       score_basis, score_baseline, created_at, recommendation_price, outcome, unit_net, result_version
+FROM v2_expert_signals CROSS JOIN generate_series(14,19) n WHERE id=1;
+
+INSERT INTO v2_bet_orders
+SELECT id, id, id, created_at + interval '8 hours', created_at + interval '8 hours',
+       created_at + interval '10 seconds', 5, 2.10, 5.50, 'settled', false, id::text
+FROM v2_expert_signals WHERE id>=14;
+
+INSERT INTO v2_quote_evidence
+SELECT id, id, fixture_id, market_id, period, selection, line, 2.10,
+       jsonb_build_object('stage','preflight_validated','attempt_id',id::text,'signal_id',id::text,
+           'phase',phase,'market_kind',market_kind,'score_basis',score_basis,'prepared_digest','digest'),
+       'order_attempt', created_at + interval '5 seconds'
+FROM v2_expert_signals WHERE id>=14;
+
+INSERT INTO v2_quote_evidence
+SELECT id+100, id, fixture_id, market_id, period, selection, line, 2.10,
+       jsonb_build_object('stage','submission_authorized','attempt_id',id::text,'signal_id',id::text,
+           'preflight_evidence_id',id::text,'prepared_digest',CASE WHEN id=15 THEN 'different' ELSE 'digest' END),
+       'order_attempt', created_at + interval '6 seconds'
+FROM v2_expert_signals WHERE id>=14;
+
+INSERT INTO v2_order_receipt_evidence
+SELECT id, id, jsonb_build_object('state','settled','order_no',
+       CASE WHEN id=19 THEN 'different' ELSE provider_order_no END,
+       'net_profit',CASE WHEN id=16 THEN '5.49' ELSE '5.50' END), receipt_observed_at
+FROM v2_bet_orders WHERE id>=14;
+
+ALTER TABLE v2_signal_settlements ADD COLUMN reason text;
+INSERT INTO v2_signal_settlements
+SELECT id, fixture_id, result_version, outcome, unit_net,
+       jsonb_build_object('signal',jsonb_build_object('sport','football','kind',market_kind,'period',period,
+           'phase',phase,'selection',selection,'score_basis',score_basis,'score_baseline',
+           CASE WHEN id=17 THEN '{"home":2,"away":0}'::jsonb ELSE score_baseline END,
+           'line',CASE WHEN id=18 THEN 'invalid' ELSE line::text END,'price',recommendation_price::text),
+           'result',jsonb_build_object('status','confirmed')),
+       created_at + interval '7 hours', 'verified-test', 'asian_line:score_basis_outcome_equivalent'
+FROM v2_expert_signals WHERE id>=14;

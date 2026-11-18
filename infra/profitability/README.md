@@ -37,6 +37,8 @@ Run `execution_quality.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v anchor=<UTC e
 
 `price_bridge_exclusions` reports the first failed evidence check per order, grouped by sport, phase, market and period. The breakdown includes all orders outside the price calculation and retains their receipt net where available. Its counts and amounts can be checked against the cohort totals. An order may have additional gaps after the reported check.
 
+The diagnostic also reconstructs Leyu football period totals with an existing equivalent-outcome settlement under the same result version. This applies only to native markets 2 (full time) and 18 (first half). The stored calculation must match the recommendation inputs and confirm the result. A matching submission permit must link to the preflight, and the latest settled receipt must match the native order and receipt net. The `reconstructed_equivalent_period_totals` count exposes this cohort. The diagnostic does not modify recommendation, order, or wallet records.
+
 # Fixture exposure replay
 
 Run `fixture_exposure.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC start> -v split=<UTC cohort boundary> -v end=<UTC end> -v observed=<UTC receipt cutoff>` using read access to orders, expert signals and receipts. The replay compares no cap with a cap of one or two open fills per fixture for new automatic orders. All sports and markets are included. Manual and pre-period fills remain in the exposure. A fill releases its slot once its first settled receipt was observable. Fills with no such receipt stay open at the evidence cutoff.
