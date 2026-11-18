@@ -7,7 +7,8 @@ WITH bounds AS (
     FROM v2_bet_orders
     WHERE account_id IS NOT NULL AND provider_order_no IS NOT NULL
 ), signals AS MATERIALIZED (
-    SELECT s.id, s.fixture_id, f.sport, s.phase, s.market_kind, s.period,
+    SELECT s.id, s.fixture_id, f.sport, nullif(f.competition_id, '') AS competition_id,
+           nullif(f.competition_name, '') AS competition_name, s.phase, s.market_kind, s.period, s.score_basis,
            s.withdrawn_at IS NOT NULL AS withdrawn,
            EXISTS (
                SELECT 1 FROM v2_quote_evidence q
@@ -37,7 +38,8 @@ WITH bounds AS (
                 ELSE 'unclassified_order_state' END AS order_status
     FROM signals s
     LEFT JOIN automatic_orders o ON o.signal_id=s.id
-    GROUP BY s.id, s.fixture_id, s.sport, s.phase, s.market_kind, s.period, s.withdrawn, s.with_snapshot
+    GROUP BY s.id, s.fixture_id, s.sport, s.competition_id, s.competition_name,
+             s.phase, s.market_kind, s.period, s.score_basis, s.withdrawn, s.with_snapshot
 ), summary AS (
     SELECT sport, phase, market_kind, period, order_status, withdrawn,
            grouping(sport,phase,market_kind,period) = 15 AS all_markets,
@@ -45,6 +47,16 @@ WITH bounds AS (
            count(*) FILTER (WHERE with_snapshot) AS with_snapshot
     FROM classified
     GROUP BY withdrawn, order_status, GROUPING SETS ((), (sport,phase,market_kind,period))
+), competition_demand AS (
+    SELECT sport, competition_id, min(competition_name) AS competition_name,
+           phase, market_kind, period, score_basis,
+           count(*) AS recommendations, count(DISTINCT fixture_id) AS fixtures,
+           count(*) FILTER (WHERE NOT withdrawn) AS unwithdrawn,
+           count(*) FILTER (WHERE with_snapshot) AS with_snapshot,
+           count(*) FILTER (WHERE order_status IN ('accepted', 'settled')) AS automatic_fills
+    FROM classified
+    GROUP BY sport, competition_id, CASE WHEN competition_id IS NULL THEN competition_name END,
+             phase, market_kind, period, score_basis
 ), order_stops AS (
     SELECT s.sport,s.phase,s.market_kind,s.period,o.state,
            CASE WHEN o.reason IN (
@@ -68,6 +80,9 @@ WITH bounds AS (
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'account_bindings', (SELECT count(*) FROM binding),
            'coverage', coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY all_markets DESC,
                sport,phase,market_kind,period,order_status,withdrawn) FROM summary s), '[]'::jsonb),
+           'competition_demand', coalesce((SELECT jsonb_agg(to_jsonb(d) ORDER BY recommendations DESC,
+               sport,competition_id,competition_name,phase,market_kind,period,score_basis)
+               FROM competition_demand d), '[]'::jsonb),
            'automatic_order_stops', coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY all_markets DESC,
                sport,phase,market_kind,period,state,reason) FROM stop_summary s), '[]'::jsonb))
 FROM bounds b;
