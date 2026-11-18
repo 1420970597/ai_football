@@ -11,6 +11,7 @@ import asyncpg
 
 from app.config import database_url
 from app.expert_statistics import QUOTE_VALID_SQL, SETTLEMENT_VALID_SQL
+from app.team_totals import team_total_terms
 
 
 def observed_returns(row):
@@ -35,6 +36,11 @@ def observed_returns(row):
     options = snapshot.get('options')
     if not isinstance(options, list) or len(options) != 2:
         return 'two_sided_snapshot_unavailable', None
+    if kind == 'team_total':
+        terms = team_total_terms(dict(row, play_id=snapshot.get('play_id')), row['fixture_id'])
+        if (row['sport'] != 'football' or not terms or terms['team_side'] != row['evidence'].get('team_side')
+                or not snapshot.get('play_id') or not snapshot.get('market_instance_id')):
+            return 'team_contract_unverified', None
     try:
         prices = {option['selection']: Decimal(option['price']) for option in options}
         identities = {option['selection_id'] for option in options if option['selection_id']}
@@ -57,22 +63,25 @@ def observed_returns(row):
     return 'comparable', (row['unit_net'], opposite_return, row['unit_net'] + opposite_return, row['effective_stake'])
 
 
-def summarize(rows, split):
+def summarize(rows, split, *, by_contract=False):
     groups = defaultdict(lambda: defaultdict(int))
     fixtures = defaultdict(set)
+    dimensions = ('phase', 'sport', 'market_kind', 'period') if by_contract else ('phase',)
     for row in rows:
         window = 'earlier' if row['created_at'] < split else 'later'
-        row['evidence'] = json.loads(row['evidence'] or '{}')
+        row = dict(row, evidence=json.loads(row['evidence'] or '{}'))
         status, values = observed_returns(row)
-        for phase in ('all', row['phase']):
-            group = groups[(window, phase)]
+        keys = [tuple(row[name] for name in dimensions)] if by_contract else [('all',), (row['phase'],)]
+        for key in keys:
+            group = groups[(window, key)]
             group[status] += 1
             if values is not None:
-                fixtures[(window, phase)].add(row['fixture_id'])
-                for key, value in zip(('follow_units', 'opposite_units', 'paired_units', 'effective_stake'), values):
-                    group[key] += value
-    return [{'window': window, 'phase': phase, 'comparable_fixtures': len(fixtures[(window, phase)]), **values}
-            for (window, phase), values in sorted(groups.items())]
+                fixtures[(window, key)].add(row['fixture_id'])
+                for metric, value in zip(('follow_units', 'opposite_units', 'paired_units', 'effective_stake'), values):
+                    group[metric] += value
+    return [{'window': window, **dict(zip(dimensions, key)),
+             'comparable_fixtures': len(fixtures[(window, key)]), **values}
+            for (window, key), values in sorted(groups.items())]
 
 
 async def replay(begin, split, end):
@@ -99,7 +108,7 @@ async def replay(begin, split, end):
                   AND s.withdrawn_at IS NULL AND ({QUOTE_VALID_SQL})
                 """, begin, end)
             return {'begin': begin, 'split': split, 'end': end, 'observed_at': now,
-                    'groups': summarize([dict(row) for row in rows], split)}
+                    'groups': summarize(rows, split), 'contract_groups': summarize(rows, split, by_contract=True)}
     finally:
         await connection.close()
 
