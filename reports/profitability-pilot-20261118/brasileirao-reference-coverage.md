@@ -24,6 +24,14 @@
 
 两批归档位于私有运行目录，文件权限 0600。该次试采验证了首档深度和时间的留存。样本缺同轮乐鱼真实预检、独立赛况和费用证据。下一批在观察真实预检时同步采集，优先寻找带原生时点的第二条独立行情。同一市场的多个选项只算一个来源。 [订单簿采样器](reference_orderbooks.py) [采样回归](test_reference_orderbooks.py)
 
+## 第二条实时行情
+
+11 月 18 日 23:36 至 23:40 UTC 核对的 Kalshi 官方文档显示，认证后的 `ticker` 行情提供 YES 买卖价及首档数量，`msg.ts_ms` 记录市场更新时点，`sending_ts_ms` 记录网络排队时点。行情会合并中间变动，所以保留为首档快照证据。握手需要 API 凭据，仅看行情可使用市场数据权限。SX Bet 的订单簿快照也要求 API 密钥。生产采集、API 和执行器未发现相关环境配置，尚未读取两家的真实认证行情。 [Kalshi 实时行情](https://docs.kalshi.com/websockets/market-ticker) [Kalshi 认证握手](https://docs.kalshi.com/getting_started/quick_start_websockets) [SX Bet 订单簿](https://docs.sx.bet/api-reference/get-market-orderbook-snapshot)
+
+已验证离线重放入口。经过授权的行情客户端应在收到帧时保存实际 UTC 时间，按行送入 `/research/reference_orderbooks.py --replay-kalshi-tickers --kalshi <market-ticker>`。每行包含 `received_at` 和原始 `frame`。解析器核对市场编号并原样区分更新时点、发送排队时点和客户端接收时点。缺原生时点、未来更新、非正数量和其他市场的帧不会进入有效报价。37 项 Docker 隔离测试通过，流式入口按官方字段构造正反样本验收。 [行情解析](reference_orderbooks.py) [回归测试](test_reference_orderbooks.py)
+
+接入时先用只读行情权限验证订阅、重连和接收时点的连续性。断线或数据间隔过长的区间应留空。再取 Polymarket、第二家独立行情与乐鱼真实预检的时间交集，按完整合同和赛况核对报价及深度。开户、认证、盘口覆盖和真实交易费用还需各自的证据。
+
 ## 复跑
 
 历史脚本的 `--kalshi-peer-ticker` 可重复传入一至两次，选择原盘口与其他盘口共同拥有有效买卖收值的最近已闭合分钟。缺共同分钟时返回空值。以下复现第三单的共同分钟。 [历史采样脚本](reference_history.py) [回归测试](test_reference_history.py)

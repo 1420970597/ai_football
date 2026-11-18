@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from http.client import RemoteDisconnected
+import json
 import unittest
 from unittest.mock import patch
 
-from reference_orderbooks import capture, kalshi_book, polymarket_book
+from reference_orderbooks import capture, kalshi_book, polymarket_book, replay_kalshi_tickers
 
 
 class ReferenceOrderBookTests(unittest.TestCase):
@@ -41,3 +42,25 @@ class ReferenceOrderBookTests(unittest.TestCase):
             sample = capture([('polymarket', 'first'), ('kalshi', 'SECOND')])
         self.assertEqual('RemoteDisconnected', sample['markets'][0]['error'])
         self.assertEqual(observation, sample['markets'][1])
+
+    def test_ticker_replay_uses_original_receive_time_and_native_update_time(self):
+        frame = {'type': 'ticker', 'sending_ts_ms': 1795044465722, 'msg': {
+            'market_ticker': 'TARGET', 'ts_ms': 1795044465721,
+            'yes_bid_dollars': '0.59', 'yes_ask_dollars': '0.60',
+            'yes_bid_size_fp': '5.25', 'yes_ask_size_fp': '8.10',
+        }}
+        row = {'frame': frame, 'received_at': '2026-11-18T23:27:46Z'}
+        result, = replay_kalshi_tickers([json.dumps(row)], {'TARGET'})
+        self.assertEqual(0.279, result['quote_age_seconds'])
+        self.assertEqual(Decimal('5.25'), result['bid_size'])
+        self.assertEqual(1795044465722, result['sending_ts_ms'])
+        for change, tickers in (({'ts_ms': None}, {'TARGET'}),
+                                ({'ts_ms': 1795044466001}, {'TARGET'}),
+                                ({'yes_ask_size_fp': '0'}, {'TARGET'}),
+                                ({}, {'OTHER'})):
+            with self.subTest(change=change, tickers=tickers):
+                broken = row | {'frame': frame | {'msg': frame['msg'] | change}}
+                results = list(replay_kalshi_tickers([json.dumps(broken), json.dumps(row)], tickers))
+                self.assertEqual('invalid_ticker_observation', results[0]['error'])
+                if tickers == {'TARGET'}:
+                    self.assertEqual(result, results[1])
