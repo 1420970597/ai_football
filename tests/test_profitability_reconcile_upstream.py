@@ -61,10 +61,38 @@ class ReconcileUpstreamTests(unittest.TestCase):
 
     def test_matching_currency_and_decimal_fee_reconcile_order_fields(self):
         self.upstream.update(currency='CNY', fees='0.10')
-        self.local.update(currency='CNY', fees='0.100')
+        local_zone = timezone(timedelta(hours=8))
+        self.local.update(currency='CNY', fees='0.100',
+                          placed_at=(START - timedelta(hours=1)).astimezone(local_zone).isoformat())
         output = reconcile_window(self.page, [self.local], START, END)
         self.assertTrue(output['order_receipt_fields_reconciled'])
         self.assertEqual({'placed_before_window': 1}, output['issues'])
+
+    def test_placement_timestamp_gap_or_disagreement_prevents_receipt_reconciliation(self):
+        self.upstream.update(currency='CNY', fees='0')
+        self.local.update(currency='CNY', fees='0')
+        for local_placed, issue in ((None, 'recoverable_local_placement_time'),
+                                    (START.isoformat(), 'placement_time_difference')):
+            with self.subTest(issue=issue):
+                output = reconcile_window(self.page, [self.local | {'placed_at': local_placed}], START, END)
+                self.assertTrue(output['settlement_window_attribution_complete'])
+                self.assertFalse(output['order_receipt_fields_reconciled'])
+                self.assertEqual(1, output['issues'][issue])
+
+        self.upstream['placed_at'] = None
+        output = reconcile_window(self.page, [self.local], START, END)
+        self.assertTrue(output['settlement_window_attribution_complete'])
+        self.assertFalse(output['order_receipt_fields_reconciled'])
+        self.assertEqual({'missing_upstream_placement_time': 1}, output['issues'])
+
+    def test_upstream_settlement_before_placement_blocks_window_attribution(self):
+        self.upstream.update(currency='CNY', fees='0', placed_at=(START + timedelta(seconds=1)).isoformat())
+        local = dict(self.upstream, booked_at=START.isoformat())
+        output = reconcile_window(self.page, [local], START, END)
+        self.assertTrue(output['complete_page'])
+        self.assertFalse(output['settlement_window_attribution_complete'])
+        self.assertFalse(output['order_receipt_fields_reconciled'])
+        self.assertEqual({'upstream_settlement_before_placement': 1}, output['issues'])
 
     def test_cost_differences_and_missing_local_fields_block_reconciliation(self):
         self.upstream.update(currency='CNY', fees='0.10')

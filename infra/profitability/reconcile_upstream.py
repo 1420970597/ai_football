@@ -49,8 +49,13 @@ def reconcile_window(page, local, begin, end):
         elif not begin <= at < end:
             counts['outside_settlement_window'] += 1
         placed = instant(order['placed_at']) if order['placed_at'] else None
-        if placed is not None and placed < begin:
-            counts['placed_before_window'] += 1
+        if placed is None:
+            counts['missing_upstream_placement_time'] += 1
+        else:
+            if placed < begin:
+                counts['placed_before_window'] += 1
+            if at is not None and placed > at:
+                counts['upstream_settlement_before_placement'] += 1
         if order['currency'] is None:
             counts['missing_currency'] += 1
         if order['fees'] is None:
@@ -58,10 +63,15 @@ def reconcile_window(page, local, begin, end):
         if number not in expected:
             continue
         prior = expected[number]
+        local_placement = instant(prior['placed_at']) if prior.get('placed_at') else None
+        if placed is not None:
+            if local_placement is None:
+                counts['recoverable_local_placement_time'] += 1
+            elif local_placement != placed:
+                counts['placement_time_difference'] += 1
         if at is None and prior['settled_at'] is None and placed is not None:
-            local_placement = prior.get('placed_at')
             first_settled = prior.get('first_settled_observed_at')
-            if (local_placement and first_settled and instant(local_placement) == placed
+            if (local_placement == placed and first_settled
                     and begin <= placed <= instant(first_settled) < end):
                 bounded_without_upstream_time += 1
         if at is not None and prior['settled_at'] is None:
@@ -91,6 +101,7 @@ def reconcile_window(page, local, begin, end):
         'begin': begin.isoformat(), 'end': end.isoformat(), 'complete_page': complete_page,
         'settlement_window_attribution_complete': matched_complete_page
             and not counts['outside_settlement_window']
+            and not counts['upstream_settlement_before_placement']
             and counts['missing_upstream_settlement_time'] == bounded_without_upstream_time,
         'bounded_without_upstream_time': bounded_without_upstream_time,
         'order_receipt_fields_reconciled': matched_complete_page and not (counts.keys() - {'placed_before_window'}),
