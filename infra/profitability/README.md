@@ -53,6 +53,10 @@ Run `review_price_coverage.sql` as a read-only diagnostic over the last 72 hours
 
 Run `snapshot_fill_comparison.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to pair the new persistent option evidence with actual fills. The comparison requires a complete option set and the preflight for the filled attempt, with the same native market instance, selection, phase, line and period. Live comparisons also require full-time scope and matching score evidence. The price reference scales the recommendation price by the sum of inverse prices from its own quote set. It is a price diagnostic only. Computing expected returns requires independently validated probabilities, settlement rules and costs.
 
+# Recommendation opportunity coverage
+
+Run `opportunity_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to count all saved recommendations alongside the recorded automatic order states for the unique ledger account binding. Counts use the recommendation as the unit, including withdrawn recommendations and those with no automatic order. Manual orders do not contribute to automatic order states. An absent order does not identify why execution did not occur, or whether the recommendation was eligible at the time.
+
 # Private wallet observations
 
 Install `install_wallet_observation.sql` as a database administrator in a single transaction after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the active binding is healthy and its provider identity matches the order ledger. The monitor role receives function execution only, without account-table column access.
