@@ -40,8 +40,11 @@ FROM (VALUES (6,3.5,'2026-01-01T01:00:00Z'),(7,3.5,'2026-01-01T01:00:04Z'),
              (12,6.5,'2026-01-01T04:00:00Z'),(13,6.5,'2026-01-01T04:00:04Z'),
              (14,7.5,'2026-01-01T05:00:00Z'),(15,7.5,'2026-01-01T05:00:04Z'),
              (16,8.5,'2026-01-01T06:00:00Z'),(17,8.5,'2026-01-01T06:00:04Z'),
-             (18,9.5,'2026-01-01T07:00:00Z'),(19,9.5,'2026-01-01T07:00:04Z')) AS s(n,line,created_at);
+             (18,9.5,'2026-01-01T07:00:00Z'),(19,9.5,'2026-01-01T07:00:04Z'),
+             (20,10.5,'2026-01-01T07:30:00Z'),(21,11.5,'2026-01-01T07:30:04Z')) AS s(n,line,created_at);
 INSERT INTO v2_expert_messages SELECT message_id, created_at - interval '10 seconds' FROM v2_expert_signals;
+UPDATE v2_expert_messages SET posted_at = posted_at - interval '291 seconds' WHERE id=20;
+UPDATE v2_expert_messages SET posted_at = posted_at - interval '290 seconds' WHERE id=21;
 INSERT INTO v2_bet_orders VALUES
     (3,6,1,1,'binding','native-3',false,'2026-01-01T01:00:05Z','accepted'),
     (4,8,1,1,'binding','native-4',false,'2026-01-01T02:05:00Z','settled'),

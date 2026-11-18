@@ -42,6 +42,8 @@ async def evidence(conn, begin, end, same_intent_sql):
                 WHEN a.no_later_policy_event AND a.previous_scope=a.auto_sport_scope
                     AND a.previous_scope IN ('football','basketball') AND a.previous_scope<>f.sport
                     THEN 'outside_audited_sport_scope'
+                WHEN m.posted_at < s.created_at - interval '5 minutes'
+                    THEN 'source_window_expired_on_recommendation'
                 ELSE 'unconfirmed' END AS evidence,
                 CASE
                     WHEN prior_order.created_at IS NULL THEN 'no_same_intent_order'
