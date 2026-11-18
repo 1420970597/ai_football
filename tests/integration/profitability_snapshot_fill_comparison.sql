@@ -23,7 +23,7 @@ SELECT n, CASE WHEN n=5 THEN 'other:123' ELSE 'leyu:123' END, 'live', 'total',
     1.5, 'over', CASE WHEN n=7 THEN 'remaining_period' ELSE 'unknown' END,
     CASE WHEN n=2 THEN '{"home":null,"away":0}' ELSE '{"home":1,"away":0}' END::jsonb,
     :'begin'::timestamptz, :'begin'::timestamptz, 2.00
-FROM generate_series(1,7) n;
+FROM generate_series(1,12) n;
 
 INSERT INTO v2_bet_orders
 SELECT id, id, id, id::text, created_at + interval '10 seconds', 2.10, 5.50, NULL, NULL, 1, 'same', 'settled'
@@ -46,3 +46,8 @@ SELECT id+100, id, fixture_id, market_id, period, selection, line, 2.10,
        'score_benchmark',CASE WHEN id=3 THEN '2:0' ELSE '1:0' END),
     score_baseline, 'order_attempt', created_at + interval '5 seconds', quote_time
 FROM v2_expert_signals;
+
+DELETE FROM v2_quote_evidence WHERE id IN (8,109);
+UPDATE v2_quote_evidence SET evidence = jsonb_set(evidence, '{market_snapshot,options}', '[]') WHERE id = 10;
+UPDATE v2_quote_evidence SET evidence = jsonb_set(evidence, '{selection_id}', '"other"') WHERE id = 111;
+UPDATE v2_bet_orders SET provider_price = NULL WHERE id = 12;

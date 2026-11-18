@@ -12,19 +12,24 @@ WITH bounds AS (
              AND p.evidence->>'score_basis' = s.score_basis
              AND p.evidence->>'market_instance_id' = snapshot.data->>'market_instance_id'
              AND p.evidence->>'play_id' = snapshot.data->>'play_id'
-             AND p.evidence->>'selection_id' = options.selected_id
-             AND (s.phase <> 'live' OR (
-                 s.score_baseline->>'home' IS NOT NULL AND s.score_baseline->>'away' IS NOT NULL
-                 AND s.score_baseline->>'home' = p.evidence->'score_baseline'->>'home'
-                 AND s.score_baseline->>'away' = p.evidence->'score_baseline'->>'away'
-                 AND concat(s.score_baseline->>'home', ':', s.score_baseline->>'away') = p.evidence->>'score_benchmark'
-                 AND (s.period = 'full_time' OR (
-                       -- Native market 18 settles on the entire first half.
-                       s.period = 'first_half' AND f.sport = 'football' AND s.fixture_id ~ '^leyu:[0-9]+$'
-                       AND s.market_id = '18' AND s.market_kind = 'total'
-                       AND s.score_basis IN ('unknown', 'full_period')
-                 ))
-             )) AS same_snapshot_contract,
+             AND p.evidence->>'selection_id' = options.selected_id AS same_snapshot_contract,
+           s.phase <> 'live' OR (
+               s.score_baseline->>'home' IS NOT NULL AND s.score_baseline->>'away' IS NOT NULL
+               AND p.evidence->'score_baseline'->>'home' IS NOT NULL
+               AND p.evidence->'score_baseline'->>'away' IS NOT NULL
+               AND p.evidence->>'score_benchmark' IS NOT NULL
+           ) AS has_live_score,
+           s.phase <> 'live' OR (
+               s.score_baseline->>'home' = p.evidence->'score_baseline'->>'home'
+               AND s.score_baseline->>'away' = p.evidence->'score_baseline'->>'away'
+               AND concat(s.score_baseline->>'home', ':', s.score_baseline->>'away') = p.evidence->>'score_benchmark'
+           ) AS same_live_score,
+           s.phase <> 'live' OR s.period = 'full_time' OR (
+               -- Native market 18 settles on the entire first half.
+               s.period = 'first_half' AND f.sport = 'football' AND s.fixture_id ~ '^leyu:[0-9]+$'
+               AND s.market_id = '18' AND s.market_kind = 'total'
+               AND s.score_basis IN ('unknown', 'full_period')
+           ) AS supported_live_period,
            options.selected_price = s.recommendation_price
              AND options.sides = CASE
                  WHEN s.market_kind = 'winner' AND f.sport = 'football' THEN ARRAY['away','draw','home']
@@ -70,9 +75,25 @@ WITH bounds AS (
     ) p ON true
     WHERE s.created_at >= b.begin_at AND s.created_at < b.observed_at
       AND o.provider_order_no IS NOT NULL AND o.state IN ('accepted','settled')
-), compared AS (
-    SELECT *, (same_snapshot_contract AND valid_options AND fill_price > 1 AND preflight_price > 1) IS TRUE AS comparable
+), classified AS (
+    SELECT *, CASE
+        WHEN NOT has_snapshot THEN 'missing_snapshot'
+        WHEN NOT has_preflight THEN 'missing_matching_preflight'
+        WHEN valid_options IS NOT TRUE THEN 'invalid_snapshot_options'
+        WHEN same_snapshot_contract IS NOT TRUE THEN 'snapshot_contract_mismatch'
+        WHEN has_live_score IS NOT TRUE THEN 'missing_live_score'
+        WHEN same_live_score IS NOT TRUE THEN 'live_score_mismatch'
+        WHEN supported_live_period IS NOT TRUE THEN 'unsupported_live_period_or_basis'
+        WHEN (fill_price > 1 AND preflight_price > 1) IS NOT TRUE THEN 'missing_valid_prices'
+    END AS exclusion
     FROM fills
+), compared AS (
+    SELECT *, exclusion IS NULL AS comparable FROM classified
+), exclusions AS (
+    SELECT sport, phase, market_kind, period, exclusion, count(*) AS fills,
+           count(*) FILTER (WHERE state = 'settled') AS settled
+    FROM classified WHERE exclusion IS NOT NULL
+    GROUP BY sport, phase, market_kind, period, exclusion
 ), summary AS (
     SELECT sport,phase,market_kind,period,grouping(sport,phase,market_kind,period)=15 AS all_markets,
            count(*) AS fills,count(*) FILTER(WHERE state='settled') AS settled,
@@ -99,7 +120,10 @@ WITH bounds AS (
     FROM compared
     GROUP BY GROUPING SETS ((), (sport,phase,market_kind,period))
 )
-SELECT jsonb_build_object('bounds',to_jsonb(b),'comparison',(
-    SELECT jsonb_agg(to_jsonb(s) ORDER BY all_markets DESC,sport,phase,market_kind,period) FROM summary s
-)) FROM bounds b;
+SELECT jsonb_build_object('bounds',to_jsonb(b),
+    'comparison',(SELECT jsonb_agg(to_jsonb(s) ORDER BY all_markets DESC,sport,phase,market_kind,period)
+        FROM summary s),
+    'price_exclusions',coalesce((SELECT jsonb_agg(to_jsonb(e) ORDER BY sport,phase,market_kind,period,exclusion)
+        FROM exclusions e),'[]'::jsonb)
+) FROM bounds b;
 ROLLBACK;

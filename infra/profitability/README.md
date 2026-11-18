@@ -71,6 +71,8 @@ Run `review_price_coverage.sql` as a read-only diagnostic over the last 72 hours
 
 Run `snapshot_fill_comparison.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to pair the new persistent option evidence with actual fills. The comparison requires a complete option set and the preflight for the filled attempt, with the same native market instance, selection, phase, line and period. Live comparisons require matching score evidence. The supported periods include full time and Leyu football first-half totals on native market 18, whose settlement uses the entire first half. The price reference scales the recommendation price by the sum of inverse prices from its own quote set. It is a price diagnostic only. Computing expected returns requires independently validated probabilities, settlement rules and costs.
 
+The `price_exclusions` rows count the first failed evidence check for each noncomparable fill by sport, phase, market and period. The breakdown includes both accepted and settled fills and identifies missing evidence separately from conflicting native contract or score values.
+
 # Recommendation opportunity coverage
 
 Run `opportunity_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to count all saved recommendations alongside the recorded automatic order states for the unique ledger account binding. Counts use the recommendation as the unit, including withdrawn recommendations and those with no automatic order. Manual orders do not contribute to automatic order states. An absent order does not identify why execution did not occur, or whether the recommendation was eligible at the time.
