@@ -43,7 +43,8 @@ WITH bounds AS (
              AND options.valid_prices = cardinality(options.sides)
              AND options.unique_ids = cardinality(options.sides) AS valid_options,
            options.inverse_sum,
-           o.settled_net, o.provider_stake, o.provider_fees, o.provider_currency, o.account_id, o.provider_identity_hash
+           o.settled_net, o.provider_stake, o.provider_payout, o.settled_at,
+           o.provider_fees, o.provider_currency, o.account_id, o.provider_identity_hash
     FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id = o.signal_id
     LEFT JOIN v2_fixtures f ON f.id = s.fixture_id CROSS JOIN bounds b
     LEFT JOIN LATERAL (
@@ -102,26 +103,33 @@ WITH bounds AS (
 ), price_direction AS (
     SELECT phase, CASE WHEN preflight_price > recommendation_price THEN 'higher'
                        WHEN preflight_price < recommendation_price THEN 'lower' ELSE 'equal' END AS direction,
-           fixture_id, manual, settled_net, provider_stake, provider_fees, provider_currency,
-           account_id, provider_identity_hash, state
+           fixture_id, manual, settled_net, provider_stake, provider_payout, settled_at, provider_fees,
+           provider_currency, account_id, provider_identity_hash, state,
+           state='settled' AND settled_net IS NOT NULL AND provider_stake > 0 AS usable_receipt
     FROM compared WHERE comparable
 ), preflight_outcomes AS (
     SELECT CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase, direction, automatic_only,
            count(*) AS fills, count(*) FILTER (WHERE state='settled') AS settled,
            count(*) FILTER (WHERE state='accepted') AS pending,
-           count(*) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0) AS with_amounts,
-           count(DISTINCT fixture_id) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0)
-               AS settled_fixtures_with_amounts,
+           count(*) FILTER (WHERE usable_receipt) AS with_amounts,
+           count(DISTINCT fixture_id) FILTER (WHERE usable_receipt) AS settled_fixtures_with_amounts,
+           count(*) FILTER (WHERE usable_receipt AND settled_net>0) AS positive_receipts,
+           count(*) FILTER (WHERE usable_receipt AND settled_net<0) AS negative_receipts,
+           count(*) FILTER (WHERE usable_receipt AND settled_net=0) AS zero_receipts,
+           count(*) FILTER (WHERE usable_receipt AND settled_net=0 AND provider_payout=provider_stake)
+               AS zero_with_principal_return,
+           count(*) FILTER (WHERE usable_receipt AND settled_net=0 AND settled_at IS NULL)
+               AS zero_without_native_settlement_time,
            count(*) FILTER (WHERE state='settled' AND (provider_fees IS NULL OR provider_currency IS NULL)) AS missing_cost_fields,
            CASE WHEN count(DISTINCT (account_id, provider_identity_hash))=1
                      AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
                      AND count(DISTINCT provider_currency)<=1
-                THEN sum(provider_stake) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0)
+                THEN sum(provider_stake) FILTER (WHERE usable_receipt)
            END AS settled_stake,
            CASE WHEN count(DISTINCT (account_id, provider_identity_hash))=1
                      AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
                      AND count(DISTINCT provider_currency)<=1
-                THEN sum(settled_net) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0)
+                THEN sum(settled_net) FILTER (WHERE usable_receipt)
            END AS receipt_net
     FROM price_direction
     CROSS JOIN (VALUES (false), (true)) AS scope(automatic_only)

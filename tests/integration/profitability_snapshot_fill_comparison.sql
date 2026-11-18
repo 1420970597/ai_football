@@ -53,3 +53,6 @@ DELETE FROM v2_quote_evidence WHERE id IN (8,109);
 UPDATE v2_quote_evidence SET evidence = jsonb_set(evidence, '{market_snapshot,options}', '[]') WHERE id = 10;
 UPDATE v2_quote_evidence SET evidence = jsonb_set(evidence, '{selection_id}', '"other"') WHERE id = 111;
 UPDATE v2_bet_orders SET provider_price = NULL WHERE id = 12;
+
+ALTER TABLE v2_bet_orders ADD COLUMN provider_payout numeric;
+ALTER TABLE v2_bet_orders ADD COLUMN settled_at timestamptz;

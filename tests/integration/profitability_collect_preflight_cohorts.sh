@@ -72,6 +72,9 @@ assert automatic["fills"]==11 and automatic["comparable_fills"]==1 and automatic
 assert automatic["excluded_settled"]==10 and automatic["excluded_receipt_net"]==55
 assert automatic["excluded_missing_cost_fields"]==10 and automatic["excluded_missing_receipt_net"]==0
 assert second["automatic_coverage"][0]["fills"]==0 and second["automatic_coverage"][0]["excluded_receipt_net"] is None
+direction=next(row for row in first["automatic_preflight_outcomes"] if row["phase"]=="all")
+assert direction["with_amounts"]==direction["positive_receipts"]==1
+assert direction["negative_receipts"]==direction["zero_receipts"]==0
 ' < "$archive/$test_now.json"
 
 export test_now=2026-01-05T23:59:59Z
