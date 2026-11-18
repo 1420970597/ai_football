@@ -55,6 +55,8 @@ Run `freshness_replay.sql` with the same four UTC parameters as the fixture expo
 
 The `timings` array reports the median and 90th percentile by cohort and match phase for publication to signal, signal to authorization, and authorization to native placement. It uses only chronologically consistent timestamps. The `coverage` counts track fills excluded from the timing statistics. Publication to signal includes time before the platform receives the message, so these timings do not isolate processing time inside the collector or Hermes.
 
+Run `review_latency.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC placement cutoff> -v end=<UTC stop>` to break down the time from source message version to recommendation. It uses distinct recommendations associated with automatic fills for one account binding. A timing row requires a chronological chain through the stored Telegram event, the review job, and the Hermes request for the attempt named in the quote evidence. The final interval includes the review, tool calls, and recommendation write. Check the coverage counts before interpreting the timings, especially for older fills whose raw evidence may have expired.
+
 # Historical option coverage
 
 Run `review_price_coverage.sql` as a read-only diagnostic over the last 72 hours of retained review evidence. It matches the selected option to the immutable recommendation, then requires the expected distinct options from the same review attempt, database read time, native market instance, line, phase and score context. It reports the stricter count with one shared upstream quote timestamp. The sum of inverse prices describes the provider's quote set at review time. It does not establish a fair price, execution price, or realizable return.
