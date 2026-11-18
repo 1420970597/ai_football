@@ -38,7 +38,7 @@ WITH bounds AS (
              AND options.valid_prices = cardinality(options.sides)
              AND options.unique_ids = cardinality(options.sides) AS valid_options,
            options.inverse_sum,
-           o.settled_net, o.provider_fees, o.provider_currency, o.account_id, o.provider_identity_hash
+           o.settled_net, o.provider_stake, o.provider_fees, o.provider_currency, o.account_id, o.provider_identity_hash
     FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id = o.signal_id
     LEFT JOIN v2_fixtures f ON f.id = s.fixture_id CROSS JOIN bounds b
     LEFT JOIN LATERAL (
@@ -94,6 +94,29 @@ WITH bounds AS (
            count(*) FILTER (WHERE state = 'settled') AS settled
     FROM classified WHERE exclusion IS NOT NULL
     GROUP BY sport, phase, market_kind, period, exclusion
+), price_direction AS (
+    SELECT phase, CASE WHEN preflight_price > recommendation_price THEN 'higher'
+                       WHEN preflight_price < recommendation_price THEN 'lower' ELSE 'equal' END AS direction,
+           settled_net, provider_stake, provider_fees, provider_currency, account_id, provider_identity_hash, state
+    FROM compared WHERE comparable
+), preflight_outcomes AS (
+    SELECT CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase, direction,
+           count(*) AS fills, count(*) FILTER (WHERE state='settled') AS settled,
+           count(*) FILTER (WHERE state='accepted') AS pending,
+           count(*) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0) AS with_amounts,
+           count(*) FILTER (WHERE state='settled' AND (provider_fees IS NULL OR provider_currency IS NULL)) AS missing_cost_fields,
+           CASE WHEN count(DISTINCT (account_id, provider_identity_hash))=1
+                     AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
+                     AND count(DISTINCT provider_currency)<=1
+                THEN sum(provider_stake) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0)
+           END AS settled_stake,
+           CASE WHEN count(DISTINCT (account_id, provider_identity_hash))=1
+                     AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
+                     AND count(DISTINCT provider_currency)<=1
+                THEN sum(settled_net) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0)
+           END AS receipt_net
+    FROM price_direction
+    GROUP BY direction, GROUPING SETS ((), (phase))
 ), summary AS (
     SELECT sport,phase,market_kind,period,grouping(sport,phase,market_kind,period)=15 AS all_markets,
            count(*) AS fills,count(*) FILTER(WHERE state='settled') AS settled,
@@ -124,6 +147,9 @@ SELECT jsonb_build_object('bounds',to_jsonb(b),
     'comparison',(SELECT jsonb_agg(to_jsonb(s) ORDER BY all_markets DESC,sport,phase,market_kind,period)
         FROM summary s),
     'price_exclusions',coalesce((SELECT jsonb_agg(to_jsonb(e) ORDER BY sport,phase,market_kind,period,exclusion)
-        FROM exclusions e),'[]'::jsonb)
+        FROM exclusions e),'[]'::jsonb),
+    'preflight_outcomes',coalesce((SELECT jsonb_agg(to_jsonb(p) ||
+        jsonb_build_object('receipt_roi_percent',round(100 * receipt_net / nullif(settled_stake,0),2))
+        ORDER BY phase,direction) FROM preflight_outcomes p),'[]'::jsonb)
 ) FROM bounds b;
 ROLLBACK;

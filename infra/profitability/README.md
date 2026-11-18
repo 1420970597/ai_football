@@ -81,6 +81,8 @@ Run `snapshot_fill_comparison.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=
 
 The `price_exclusions` rows count the first failed evidence check for each noncomparable fill by sport, phase, market and period. The breakdown includes both accepted and settled fills and identifies missing evidence separately from conflicting native contract or score values.
 
+`preflight_outcomes` groups comparable fills by whether the preflight price was above, equal to, or below the recommendation price. It includes each phase and all phases combined. The observed return uses orders with both settled receipt net and positive provider stake. The report counts pending and incomplete-cost evidence separately. Monetary totals require one valid binding and at most one known currency within the group.
+
 # Recommendation opportunity coverage
 
 Run `opportunity_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to count all saved recommendations alongside the recorded automatic order states for the unique ledger account binding. Counts use the recommendation as the unit, including withdrawn recommendations and those with no automatic order. Manual orders do not contribute to automatic order states. An absent order does not identify why execution did not occur, or whether the recommendation was eligible at the time.
