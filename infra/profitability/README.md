@@ -113,6 +113,8 @@ Run `opportunity_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC
 
 `automatic_order_stops` reports cancelled and rejected automatic orders by recorded reason, phase and contract. It counts order rows, including a cancelled attempt for a recommendation that also has a successful order. Missing reasons are marked `unrecorded`. Reasons outside the known service codes are counted as `other_recorded` without exposing their contents. Recommendations with no automatic order remain in the separate coverage totals.
 
+For a completed period no longer than 48 hours, run `docker exec -i ai-football-v2-api-1 python - <UTC begin> <UTC end> < infra/profitability/no_order_evidence.py`. It requires the deployed `app.signal_identity` implementation and a single identifiable ledger account. It reports an existing same-intent order predating a recommendation and a sport excluded by the audited policy. The latter requires the last pre-window authorization to agree with the current sport setting and no intervening policy event. Order presence is checked at the actual observation time. All other cases remain `unconfirmed` pending original dispatch evidence.
+
 # Private wallet observations
 
 Install `install_wallet_observation.sql` as a database administrator in a single transaction after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the active binding is healthy and its provider identity matches the order ledger. The monitor role receives function execution only, without account-table column access.
