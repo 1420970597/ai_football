@@ -1,7 +1,18 @@
 -- Isolate price movement from result/contract differences. Emits aggregates only.
+\if :{?analysis_end}
+\else
+\set analysis_end ''
+\endif
+\if :{?receipt_as_of}
+\else
+\set receipt_as_of ''
+\endif
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 WITH bounds AS (
-    SELECT :'anchor'::timestamptz AS anchor, now() AS observed_at
+    SELECT :'anchor'::timestamptz AS anchor, now() AS observed_at,
+           least(now(), :'anchor'::timestamptz + interval '48 hours',
+                 nullif(:'analysis_end','')::timestamptz) AS analysis_end,
+           nullif(:'receipt_as_of','')::timestamptz AS receipt_as_of
 ), settled AS MATERIALIZED (
     SELECT CASE WHEN coalesce(b.settled_at,b.receipt_observed_at) < a.anchor THEN 'prior_48h'
                 ELSE 'initial_48h' END AS cohort,
@@ -86,7 +97,8 @@ WITH bounds AS (
     ) rule ON true
     WHERE b.state = 'settled'
         AND coalesce(b.settled_at,b.receipt_observed_at) >= a.anchor - interval '48 hours'
-        AND coalesce(b.settled_at,b.receipt_observed_at) < least(a.observed_at,a.anchor + interval '48 hours')
+        AND coalesce(b.settled_at,b.receipt_observed_at) < a.analysis_end
+        AND (a.receipt_as_of IS NULL OR b.receipt_observed_at <= least(a.receipt_as_of,a.observed_at))
 ), contract_checked AS (
     SELECT *, CASE
         WHEN signal_id IS NULL THEN 'missing_signal'
@@ -156,7 +168,8 @@ WITH bounds AS (
     WHERE price_bridge_exclusion IS NOT NULL
     GROUP BY 1,2,3,4,5,6
 )
-SELECT jsonb_build_object('anchor',anchor,'observed_at',observed_at,'cohorts',coalesce((
+SELECT jsonb_build_object('anchor',anchor,'observed_at',observed_at,'analysis_end',analysis_end,
+    'receipt_as_of',receipt_as_of,'cohorts',coalesce((
     SELECT jsonb_agg(to_jsonb(s) ORDER BY cohort, all_markets DESC, sport, phase, market_kind, manual) FROM summary s
 ), '[]'::jsonb), 'price_bridge_exclusions', coalesce((
     SELECT jsonb_agg(to_jsonb(e) ORDER BY cohort, reason, sport, phase, market_kind, period) FROM exclusions e
