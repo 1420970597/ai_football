@@ -42,11 +42,23 @@ async def evidence(conn, begin, end, same_intent_sql):
                 WHEN a.no_later_policy_event AND a.previous_scope=a.auto_sport_scope
                     AND a.previous_scope IN ('football','basketball') AND a.previous_scope<>f.sport
                     THEN 'outside_audited_sport_scope'
-                ELSE 'unconfirmed' END AS evidence
+                ELSE 'unconfirmed' END AS evidence,
+                CASE
+                    WHEN prior_order.created_at IS NULL THEN 'no_same_intent_order'
+                    WHEN prior_order.has_native_acceptance THEN 'native_acceptance_recorded'
+                    WHEN prior_order.has_unresolved_order THEN 'unresolved_same_intent_order'
+                    WHEN prior_order.all_stopped_without_receipt THEN 'stopped_without_native_receipt'
+                    ELSE 'same_intent_order_state_unverified'
+                END AS order_evidence
             FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id
             LEFT JOIN v2_expert_messages m ON m.id=s.message_id CROSS JOIN scoped a
             LEFT JOIN LATERAL (
-                SELECT o.created_at
+                SELECT min(o.created_at) AS created_at,
+                       bool_or(o.state IN ('accepted','settled') AND
+                               nullif(btrim(o.provider_order_no),'') IS NOT NULL) AS has_native_acceptance,
+                       bool_or(o.state IN ('pending','submitting','unknown')) AS has_unresolved_order,
+                       bool_and(o.state IN ('cancelled','rejected') AND
+                                nullif(btrim(o.provider_order_no),'') IS NULL) AS all_stopped_without_receipt
                 FROM v2_bet_orders o JOIN v2_expert_signals previous ON previous.id=o.signal_id
                 WHERE (o.user_id,o.account_id,o.provider_identity_hash)=(a.user_id,a.id,a.provider_identity_hash)
                   AND """ + same_intent_sql('previous', 's') + """
@@ -55,7 +67,6 @@ async def evidence(conn, begin, end, same_intent_sql):
                        AND o.created_at<m.posted_at + interval '5 minutes'
                        AND o.created_at<s.created_at + interval '5 minutes'
                        AND m.posted_at<=s.created_at))
-                ORDER BY o.created_at,o.id LIMIT 1
             ) prior_order ON true
             WHERE s.created_at >= $1 AND s.created_at < $2
               AND NOT EXISTS (
@@ -65,11 +76,16 @@ async def evidence(conn, begin, end, same_intent_sql):
         ), summaries AS (
             SELECT sport,phase,market_kind,period,evidence,count(*) AS recommendations
             FROM reasons GROUP BY sport,phase,market_kind,period,evidence
+        ), order_summaries AS (
+            SELECT evidence,order_evidence,count(*) AS recommendations
+            FROM reasons GROUP BY evidence,order_evidence
         )
         SELECT jsonb_build_object('begin',$1::timestamptz,'end',$2::timestamptz,'observed_at',now(),
             'unique_account_available',EXISTS(SELECT 1 FROM scoped),
             'reasons',coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY sport,phase,market_kind,period,evidence)
-                                  FROM summaries r),'[]'::jsonb))
+                                  FROM summaries r),'[]'::jsonb),
+            'same_intent_order_evidence',coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY evidence,order_evidence)
+                                                   FROM order_summaries r),'[]'::jsonb))
     """, begin, end)
     return json.loads(result)
 
