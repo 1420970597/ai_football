@@ -36,6 +36,27 @@ record_report() (
     trap 'rm -f -- "$draft"' EXIT
     bash "$root/$collector" "$start" > "$draft" || exit
     test -s "$draft" || exit
+    if [[ "$suffix" == .receipt-*.json ]]; then
+        expected_digest="v1:${suffix#.receipt-}"
+        if ! docker exec -i ai-football-v2-executor-1 python -c '
+from datetime import datetime, timedelta
+import json
+import sys
+
+try:
+    report, = json.load(sys.stdin)
+    start = datetime.fromisoformat(sys.argv[1])
+    if (report["local_receipt_digest"] != sys.argv[2]
+            or datetime.fromisoformat(report["begin"]) != start
+            or datetime.fromisoformat(report["end"]) != start + timedelta(hours=12)):
+        raise ValueError
+except (KeyError, TypeError, ValueError):
+    sys.exit(1)
+' "$start" "${expected_digest%.json}" < "$draft"; then
+            printf 'Window %s receipt recheck did not match the selected ledger version and bounds\n' "$ordinal" >&2
+            exit 75
+        fi
+    fi
     mv -T -- "$draft" "$state_dir/$ordinal$suffix" || exit
     printf 'Recorded window %s starting at %s in %s\n' "$ordinal" "$start" "$ordinal$suffix"
 )

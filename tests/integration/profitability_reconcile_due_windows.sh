@@ -208,11 +208,23 @@ cp "$state_path/0.json" original_receipts
 bash ./reconcile_due_windows.sh "$anchor" "$state_path"
 test "$(wc -l < calls)" = "$((calls_before + 1))"
 snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$new_digest"
+result=0
+bash ./reconcile_due_windows.sh "$anchor" "$state_path" || result=$?
+test "$result" = 75
+test ! -e "$state_path/0.receipt-$new_digest.json"
+test -z "$(find "$state_path" -name '.rolling.??????' -print)"
 export test_report="${test_report/$old_digest/$new_digest}"
+correct_report=$test_report
+export test_report="${test_report/$boundary/2026-11-18T14:15:00Z}"
+result=0
+bash ./reconcile_due_windows.sh "$anchor" "$state_path" || result=$?
+test "$result" = 75
+test ! -e "$state_path/0.receipt-$new_digest.json"
+export test_report=$correct_report
 bash ./reconcile_due_windows.sh "$anchor" "$state_path"
 test -s "$state_path/0.receipt-$new_digest.json"
 bash ./reconcile_due_windows.sh "$anchor" "$state_path"
-test "$(wc -l < calls)" = "$((calls_before + 2))"
+test "$(wc -l < calls)" = "$((calls_before + 4))"
 cmp "$state_path/0.json" original_receipts
 
 mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
