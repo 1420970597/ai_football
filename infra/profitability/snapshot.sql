@@ -14,14 +14,36 @@ WITH bounds AS (
         )
     ) checkpoints
 ), orders AS MATERIALIZED (
-    SELECT o.id, o.account_id, o.state, o.manual, o.stake, o.provider_stake, o.reserved_stake,
+    SELECT o.id, o.account_id, o.provider_identity_hash, o.state, o.manual, o.stake, o.provider_stake, o.reserved_stake,
            o.settled_net, o.provider_payout, o.provider_currency, o.provider_fees, o.pnl_basis,
            o.settled_at, o.receipt_observed_at,
            coalesce(o.provider_placed_at, o.submitted_at, o.created_at) AS placed_at,
            coalesce(o.settled_at, o.receipt_observed_at) AS booked_at,
-           f.sport, s.phase, s.market_kind, s.period, s.selection
+           f.sport, s.phase, s.market_kind, s.period, s.selection,
+           receipt.observed_at IS NOT NULL AS has_settled_evidence,
+           o.provider_order_no IS NOT NULL AND receipt.payload->>'order_no' = o.provider_order_no
+               AND receipt.observed_at = o.receipt_observed_at
+               AND receipt.payload->>'pnl_basis' = o.pnl_basis
+               AND (receipt.payload->>'currency') IS NOT DISTINCT FROM o.provider_currency
+               AND (CASE WHEN pg_input_is_valid(receipt.payload->>'stake', 'numeric')
+                   THEN (receipt.payload->>'stake')::numeric END) = o.provider_stake
+               AND (CASE WHEN pg_input_is_valid(receipt.payload->>'payout', 'numeric')
+                   THEN (receipt.payload->>'payout')::numeric END) = o.provider_payout
+               AND (CASE WHEN pg_input_is_valid(receipt.payload->>'net_profit', 'numeric')
+                   THEN (receipt.payload->>'net_profit')::numeric END) = o.settled_net
+               AND (receipt.payload->>'fees' IS NULL AND o.provider_fees IS NULL OR
+                   (CASE WHEN pg_input_is_valid(receipt.payload->>'fees', 'numeric')
+                       THEN (receipt.payload->>'fees')::numeric END) = o.provider_fees)
+               AND (receipt.payload->>'settled_at' IS NULL AND o.settled_at IS NULL OR
+                   (CASE WHEN pg_input_is_valid(receipt.payload->>'settled_at', 'timestamptz')
+                       THEN (receipt.payload->>'settled_at')::timestamptz END) = o.settled_at) AS receipt_matches
     FROM v2_bet_orders o LEFT JOIN v2_expert_signals s ON s.id = o.signal_id
     LEFT JOIN v2_fixtures f ON f.id = s.fixture_id
+    LEFT JOIN LATERAL (
+        SELECT e.payload, e.observed_at FROM v2_order_receipt_evidence e
+        WHERE e.order_id = o.id AND e.payload->>'state' = 'settled'
+        ORDER BY e.observed_at DESC, e.id DESC LIMIT 1
+    ) receipt ON o.state = 'settled'
     CROSS JOIN bounds b
     WHERE o.state IN ('submitting', 'unknown', 'accepted')
        OR (o.state = 'settled' AND (coalesce(o.settled_at, o.receipt_observed_at) >= b.anchor - interval '48 hours'
@@ -31,15 +53,19 @@ WITH bounds AS (
     FROM windows w CROSS JOIN bounds b
     CROSS JOIN LATERAL (
         SELECT count(*) AS settled, count(DISTINCT account_id) AS accounts,
+               count(DISTINCT provider_identity_hash) AS provider_accounts,
                count(DISTINCT provider_currency) AS currencies,
                min(account_id::text) AS streak_account,
+               min(provider_identity_hash) AS streak_provider_identity,
                min(provider_currency) AS streak_currency,
                count(*) FILTER (WHERE provider_currency IS NULL) AS missing_currency,
                count(*) FILTER (WHERE provider_fees IS NULL) AS missing_fee_field,
                count(*) FILTER (WHERE provider_fees <> 0) AS nonzero_fee_basis_unverified,
                count(*) FILTER (WHERE settled_at IS NULL) AS observed_time_only,
-               count(*) FILTER (WHERE settled_net IS NULL OR provider_stake IS NULL OR pnl_basis = 'unknown'
-                   OR account_id IS NULL OR receipt_observed_at IS NULL) AS missing_receipt_fields,
+               count(*) FILTER (WHERE settled_net IS NULL OR provider_stake IS NULL OR provider_payout IS NULL OR pnl_basis = 'unknown'
+                   OR account_id IS NULL OR provider_identity_hash IS NULL OR receipt_observed_at IS NULL) AS missing_receipt_fields,
+               count(*) FILTER (WHERE NOT has_settled_evidence) AS missing_settled_evidence,
+               count(*) FILTER (WHERE has_settled_evidence AND receipt_matches IS NOT TRUE) AS inconsistent_settled_evidence,
                count(*) FILTER (WHERE provider_payout IS NOT NULL AND settled_net IS NOT NULL
                    AND provider_stake IS NOT NULL AND settled_net <> provider_payout - provider_stake) AS receipt_difference,
                count(*) FILTER (WHERE placed_at < since) AS orders_placed_before_window,
@@ -58,16 +84,18 @@ WITH bounds AS (
         WHEN since > (SELECT observed_at FROM bounds) THEN 'upcoming'
         WHEN NOT closed THEN 'open'
         WHEN settled = 0 THEN 'no_settlements'
-        WHEN accounts <> 1 OR currencies > 1 THEN 'incomparable_accounts_or_currencies'
+        WHEN accounts <> 1 OR provider_accounts > 1 OR currencies > 1 THEN 'incomparable_accounts_or_currencies'
         WHEN provider_net <= 0 AND missing_receipt_fields = 0 THEN 'nonpositive_receipts'
         WHEN provider_net IS NULL OR missing_receipt_fields > 0 OR observed_time_only > 0 OR receipt_difference > 0
+             OR missing_settled_evidence > 0 OR inconsistent_settled_evidence > 0
              OR missing_currency > 0 OR missing_fee_field > 0 OR nonzero_fee_basis_unverified > 0
              OR unknown_from_window > 0 THEN 'unverified'
         ELSE 'positive_receipts'
     END AS status FROM metrics
 ), streaks AS (
     SELECT name, coalesce(count(*) = 4 AND bool_and(status = 'positive_receipts')
-              AND count(DISTINCT streak_account) = 1 AND count(DISTINCT streak_currency) = 1, false) AS verified
+              AND count(DISTINCT streak_account) = 1 AND count(DISTINCT streak_provider_identity) = 1
+              AND count(DISTINCT streak_currency) = 1, false) AS verified
     FROM (
         SELECT 'deadline' AS name, c.* FROM classified c WHERE ordinal < 4
         UNION ALL
@@ -93,7 +121,8 @@ SELECT jsonb_build_object(
         ELSE 'target_not_verified' END,
     'rolling_four_positive_receipts', coalesce((SELECT verified FROM streaks WHERE name = 'rolling'), false)
         AND NOT EXISTS(SELECT 1 FROM orders WHERE (state = 'settled' AND booked_at IS NULL) OR state = 'unknown'),
-    'windows', (SELECT jsonb_agg(to_jsonb(c) - 'streak_account' - 'streak_currency' ORDER BY ordinal) FROM classified c),
+    'windows', (SELECT jsonb_agg(to_jsonb(c) - ARRAY['streak_account', 'streak_provider_identity', 'streak_currency']
+        ORDER BY ordinal) FROM classified c),
     'settled_without_time', (SELECT count(*) FROM orders WHERE state = 'settled' AND booked_at IS NULL),
     'pending_total', (SELECT count(*) FROM orders WHERE state IN ('submitting','unknown','accepted')),
     'unknown_total', (SELECT count(*) FROM orders WHERE state = 'unknown'),
