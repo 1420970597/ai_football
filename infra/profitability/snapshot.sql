@@ -98,5 +98,14 @@ SELECT jsonb_build_object(
     'pending_total', (SELECT count(*) FROM orders WHERE state IN ('submitting','unknown','accepted')),
     'unknown_total', (SELECT count(*) FROM orders WHERE state = 'unknown'),
     'last_48h_by_contract', coalesce((SELECT jsonb_agg(to_jsonb(d) ORDER BY provider_net NULLS LAST) FROM diagnostic d), '[]')
-) FROM bounds;
+) AS snapshot FROM bounds
+\if :{?watch_mode}
+\gset
+SELECT coalesce(max((item->>'ordinal')::integer), -1)
+FROM jsonb_array_elements(:'snapshot'::jsonb->'windows') AS windows(item)
+WHERE (item->>'closed')::boolean;
+SELECT :'snapshot'::jsonb;
+\else
+;
+\endif
 ROLLBACK;
