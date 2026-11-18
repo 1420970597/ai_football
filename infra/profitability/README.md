@@ -19,3 +19,9 @@ For each settled order the monitor compares the projection to the latest stored 
 # Execution price diagnostic
 
 Run `execution_quality.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v anchor=<UTC event boundary>` using authorized read access to the order, signal, settlement and quote records. It emits the preceding 48-hour baseline and up to the first 48 hours after the anchor. It keeps all settled orders in the totals. The price comparison uses the preflight record for the actual execution attempt. The recommendation comparison uses matching contract fields and accepts a live basis resolved in the matching settlement record under a verified Leyu rule. The verified remaining-period rule also requires agreement between the recommendation, preflight, and submitted score baseline. Reconstructed results are diagnostic and do not count toward the real profitability target.
+
+# Fixture exposure replay
+
+Run `fixture_exposure.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC start> -v split=<UTC cohort boundary> -v end=<UTC end> -v observed=<UTC receipt cutoff>` using read access to orders, expert signals and receipts. The replay compares no cap with a cap of one or two open fills per fixture for new automatic orders. All sports and markets are included. Manual and pre-period fills remain in the exposure. A fill releases its slot once its first settled receipt was observable. Fills with no such receipt stay open at the evidence cutoff.
+
+Inspect coverage, tied timestamps and unresolved outcomes before interpreting the figures. The aggregate requires a single account binding and rejects mixed known currencies or incomplete fill evidence. Missing fee or currency fields are counted separately from receipt net. The counterfactual reuses existing fills and misses rejected or unsubmitted opportunities, rescheduled orders, and changes to remaining account budget. Treat the output as a concentration diagnostic.
