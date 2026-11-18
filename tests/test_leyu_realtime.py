@@ -69,6 +69,12 @@ class RealtimeProtocolTests(unittest.TestCase):
             push_events({"code": "0401015"})
         self.assertNotIsInstance(raised.exception, AuthExpired)
 
+    def test_live_phase_push_retains_native_half_and_clock(self):
+        event = push_events({'cmd': 'C102', 'cd': {'mid': '1', 'ms': 1, 'mmp': '7', 'mst': '2832'}})[0]
+        self.assertEqual({'phase': 'live', 'match_state': '7', 'clock_minute': 47}, event['fixture_patch'])
+        unknown = push_events({'cmd': 'C102', 'cd': {'mid': '1', 'ms': 1, 'mmp': 'new'}})[0]
+        self.assertEqual({'phase': 'live'}, unknown['fixture_patch'])
+
 
 class RealtimeLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_http_403_handshake_backs_off_and_keeps_collector_alive(self):

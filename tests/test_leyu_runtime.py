@@ -240,6 +240,37 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     def test_unknown_fixture_requires_resync(self):
         self.assertEqual(([], True), self.runtime.apply_push([{"fixture_id": "leyu:missing"}]))
 
+    async def test_collection_only_defers_for_new_upstream_limits(self):
+        deferred = []
+        self.runtime.request_budget = SimpleNamespace(require_available=lambda: None, defer_requests=deferred.append)
+        for category in ('shared_upstream_cooldown', 'upstream_rate_limited'):
+            error = RateLimited(category, retry_after_seconds=75)
+            with self.subTest(category=category), patch.object(self.runtime, '_collect', side_effect=error):
+                with self.assertRaises(RateLimited):
+                    await self.runtime.collect()
+        self.assertEqual([75], deferred)
+
+    def test_receipt_time_only_advances_for_accepted_fixture_patch(self):
+        received = '2026-01-01T12:00:01+00:00'
+        fixture = {'id': 'leyu:1', 'phase': 'live', 'match_state': '6', 'received_at': received,
+                   'source_updated_at': '2026-01-01T12:00:00+00:00', 'markets': []}
+        self.runtime.fixtures = {fixture['id']: fixture}
+        quote = {'market_id': '4', 'period': 'full_time', 'line': '-.5', 'selection': 'home', 'price': '2.0',
+                 'status': 'active', 'status_evidence': True, 'source_updated_at': '2026-01-01T12:01:00+00:00'}
+        later = {'fixture_id': fixture['id'], 'received_at': '2026-01-01T12:01:01+00:00'}
+        changed, resync = self.runtime.apply_push([dict(later, markets=[quote])])
+        self.assertFalse(resync)
+        self.assertEqual(received, changed[0]['received_at'])
+        self.assertEqual(quote['source_updated_at'], changed[0]['markets'][0]['source_updated_at'])
+
+        patch = {'match_state': '7'}
+        stale = dict(later, fixture_patch=patch, source_updated_at='2026-01-01T11:59:00+00:00')
+        self.assertEqual(([], False), self.runtime.apply_push([stale]))
+        self.assertEqual(('6', received), (fixture['match_state'], fixture['received_at']))
+        fresh = dict(later, fixture_patch=patch, source_updated_at='2026-01-01T12:01:00+00:00')
+        changed, _ = self.runtime.apply_push([fresh])
+        self.assertEqual(('7', later['received_at']), (changed[0]['match_state'], changed[0]['received_at']))
+
 
 if __name__ == "__main__":
     unittest.main()

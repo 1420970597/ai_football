@@ -154,7 +154,8 @@ class LeyuRuntime:
             try:
                 result = await self._collect(odds_mids=odds_mids)
             except RateLimited as exc:
-                self.request_budget.defer_requests(max(60, exc.retry_after_seconds or 0))
+                if exc.category != 'shared_upstream_cooldown':
+                    self.request_budget.defer_requests(max(60, exc.retry_after_seconds or 0))
                 raise
             except LeyuError:
                 self.request_budget.defer_requests(2)
@@ -295,9 +296,11 @@ class LeyuRuntime:
             source_time = event.get("source_updated_at")
             old_source_time = current.get("source_updated_at")
             patch = event.get("fixture_patch") or {}
-            if patch and (not old_source_time or (source_time and source_time >= old_source_time)):
+            patch_applied = bool(patch and (not old_source_time or (source_time and source_time >= old_source_time)))
+            if patch_applied:
                 current.update(patch)
-                current.update(source_updated_at=source_time, source_time_quality="known" if source_time else "unknown")
+                current.update(source_updated_at=source_time, source_time_quality="known" if source_time else "unknown",
+                               received_at=event.get("received_at") or current.get("received_at"))
             changed = []
             indexed = {self._market_key(quote): quote for quote in current.get("markets", [])}
             for quote in event.get("markets", []):
@@ -326,8 +329,7 @@ class LeyuRuntime:
                 self._market_push_revisions[(identity, key)] = self._push_revision
                 changed.append(merged)
             current["markets"] = list(indexed.values())
-            current["received_at"] = event.get("received_at") or current.get("received_at")
-            if changed or patch:
+            if changed or patch_applied:
                 output = affected.setdefault(identity, {**deepcopy(current), "markets": [], "markets_complete": False})
                 output.update({key: value for key, value in current.items() if key != "markets"})
                 output["markets_complete"] = False

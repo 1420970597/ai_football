@@ -19,7 +19,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from .leyu import LeyuClient, retry_after_seconds
 from .leyu_health import ThresholdAlert
-from .leyu_protocol import AUTH_CODES, SUCCESS_CODES, AuthExpired, LeyuError, RateLimited, decode_envelope, decode_payload, objects, parse_quotes, phase_for, score, timestamp
+from .leyu_protocol import AUTH_CODES, SUCCESS_CODES, AuthExpired, LeyuError, RateLimited, clock_minute, decode_envelope, decode_payload, objects, parse_quotes, phase_for, score, timestamp
 
 HEARTBEAT_SECONDS = 5.0
 HEARTBEAT_DEADLINE_SECONDS = 12.0
@@ -162,6 +162,12 @@ def push_events(message: Any, *, received_at: datetime | None = None) -> list[di
                         patch[prefix + "home_score"], patch[prefix + "away_score"] = home, away
             if str(row.get("ms", "")) in {"0", "1", "3"} or str(row.get("mmp", "")) == "999":
                 patch["phase"] = phase_for(row)
+                native_stage = str(row.get("mmp", ""))
+                if patch["phase"] == "live" and native_stage in {"6", "7"}:
+                    patch["match_state"] = native_stage
+                    minute = clock_minute(row, patch["phase"])
+                    if minute is not None:
+                        patch["clock_minute"] = minute
             event["fixture_patch"] = patch
             if not patch:
                 event["requires_resync"] = True
