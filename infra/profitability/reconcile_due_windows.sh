@@ -69,19 +69,20 @@ import sys
 import tarfile
 
 with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as archive:
-    first_incomplete = None
+    first_unmatched = None
     for entry in archive:
-        if first_incomplete is not None:
+        if first_unmatched is not None:
             continue
         try:
             report = json.load(archive.extractfile(entry))
         except (ValueError, UnicodeError):
             report = None
         if not (isinstance(report, list) and len(report) == 1
-                and isinstance(report[0], dict) and report[0].get("complete_page") is True):
-            first_incomplete = entry.name.removesuffix(".json")
-    if first_incomplete is not None:
-        print(first_incomplete)
+                and isinstance(report[0], dict) and report[0].get("complete_page") is True
+                and report[0].get("local_only") == report[0].get("upstream_only") == 0):
+            first_unmatched = entry.name.removesuffix(".json")
+    if first_unmatched is not None:
+        print(first_unmatched)
 ')
     suffix=.retry.json
 fi

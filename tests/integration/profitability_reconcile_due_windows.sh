@@ -64,7 +64,7 @@ test ! -e state/0.retry.json
 test -z "$(find state -name '.rolling.??????' -print)"
 cmp state/0.json original
 export test_fail=0
-export test_report='[{"complete_page": true, "order_receipt_fields_reconciled": false}]'
+export test_report='[{"complete_page": true, "order_receipt_fields_reconciled": false, "local_only": 0, "upstream_only": 0, "issues": {"missing_currency": 1, "missing_fees": 1}}]'
 run
 test "$(stat -c %a state/0.retry.json)" = 600
 cmp state/0.json original
@@ -94,4 +94,23 @@ test -s state/4.json
 test -s state/4.wallet.json
 run
 test "$(wc -l < calls)" = 6
+
+# A complete scan with a different order list gets one retry in either direction.
+for direction in local_only upstream_only; do
+    if [ "$direction" = local_only ]; then
+        export test_report='[{"complete_page": true, "local_only": 1, "upstream_only": 0}]'
+        ordinal=5
+    else
+        export test_report='[{"complete_page": true, "local_only": 0, "upstream_only": 1}]'
+        ordinal=6
+    fi
+    export test_now=$((base + (ordinal + 1) * window_us + delay_us))
+    run
+    cp "state/$ordinal.json" original
+    run
+    cmp "state/$ordinal.json" original
+    test -s "state/$ordinal.retry.json"
+    run
+    test "$(wc -l < calls)" = "$((6 + 2 * (ordinal - 4)))"
+done
 printf '%s\n' 'Reconciliation scheduling checks passed.'
