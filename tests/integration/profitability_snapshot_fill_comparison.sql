@@ -7,7 +7,8 @@ CREATE TABLE v2_expert_signals (
 CREATE TABLE v2_bet_orders (
     id integer PRIMARY KEY, attempt_id integer, signal_id integer, provider_order_no text,
     provider_placed_at timestamptz, provider_price numeric, settled_net numeric, provider_fees numeric,
-    provider_currency text, account_id integer, provider_identity_hash text, state text, provider_stake numeric
+    provider_currency text, account_id integer, provider_identity_hash text, state text, provider_stake numeric,
+    manual boolean NOT NULL DEFAULT false
 );
 CREATE TABLE v2_quote_evidence (
     id integer PRIMARY KEY, reference_id integer, fixture_id text, market_id text, period text,
@@ -26,7 +27,8 @@ SELECT n, CASE WHEN n=5 THEN 'other:123' ELSE 'leyu:123' END, 'live', 'total',
 FROM generate_series(1,12) n;
 
 INSERT INTO v2_bet_orders
-SELECT id, id, id, id::text, created_at + interval '10 seconds', 2.10, 5.50, NULL, NULL, 1, 'same', 'settled', 5.00
+SELECT id, id, id, id::text, created_at + interval '10 seconds', 2.10, 5.50, NULL, NULL, 1, 'same', 'settled', 5.00,
+       id=6
 FROM v2_expert_signals;
 
 INSERT INTO v2_quote_evidence

@@ -83,6 +83,8 @@ The `price_exclusions` rows count the first failed evidence check for each nonco
 
 `preflight_outcomes` groups comparable fills by whether the preflight price was above, equal to, or below the recommendation price. It includes each phase and all phases combined. The observed return uses orders with both settled receipt net and positive provider stake. The report counts pending and incomplete-cost evidence separately. Monetary totals require one valid binding and at most one known currency within the group.
 
+Use `-v end=<exclusive UTC recommendation cutoff>` for a fixed cohort. The report takes order states at the actual observation time. Keep the time-stamped reports to compare how the same cohort settles. `automatic_preflight_outcomes` applies the same checks to automatic fills. Both reports count distinct fixtures with a usable settlement amount within each bucket. A fixture can occur in several buckets.
+
 # Recommendation opportunity coverage
 
 Run `opportunity_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to count all saved recommendations alongside the recorded automatic order states for the unique ledger account binding. Counts use the recommendation as the unit, including withdrawn recommendations and those with no automatic order. Manual orders do not contribute to automatic order states. An absent order does not identify why execution did not occur, or whether the recommendation was eligible at the time.

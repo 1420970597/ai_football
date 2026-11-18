@@ -1,9 +1,14 @@
 -- Compare natural fills to the retained recommendation-time price set.
+\if :{?end}
+\else
+\set end ''
+\endif
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 WITH bounds AS (
-    SELECT :'begin'::timestamptz AS begin_at, now() AS observed_at
+    SELECT :'begin'::timestamptz AS begin_at, now() AS observed_at,
+           least(now(), nullif(:'end','')::timestamptz) AS end_at
 ), fills AS (
-    SELECT f.sport,s.phase,s.market_kind,s.period,o.state,o.provider_price AS fill_price,
+    SELECT f.sport,s.phase,s.market_kind,s.period,s.fixture_id,o.manual,o.state,o.provider_price AS fill_price,
            p.price AS preflight_price,s.recommendation_price,
            e.id IS NOT NULL AS has_snapshot, p.id IS NOT NULL AS has_preflight,
            p.fixture_id = s.fixture_id AND p.market_id = s.market_id AND p.period = s.period
@@ -73,7 +78,7 @@ WITH bounds AS (
           AND q.captured_at BETWEEN s.created_at AND o.provider_placed_at
         ORDER BY q.captured_at DESC, q.id DESC LIMIT 1
     ) p ON true
-    WHERE s.created_at >= b.begin_at AND s.created_at < b.observed_at
+    WHERE s.created_at >= b.begin_at AND s.created_at < b.end_at
       AND o.provider_order_no IS NOT NULL AND o.state IN ('accepted','settled')
 ), classified AS (
     SELECT *, CASE
@@ -97,13 +102,16 @@ WITH bounds AS (
 ), price_direction AS (
     SELECT phase, CASE WHEN preflight_price > recommendation_price THEN 'higher'
                        WHEN preflight_price < recommendation_price THEN 'lower' ELSE 'equal' END AS direction,
-           settled_net, provider_stake, provider_fees, provider_currency, account_id, provider_identity_hash, state
+           fixture_id, manual, settled_net, provider_stake, provider_fees, provider_currency,
+           account_id, provider_identity_hash, state
     FROM compared WHERE comparable
 ), preflight_outcomes AS (
-    SELECT CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase, direction,
+    SELECT CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase, direction, automatic_only,
            count(*) AS fills, count(*) FILTER (WHERE state='settled') AS settled,
            count(*) FILTER (WHERE state='accepted') AS pending,
            count(*) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0) AS with_amounts,
+           count(DISTINCT fixture_id) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0)
+               AS settled_fixtures_with_amounts,
            count(*) FILTER (WHERE state='settled' AND (provider_fees IS NULL OR provider_currency IS NULL)) AS missing_cost_fields,
            CASE WHEN count(DISTINCT (account_id, provider_identity_hash))=1
                      AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
@@ -116,7 +124,13 @@ WITH bounds AS (
                 THEN sum(settled_net) FILTER (WHERE state='settled' AND settled_net IS NOT NULL AND provider_stake > 0)
            END AS receipt_net
     FROM price_direction
-    GROUP BY direction, GROUPING SETS ((), (phase))
+    CROSS JOIN (VALUES (false), (true)) AS scope(automatic_only)
+    WHERE NOT automatic_only OR manual IS FALSE
+    GROUP BY direction, automatic_only, GROUPING SETS ((), (phase))
+), preflight_results AS (
+    SELECT automatic_only, phase, direction, to_jsonb(p) - 'automatic_only' ||
+           jsonb_build_object('receipt_roi_percent',round(100 * receipt_net / nullif(settled_stake,0),2)) AS data
+    FROM preflight_outcomes p
 ), summary AS (
     SELECT sport,phase,market_kind,period,grouping(sport,phase,market_kind,period)=15 AS all_markets,
            count(*) AS fills,count(*) FILTER(WHERE state='settled') AS settled,
@@ -148,8 +162,9 @@ SELECT jsonb_build_object('bounds',to_jsonb(b),
         FROM summary s),
     'price_exclusions',coalesce((SELECT jsonb_agg(to_jsonb(e) ORDER BY sport,phase,market_kind,period,exclusion)
         FROM exclusions e),'[]'::jsonb),
-    'preflight_outcomes',coalesce((SELECT jsonb_agg(to_jsonb(p) ||
-        jsonb_build_object('receipt_roi_percent',round(100 * receipt_net / nullif(settled_stake,0),2))
-        ORDER BY phase,direction) FROM preflight_outcomes p),'[]'::jsonb)
+    'preflight_outcomes',coalesce((SELECT jsonb_agg(data ORDER BY phase,direction)
+        FROM preflight_results WHERE NOT automatic_only),'[]'::jsonb),
+    'automatic_preflight_outcomes',coalesce((SELECT jsonb_agg(data ORDER BY phase,direction)
+        FROM preflight_results WHERE automatic_only),'[]'::jsonb)
 ) FROM bounds b;
 ROLLBACK;
