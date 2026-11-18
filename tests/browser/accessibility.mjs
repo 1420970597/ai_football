@@ -345,6 +345,7 @@ export async function runAudit({ setup, id, caught, evidence }) {
         await page.waitForSelector(".media-gallery img");
         await scan(page, label + "-original-dialog");
         await page.keyboard.press("Escape");
+        await page.waitForURL((url) => url.hash === "#messages");
       }
       if (name === "account" && mobile)
         await check("390 手机管理入口尺寸与键盘可用", async () => {

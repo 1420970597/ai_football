@@ -1,5 +1,5 @@
-/* Hallmark · v2.0.0 · redesign: full · genre: modern-minimal · theme: Wayfind · shape: app screen · signature: match score and evidence ledger · wayfind: platform */
-/* Critique · Keep the fixture list visible beside the filters. Give repeated rows the rhythm of a timetable. */
+/* Hallmark · v2.0.0 · redesign: full · genre: editorial · theme: Sport · shape: app screen · poster: Stat-Led · signature: fixture results sheet */
+/* Hallmark · pre-emit critique: P4 H5 E4 S5 R4 V5 · weakest: R, keep the stadium poster short so coverage and filters remain visible. */
 /* Hallmark · waive 24b · score rows tested against 45px on desktop and 80px on phones · Match row padding follows the density budget on these layouts. */
 /* Hallmark · waive 39b · score favorites satisfy the target size or spacing audit · An inline favorite stays adjacent to its league in the match table. */
 /* Hallmark · waive 75 · only secondary values in the score and expert rails · Small rank and footnote text keeps primary score and team text at a distinct size. */
@@ -7,12 +7,23 @@
 /* Hallmark · reworded "专家榜 更多 ›" to "专家榜 查看全部" · 63 removes the appended arrow. */
 /* Hallmark · reworded "原文、盘口、收益 一处完整回查" to "球讯会员" · The rail leads with the service name and its existing action. */
 /* Hallmark · dropped home_match_vs_icon.png · The third-party asset is replaced by a text VS marker. */
+/* Hallmark · dropped 赛事中心 · Score navigation moved into the poster and results filters. */
+/* Hallmark · dropped 专家服务 · Service destinations moved to the footer and expert index. */
+@import url("./sport/tokens.css");
+
+@font-face {
+  font-family: "Saira Condensed";
+  src: url("./sport/saira-condensed-800.woff2") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
 :root {
-  --accent: #204fd6;
-  --accent-hover: #163ba6;
-  --accent-soft: #eaf0ff;
-  --accent-rule: #abbaf3;
-  --amber: #ffd476;
+  --accent: #354c12;
+  --accent-hover: #243707;
+  --accent-soft: #eaf2d7;
+  --accent-rule: #97ac71;
+  --amber: var(--color-accent);
   --amber-text: #75490d;
   --amber-soft: #fff4dc;
   --amber-rule: #dfc48f;
@@ -21,24 +32,25 @@
   --red-rule: #eac4c7;
   --green: #146443;
   --green-soft: #eaf5ee;
-  --ink: #171d27;
-  --ink-raised: #242d3b;
+  --ink: #101523;
+  --ink-raised: #20283d;
   --ink-hover: #303b4b;
   --ink-rule: #465367;
   --on-ink-muted: #c6cfdd;
   --muted: #505d6e;
-  --line: #d5dde7;
+  --line: #ccd4dc;
   --control-line: #738196;
-  --paper: #fff;
-  --background: #f0f2f5;
-  --surface: #f7f9fc;
-  --shade: #e7ebf1;
+  --paper: #fcfdfe;
+  --background: #f2f5f7;
+  --surface: #edf1f4;
+  --shade: #e1e7ed;
   --backdrop: #11192590;
   --shadow: #171d2726;
   --shadow-subtle: #171d270a;
-  --font-body: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
-  --font-data: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --gutter: 24px;
+  --font-data: var(--font-outlier);
+  --cover-scrim: #080e1de8;
+  --cover-edge: #080e1d19;
+  --gutter: 32px;
   --radius: 4px;
   font: 14px/1.55 var(--font-body);
   font-variant-numeric: tabular-nums;
@@ -123,10 +135,10 @@ h3 {
 }
 .utility-bar button {
   font-size: 12px;
-  margin-left: 12px;
+  margin-left: var(--space-sm);
 }
 .utility-bar #header-clock {
-  margin-right: 12px;
+  margin-right: var(--space-sm);
 }
 .site-header {
   position: sticky;
@@ -177,13 +189,13 @@ h3 {
   background: var(--ink-raised);
   border: 1px solid var(--accent-rule);
   border-radius: 3px;
-  padding: 7px 12px;
+  padding: 7px var(--space-sm);
   white-space: nowrap;
 }
 .main-layout {
   display: grid;
   grid-template-columns: 135px minmax(0, 1fr) 220px;
-  gap: 12px;
+  gap: var(--space-sm);
   margin-top: 14px;
   align-items: start;
 }
@@ -193,7 +205,7 @@ h3 {
   font-size: 13px;
 }
 .left-rail h2 {
-  padding: 10px 12px;
+  padding: 10px var(--space-sm);
   font-size: 13px;
   background: var(--accent-soft);
   border-bottom: 1px solid var(--line);
@@ -202,7 +214,7 @@ h3 {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 9px 12px;
+  padding: 9px var(--space-sm);
   border-bottom: 1px solid var(--line);
 }
 .left-rail button:hover,
@@ -219,7 +231,7 @@ h3 {
 .rail-note {
   font-size: 11px;
   color: var(--muted);
-  padding: 16px 10px;
+  padding: var(--space-md) 10px;
   line-height: 1.9;
 }
 .content-column {
@@ -266,7 +278,7 @@ h3 {
   display: flex;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
-  padding: 0 12px;
+  padding: 0 var(--space-sm);
   align-items: center;
 }
 .sports-bar button {
@@ -304,8 +316,8 @@ h3 {
 }
 .date-strip {
   display: flex;
-  padding: 9px 8px;
-  gap: 4px;
+  padding: 9px var(--space-xs);
+  gap: var(--space-2xs);
   border-bottom: 1px solid var(--line);
   align-items: center;
   background: var(--surface);
@@ -322,7 +334,7 @@ h3 {
 }
 .date-strip #date-buttons button {
   font-size: 12px;
-  padding: 4px 6px;
+  padding: var(--space-2xs) 6px;
   border-radius: 3px;
 }
 .date-strip #date-buttons button small {
@@ -349,8 +361,8 @@ h3 {
 .filter-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 9px 12px;
+  gap: var(--space-xs);
+  padding: 9px var(--space-sm);
   border-bottom: 1px solid var(--line);
   font-size: 12px;
 }
@@ -360,7 +372,7 @@ h3 {
   padding: 5px;
 }
 .filter-row input {
-  padding: 5px 25px 5px 8px;
+  padding: 5px 25px 5px var(--space-xs);
   min-width: 0;
   font-size: 12px;
 }
@@ -409,7 +421,7 @@ h3 {
   background: var(--accent-soft);
 }
 .match-league {
-  padding: 0 4px;
+  padding: 0 var(--space-2xs);
   line-height: 1.35;
   font-size: 11px;
   word-break: break-word;
@@ -441,7 +453,7 @@ h3 {
 }
 .team-button {
   font-size: 12px;
-  padding: 8px 3px;
+  padding: var(--space-xs) 3px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -480,7 +492,7 @@ h3 {
 .match-odds {
   display: flex;
   justify-content: center;
-  gap: 4px;
+  gap: var(--space-2xs);
   font-size: 10px;
   flex-wrap: wrap;
   padding: 3px;
@@ -505,19 +517,19 @@ h3 {
 .detail-button {
   color: var(--accent);
   font-size: 11px;
-  padding: 6px 2px;
+  padding: 6px var(--space-3xs);
 }
 .data-footnote {
   font-size: 11px;
   line-height: 1.8;
   color: var(--muted);
-  padding: 12px;
+  padding: var(--space-sm);
 }
 .notice {
   background: var(--amber-soft);
   color: var(--amber-text);
   border-bottom: 1px solid var(--amber-soft);
-  padding: 10px 12px;
+  padding: 10px var(--space-sm);
   font-size: 12px;
 }
 .notice::before {
@@ -537,7 +549,7 @@ h3 {
   border-color: var(--red-rule);
 }
 .empty-state {
-  padding: 55px 16px;
+  padding: 55px var(--space-md);
   text-align: center;
   color: var(--muted);
   font-size: 13px;
@@ -555,7 +567,7 @@ h3 {
 .skeleton-row {
   height: 54px;
   border-bottom: 1px solid var(--line);
-  padding: 16px 15px;
+  padding: var(--space-md) 15px;
 }
 .skeleton-row::after {
   content: "";
@@ -584,8 +596,8 @@ h3 {
 .side-panel {
   background: var(--paper);
   border: 1px solid var(--line);
-  margin-bottom: 12px;
-  padding: 12px;
+  margin-bottom: var(--space-sm);
+  padding: var(--space-sm);
   font-size: 12px;
 }
 .side-panel h2 {
@@ -602,7 +614,7 @@ h3 {
 .side-expert {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-xs);
   padding: 11px 0;
   border-bottom: 1px dashed var(--line);
   cursor: pointer;
@@ -640,11 +652,11 @@ h3 {
   padding: 18px 14px;
   color: var(--accent);
   border: 1px solid var(--accent-rule);
-  margin-bottom: 12px;
+  margin-bottom: var(--space-sm);
   background: linear-gradient(135deg, var(--accent-soft), var(--accent-soft));
 }
 .side-member h2 {
-  margin: 8px 0 15px;
+  margin: var(--space-xs) 0 15px;
   font-size: 18px;
   line-height: 1.7;
 }
@@ -652,7 +664,7 @@ h3 {
   background: var(--accent);
   color: var(--paper);
   border-radius: 3px;
-  padding: 7px 12px;
+  padding: 7px var(--space-sm);
   font-size: 12px;
 }
 .side-panel p {
@@ -664,7 +676,7 @@ h3 {
   font-size: 12px;
 }
 .stat-help {
-  padding: 12px 15px;
+  padding: var(--space-sm) 15px;
   background: var(--amber-soft);
   color: var(--amber-text);
   font-size: 12px;
@@ -683,13 +695,13 @@ h3 {
   align-items: center;
 }
 .expert-table-head {
-  padding: 8px 12px;
+  padding: var(--space-xs) var(--space-sm);
   font-size: 11px;
   color: var(--muted);
   background: var(--shade);
 }
 .expert-row {
-  padding: 14px 12px;
+  padding: 14px var(--space-sm);
   border-bottom: 1px solid var(--line);
   font-size: 13px;
 }
@@ -748,8 +760,8 @@ h3 {
 }
 .message-media-preview {
   display: flex;
-  gap: 8px;
-  margin: 8px 0 10px;
+  gap: var(--space-xs);
+  margin: var(--space-xs) 0 10px;
   min-height: 0;
 }
 .message-thumbnail {
@@ -772,10 +784,10 @@ h3 {
 .message-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-xs);
   color: var(--muted);
   font-size: 11px;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-xs);
   flex-wrap: wrap;
 }
 .signal-meta button,
@@ -812,7 +824,7 @@ h3 {
 .signal-actions {
   display: flex;
   gap: 15px;
-  margin-top: 8px;
+  margin-top: var(--space-xs);
 }
 .badge {
   display: inline-block;
@@ -876,7 +888,7 @@ h3 {
 .member-hero h1 {
   font-size: 25px;
   line-height: 1.7;
-  margin: 8px 0;
+  margin: var(--space-xs) 0;
 }
 .member-hero p {
   font-size: 12px;
@@ -891,14 +903,14 @@ h3 {
 .plans-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-sm);
   padding: 20px 15px;
 }
 .plan-card {
   border: 1px solid var(--amber-rule);
   background: var(--amber-soft);
   border-radius: 5px;
-  padding: 18px 12px;
+  padding: 18px var(--space-sm);
   position: relative;
 }
 .plan-card h3 {
@@ -909,7 +921,7 @@ h3 {
   color: var(--amber-text);
   font-size: 27px;
   font-weight: bold;
-  margin: 12px 0 2px;
+  margin: var(--space-sm) 0 var(--space-3xs);
 }
 .plan-price small {
   font-size: 12px;
@@ -920,7 +932,7 @@ h3 {
   color: var(--amber-text);
 }
 .plan-card ul {
-  padding-left: 16px;
+  padding-left: var(--space-md);
   font-size: 11px;
   color: var(--amber-text);
   line-height: 1.9;
@@ -950,21 +962,21 @@ h3 {
 }
 .benefit-grid h3 {
   font-size: 13px;
-  margin: 8px;
+  margin: var(--space-xs);
 }
 .benefit-grid p {
   color: var(--muted);
   font-size: 11px;
 }
 .payment-note {
-  padding: 16px;
+  padding: var(--space-md);
   font-size: 12px;
   line-height: 1.8;
   color: var(--amber-text);
   background: var(--amber-soft);
 }
 .identity-card {
-  margin: 16px;
+  margin: var(--space-md);
   padding: 20px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -978,7 +990,7 @@ h3 {
   line-height: 1.9;
 }
 .identity-card button {
-  margin-top: 12px;
+  margin-top: var(--space-sm);
 }
 .settings-section {
   border: 1px solid var(--line);
@@ -986,7 +998,7 @@ h3 {
   background: var(--paper);
 }
 .settings-section > summary {
-  padding: 12px 14px;
+  padding: var(--space-sm) 14px;
   font-size: 14px;
   background: var(--surface);
   cursor: pointer;
@@ -1002,13 +1014,13 @@ h3 {
   font-size: 11px;
   color: var(--muted);
   font-weight: normal;
-  margin-left: 8px;
+  margin-left: var(--space-xs);
 }
 .compact-form {
-  padding: 16px;
+  padding: var(--space-md);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-sm);
   font-size: 13px;
 }
 .compact-form label {
@@ -1027,7 +1039,7 @@ textarea {
   border-radius: 3px;
   background: var(--paper);
   color: var(--ink);
-  padding: 8px 9px;
+  padding: var(--space-xs) 9px;
   min-width: 0;
   max-width: 100%;
   width: 100%;
@@ -1048,7 +1060,7 @@ textarea {
   background: var(--accent);
   color: var(--paper);
   border-radius: 3px;
-  padding: 8px 16px;
+  padding: var(--space-xs) var(--space-md);
   font-size: 13px;
 }
 .primary-button:hover {
@@ -1058,13 +1070,13 @@ textarea {
   border: 1px solid var(--red-rule);
   color: var(--red);
   border-radius: 3px;
-  padding: 7px 12px;
+  padding: 7px var(--space-sm);
   font-size: 12px;
 }
 .danger-button {
   background: var(--red);
   color: var(--paper);
-  padding: 9px 16px;
+  padding: 9px var(--space-md);
   border-radius: 3px;
   font-size: 13px;
 }
@@ -1088,7 +1100,7 @@ textarea {
 .form-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-xs);
   flex-wrap: wrap;
   padding: 10px 14px;
 }
@@ -1098,11 +1110,11 @@ textarea {
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--space-sm);
 }
 fieldset {
   border: 1px solid var(--line);
-  padding: 12px;
+  padding: var(--space-sm);
 }
 legend {
   color: var(--muted);
@@ -1131,7 +1143,7 @@ legend {
 }
 .admin-tabs button {
   white-space: nowrap;
-  padding: 12px 13px;
+  padding: var(--space-sm) 13px;
   font-size: 12px;
 }
 .admin-tabs button.active {
@@ -1144,7 +1156,7 @@ legend {
   padding: 15px;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--space-sm);
 }
 .status-card {
   border: 1px solid var(--line);
@@ -1169,7 +1181,7 @@ legend {
   grid-template-columns: 1fr 1fr;
 }
 .source-layout > div {
-  padding: 12px;
+  padding: var(--space-sm);
   min-width: 0;
 }
 .source-layout > div + div {
@@ -1178,11 +1190,11 @@ legend {
 .source-layout label {
   display: block;
   font-size: 12px;
-  margin: 8px 0;
+  margin: var(--space-xs) 0;
   color: var(--muted);
 }
 .source-layout .compact-form {
-  padding: 12px 0;
+  padding: var(--space-sm) 0;
 }
 .source-item {
   padding: 9px 0;
@@ -1211,13 +1223,13 @@ legend {
   height: 190px;
   display: block;
   background: var(--paper);
-  padding: 8px;
+  padding: var(--space-xs);
   border: 1px solid var(--line);
 }
 #telegram-status,
 #source-state,
 #betting-status {
-  padding: 12px 14px;
+  padding: var(--space-sm) 14px;
   font-size: 12px;
   line-height: 1.8;
 }
@@ -1231,15 +1243,15 @@ legend {
 }
 .inline-form {
   display: flex;
-  gap: 8px;
+  gap: var(--space-xs);
   padding: 14px;
 }
 .inline-form input {
   flex: 1;
 }
 .admin-record {
-  margin: 12px;
-  padding: 12px;
+  margin: var(--space-sm);
+  padding: var(--space-sm);
   border: 1px solid var(--line);
   font-size: 12px;
   line-height: 1.8;
@@ -1256,7 +1268,7 @@ legend {
   overflow-wrap: anywhere;
 }
 .site-footer {
-  padding: 24px 0 35px;
+  padding: var(--space-lg) 0 35px;
   color: var(--muted);
   font-size: 11px;
   text-align: center;
@@ -1363,12 +1375,12 @@ dialog::backdrop {
   font-size: 12px;
 }
 .detail-section {
-  padding: 16px;
+  padding: var(--space-md);
 }
 .detail-section h3 {
   border-left: 3px solid var(--accent);
-  padding-left: 8px;
-  margin-bottom: 12px;
+  padding-left: var(--space-xs);
+  margin-bottom: var(--space-sm);
 }
 .market-table {
   width: 100%;
@@ -1383,7 +1395,7 @@ dialog::backdrop {
 }
 .market-table th,
 .market-table td {
-  padding: 9px 8px;
+  padding: 9px var(--space-xs);
   border: 1px solid var(--line);
 }
 .market-table small {
@@ -1441,11 +1453,11 @@ dialog::backdrop {
 }
 .trace-block {
   border: 1px solid var(--line);
-  margin: 8px 0;
+  margin: var(--space-xs) 0;
   font-size: 12px;
 }
 .trace-block summary {
-  padding: 8px;
+  padding: var(--space-xs);
   background: var(--surface);
   cursor: pointer;
 }
@@ -1453,7 +1465,7 @@ dialog::backdrop {
   font: 11px/1.7 monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  padding: 12px;
+  padding: var(--space-sm);
   max-height: 330px;
   overflow: auto;
 }
@@ -1461,7 +1473,7 @@ dialog::backdrop {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
-  margin: 12px 0;
+  margin: var(--space-sm) 0;
 }
 .expert-identity {
   display: flex;
@@ -1486,7 +1498,7 @@ dialog::backdrop {
   background: var(--accent-soft);
 }
 .metrics-grid > div {
-  padding: 12px 8px;
+  padding: var(--space-sm) var(--space-xs);
   background: var(--surface);
   text-align: center;
 }
@@ -1535,14 +1547,14 @@ dialog::backdrop {
 }
 @media (max-width: 1190px) {
   .site-width {
-    margin-left: 12px;
-    margin-right: 12px;
+    margin-left: var(--space-sm);
+    margin-right: var(--space-sm);
   }
   .header-inner {
-    gap: 16px;
+    gap: var(--space-md);
   }
   .main-nav button {
-    padding: 0 12px;
+    padding: 0 var(--space-sm);
   }
   .main-layout {
     grid-template-columns: 120px minmax(0, 1fr) 190px;
@@ -1556,7 +1568,7 @@ dialog::backdrop {
   }
   .match-odds {
     font-size: 9px;
-    gap: 2px;
+    gap: var(--space-3xs);
   }
 }
 @media (max-width: 1030px) {
@@ -1629,7 +1641,7 @@ dialog::backdrop {
     min-height: calc(100dvh - 122px);
   }
   .section-title {
-    padding: 0 12px;
+    padding: 0 var(--space-sm);
     min-height: 43px;
     border-bottom: 1px solid var(--line);
   }
@@ -1641,10 +1653,10 @@ dialog::backdrop {
   }
   .section-title .small-button {
     font-size: 11px;
-    padding: 4px 7px;
+    padding: var(--space-2xs) 7px;
   }
   .sports-bar {
-    padding: 0 12px;
+    padding: 0 var(--space-sm);
     background: var(--accent);
     color: var(--accent-soft);
     justify-content: center;
@@ -1665,10 +1677,10 @@ dialog::backdrop {
   }
   .score-tabs button {
     font-size: 13px;
-    padding: 9px 2px;
+    padding: 9px var(--space-3xs);
   }
   .date-strip {
-    padding: 6px 4px;
+    padding: 6px var(--space-2xs);
   }
   .date-strip #date-buttons button {
     font-size: 11px;
@@ -1680,10 +1692,10 @@ dialog::backdrop {
   .date-select input {
     width: 105px;
     font-size: 10px;
-    padding: 4px 1px;
+    padding: var(--space-2xs) 1px;
   }
   .filter-row {
-    padding: 8px 10px;
+    padding: var(--space-xs) 10px;
     gap: 6px;
   }
   .filter-row select {
@@ -1705,13 +1717,13 @@ dialog::backdrop {
       43px 0 0 minmax(78px, 1fr) 49px minmax(78px, 1fr)
       0 26px;
     min-height: 78px;
-    padding: 16px 4px 4px;
-    row-gap: 2px;
+    padding: var(--space-md) var(--space-2xs) var(--space-2xs);
+    row-gap: var(--space-3xs);
     border-bottom: 1px solid var(--line);
   }
   .match-league {
     font-size: 10px;
-    padding: 0 2px;
+    padding: 0 var(--space-3xs);
     text-align: left;
     color: var(--muted);
   }
@@ -1736,7 +1748,7 @@ dialog::backdrop {
   }
   .team-button {
     font-size: 13px;
-    padding: 6px 2px;
+    padding: 6px var(--space-3xs);
     min-height: 36px;
   }
   .team-home {
@@ -1752,26 +1764,26 @@ dialog::backdrop {
     grid-row: 2;
     display: flex;
     align-items: center;
-    gap: 4px 8px;
+    gap: var(--space-2xs) var(--space-xs);
     min-width: 0;
     padding: 0;
     font-size: 9px;
     line-height: 12px;
   }
   .match-odds span {
-    padding: 0 2px;
+    padding: 0 var(--space-3xs);
     white-space: nowrap;
   }
   .match-odds .detail-button {
     width: auto;
     min-height: 24px;
-    padding: 3px 2px;
+    padding: 3px var(--space-3xs);
   }
   .detail-button {
     font-size: 10px;
   }
   .data-footnote {
-    padding: 12px 10px;
+    padding: var(--space-sm) 10px;
     font-size: 10px;
   }
   .mobile-bottom {
@@ -1795,7 +1807,7 @@ dialog::backdrop {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2px;
+    gap: var(--space-3xs);
   }
   .mobile-bottom button > span {
     font-size: 23px;
@@ -1816,8 +1828,8 @@ dialog::backdrop {
   }
   .expert-row {
     font-size: 12px;
-    padding-top: 12px;
-    padding-bottom: 12px;
+    padding-top: var(--space-sm);
+    padding-bottom: var(--space-sm);
   }
   .expert-name {
     gap: 7px;
@@ -1835,11 +1847,11 @@ dialog::backdrop {
   }
   .stat-help {
     font-size: 11px;
-    padding: 10px 12px;
+    padding: 10px var(--space-sm);
   }
   .signal-card,
   .message-card {
-    padding: 13px 12px;
+    padding: 13px var(--space-sm);
   }
   .signal-match {
     font-size: 13px;
@@ -1861,11 +1873,11 @@ dialog::backdrop {
     font-size: 11px;
   }
   .plans-grid {
-    gap: 8px;
-    padding: 16px 10px;
+    gap: var(--space-xs);
+    padding: var(--space-md) 10px;
   }
   .plan-card {
-    padding: 14px 8px;
+    padding: 14px var(--space-xs);
   }
   .plan-card h3 {
     font-size: 14px;
@@ -1878,7 +1890,7 @@ dialog::backdrop {
   }
   .plan-card ul {
     font-size: 10px;
-    padding-left: 12px;
+    padding-left: var(--space-sm);
   }
   .plan-card p {
     font-size: 10px;
@@ -1898,7 +1910,7 @@ dialog::backdrop {
     font-size: 10px;
   }
   .settings-section {
-    margin: 12px 10px;
+    margin: var(--space-sm) 10px;
   }
   .compact-form {
     padding: 13px;
@@ -1915,24 +1927,24 @@ dialog::backdrop {
     border-top: 1px solid var(--line);
   }
   .source-layout > div {
-    padding: 12px 14px;
+    padding: var(--space-sm) 14px;
   }
   .admin-tabs button {
-    padding: 11px 12px;
+    padding: 11px var(--space-sm);
     font-size: 11px;
   }
   .status-grid {
-    padding: 12px 10px;
-    gap: 8px;
+    padding: var(--space-sm) 10px;
+    gap: var(--space-xs);
   }
   .status-card {
-    padding: 12px;
+    padding: var(--space-sm);
   }
   .status-card strong {
     font-size: 16px;
   }
   .identity-card {
-    margin: 12px 10px;
+    margin: var(--space-sm) 10px;
     padding: 17px;
   }
   .identity-card h2 {
@@ -1948,7 +1960,7 @@ dialog::backdrop {
     padding: 10px 14px;
   }
   .detail-hero {
-    padding: 18px 12px;
+    padding: 18px var(--space-sm);
   }
   .detail-hero .detail-teams {
     gap: 10px;
@@ -1960,7 +1972,7 @@ dialog::backdrop {
     font-size: 25px;
   }
   .detail-section {
-    padding: 13px 12px;
+    padding: 13px var(--space-sm);
   }
   .market-table {
     font-size: 11px;
@@ -1974,14 +1986,14 @@ dialog::backdrop {
     max-height: 94dvh;
   }
   .dialog-header {
-    padding: 12px;
+    padding: var(--space-sm);
   }
   .dialog-header h2 {
     font-size: 15px;
   }
   .raw-text {
     font-size: 12px;
-    padding: 12px;
+    padding: var(--space-sm);
   }
   .metrics-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -2038,7 +2050,7 @@ dialog::backdrop {
   }
   .main-layout[data-page="scores"] .match-row {
     min-height: 40px;
-    padding: 2px 0;
+    padding: var(--space-3xs) 0;
   }
   .main-layout[data-page="scores"] .team-button {
     padding: 5px 3px;
@@ -2095,7 +2107,7 @@ dialog::backdrop {
   }
   .main-layout[data-page="scores"] .favorite {
     flex-shrink: 0;
-    padding: 2px;
+    padding: var(--space-3xs);
     margin: 0;
   }
   .main-layout[data-page="scores"] .score-table-head {
@@ -2114,7 +2126,7 @@ dialog::backdrop {
   .match-league .favorite {
     height: 24px;
     width: 28px;
-    margin: 2px 0 0;
+    margin: var(--space-3xs) 0 0;
     line-height: 20px;
   }
   .team-button {
@@ -2148,14 +2160,14 @@ dialog::backdrop {
   color: var(--muted);
   background: var(--accent-soft);
   padding: 9px;
-  margin: 12px 0 0;
+  margin: var(--space-sm) 0 0;
   font-size: 12px;
 }
 .table-scroll {
   overflow-x: auto;
 }
 .detail-hero #refresh-detail {
-  margin-top: 12px;
+  margin-top: var(--space-sm);
 }
 .sport-tag,
 .sport-badge {
@@ -2184,7 +2196,7 @@ html {
   scroll-padding-block: 72px;
 }
 dialog {
-  scroll-padding-block: 88px 16px;
+  scroll-padding-block: 88px var(--space-md);
 }
 :where(button, a, input, select, textarea, summary, [tabindex]) {
   scroll-margin-block: 80px;
@@ -2218,7 +2230,7 @@ dialog {
     min-height: 44px;
   }
   .dialog-header {
-    padding-block: 8px;
+    padding-block: var(--space-xs);
   }
   .detail-button {
     width: 26px;
@@ -2255,7 +2267,7 @@ dialog {
 @media (max-width: 720px) {
   .league-choices {
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
+    gap: var(--space-sm);
   }
   .league-choices label {
     min-height: 32px;
@@ -2285,22 +2297,22 @@ dialog {
   background: var(--amber-soft);
 }
 .account-verification {
-  padding: 12px 14px;
+  padding: var(--space-sm) 14px;
   font-size: 12px;
   color: var(--muted);
   line-height: 1.9;
 }
 
 /* Read-only expert evidence grouped below each homepage match. */
-.homepage-match-tabs { margin: 8px 0; }
-.match-recommendations { grid-column: 1 / -1; width: 100%; padding: 8px 12px; text-align: left; border-top: 1px dashed var(--line); background: var(--surface); }
-.match-recommendation { padding: 8px 0; overflow-wrap: anywhere; }
+.homepage-match-tabs { margin: var(--space-xs) 0; }
+.match-recommendations { grid-column: 1 / -1; width: 100%; padding: var(--space-xs) var(--space-sm); text-align: left; border-top: 1px dashed var(--line); background: var(--surface); }
+.match-recommendation { padding: var(--space-xs) 0; overflow-wrap: anywhere; }
 .match-recommendation + .match-recommendation { border-top: 1px solid var(--line); }
-.match-recommendation > div:first-child, .recommendation-result { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.match-recommendation > div:first-child, .recommendation-result { display: flex; align-items: center; flex-wrap: wrap; gap: 6px var(--space-sm); }
 .recommendation-market { padding: 6px 0; color: var(--ink); }
 .match-recommendation small { display: block; margin-top: 5px; }
 @media (max-width: 640px) {
-  .match-recommendations { grid-row: 3; padding: 6px 8px; }
+  .match-recommendations { grid-row: 3; padding: 6px var(--space-xs); }
   .match-recommendation { font-size: 12px; line-height: 1.5; }
   .match-recommendation .text-link { min-height: 32px; }
 }
@@ -2315,18 +2327,18 @@ dialog {
   }
 }
 /* Read-only personal order evidence under the associated match. */
-.account-history-summary { display:flex; flex-wrap:wrap; gap:6px 16px; padding:12px; margin:10px 0; border:1px solid var(--line); border-radius:6px; }
+.account-history-summary { display:flex; flex-wrap:wrap; gap:6px var(--space-md); padding:var(--space-sm); margin:10px 0; border:1px solid var(--line); border-radius:6px; }
 .account-history-summary small { width:100%; color:var(--muted); overflow-wrap:anywhere; }
-.match-account-history { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px; padding:8px 12px; background:var(--surface); border-top:1px solid var(--line); font-size:12px; }
+.match-account-history { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:baseline; gap:6px var(--space-md); padding:var(--space-xs) var(--space-sm); background:var(--surface); border-top:1px solid var(--line); font-size:12px; }
 .match-account-history[hidden] { display:none; }
 .match-account-history small { color:var(--muted); }
 
 /* 首页一键实盘下注：本人手动金额与买入入口。 */
-.manual-bet-panel { padding:12px; margin:10px 0; border:1px solid var(--line); border-radius:6px; background:var(--surface); }
+.manual-bet-panel { padding:var(--space-sm); margin:10px 0; border:1px solid var(--line); border-radius:6px; background:var(--surface); }
 .manual-bet-panel[hidden] { display:none; }
-.manual-bet-panel form { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:flex-end; }
+.manual-bet-panel form { display:flex; flex-wrap:wrap; gap:var(--space-xs) var(--space-md); align-items:flex-end; }
 .manual-bet-panel small { width:100%; color:var(--muted); }
-.match-recommendation .manual-bet { margin-left:8px; }
+.match-recommendation .manual-bet { margin-left:var(--space-xs); }
 
 /* Page shell */
 .site-width {
@@ -2359,9 +2371,9 @@ dialog {
   background: var(--amber);
   border-radius: var(--radius);
 }
-.main-nav { gap: 4px; }
+.main-nav { gap: var(--space-2xs); }
 .main-nav button {
-  padding-inline: 12px;
+  padding-inline: var(--space-sm);
   color: var(--on-ink-muted);
   border-bottom: 2px solid transparent;
   white-space: nowrap;
@@ -2418,7 +2430,7 @@ dialog {
   padding: 7px 10px;
 }
 .left-rail button:hover, .left-rail button.rail-active {
-  padding-left: 8px;
+  padding-left: var(--space-xs);
   border-left: 2px solid var(--accent);
   background: var(--accent-soft);
 }
@@ -2430,7 +2442,7 @@ dialog {
 }
 .section-title {
   min-height: 58px;
-  padding: 8px 0;
+  padding: var(--space-xs) 0;
   border-bottom: 1px solid var(--line);
 }
 h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
@@ -2478,7 +2490,7 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 20px 12px;
+  padding: 0 20px var(--space-sm);
 }
 #last-updated {
   color: var(--on-ink-muted);
@@ -2499,7 +2511,7 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .score-console .sports-bar button {
   min-width: 64px;
   min-height: 34px;
-  padding: 4px 10px;
+  padding: var(--space-2xs) 10px;
   border: 0;
   font-size: 13px;
 }
@@ -2524,7 +2536,7 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   background: var(--accent-soft);
   border-color: var(--accent);
 }
-.date-strip, .filter-row { padding: 8px 12px; background: var(--paper); }
+.date-strip, .filter-row { padding: var(--space-xs) var(--space-sm); background: var(--paper); }
 .score-controls .date-strip, .score-controls .filter-row { border-bottom: 0; }
 .date-strip > button { color: var(--accent); }
 #date-next::after { content: "›"; }
@@ -2537,7 +2549,7 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .score-controls .filter-row #league-filter { width: auto; min-width: 0; }
 .account-history-summary {
   margin: 10px 0;
-  padding: 8px 12px;
+  padding: var(--space-xs) var(--space-sm);
   color: var(--muted);
   background: var(--surface);
   border: 0;
@@ -2552,11 +2564,11 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 }
 .score-table-head, .match-row {
   grid-template-columns: minmax(100px, 1.1fr) 48px 54px minmax(0, 1.1fr) 82px minmax(0, 1.1fr) minmax(120px, 1.3fr) 44px;
-  gap: 8px;
+  gap: var(--space-xs);
 }
 .main-layout[data-page="scores"] :is(.score-table-head, .match-row) {
   grid-template-columns: minmax(100px, 1.1fr) 48px 54px minmax(0, 1.1fr) 82px minmax(0, 1.1fr) minmax(120px, 1.3fr) 44px;
-  padding-inline: 12px;
+  padding-inline: var(--space-sm);
 }
 .score-table-head {
   min-height: 38px;
@@ -2566,7 +2578,7 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 }
 .main-layout[data-page="scores"] .match-row {
   min-height: 44px;
-  padding-block: 2px;
+  padding-block: var(--space-3xs);
 }
 .match-row:nth-child(even) { background: var(--surface); }
 .match-row:hover, .match-row:focus-within { background: var(--accent-soft); }
@@ -2584,36 +2596,36 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   border-radius: var(--radius);
   font-weight: 700;
   justify-self: center;
-  padding: 2px 5px;
+  padding: var(--space-3xs) 5px;
 }
 .main-layout[data-page="scores"] .team-button {
   min-width: 0;
   min-height: 36px;
-  padding-inline: 2px;
+  padding-inline: var(--space-3xs);
   font-size: 13px;
   font-weight: 650;
 }
 .team-button:hover, .detail-button:hover { color: var(--accent); }
-.score-button { color: var(--ink); font-size: 19px; letter-spacing: 0; padding-block: 4px; }
+.score-button { color: var(--ink); font-size: 19px; letter-spacing: 0; padding-block: var(--space-2xs); }
 .match-vs-icon { width: auto; height: auto; font-size: 12px; color: var(--muted); }
 .match-odds { color: var(--muted); }
 .match-odds .odds-market { font-size: 11px; }
 .detail-button { min-height: 36px; font-size: 12px; }
 .match-recommendations, .match-account-history {
-  margin-inline: -12px;
+  margin-inline: calc(-1 * var(--space-sm));
   width: auto;
-  padding-inline: 16px;
+  padding-inline: var(--space-md);
   background: var(--surface);
   border-top-color: var(--line);
 }
 .match-recommendations { border-top-style: solid; }
-.manual-bet-panel { padding: 0 12px; border-color: var(--line); }
-.manual-bet-panel summary { padding-block: 8px; cursor: pointer; font-weight: 650; }
-.manual-bet-panel form { padding-bottom: 12px; }
+.manual-bet-panel { padding: 0 var(--space-sm); border-color: var(--line); }
+.manual-bet-panel summary { padding-block: var(--space-xs); cursor: pointer; font-weight: 650; }
+.manual-bet-panel form { padding-bottom: var(--space-sm); }
 .manual-bet-panel .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1 1 320px; }
 .manual-bet-panel .form-grid input { width: 100%; }
 .side-panel {
-  padding: 14px 16px;
+  padding: 14px var(--space-md);
   margin-bottom: 14px;
   border-top: 2px solid var(--ink);
 }
@@ -2631,8 +2643,8 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 14px 16px;
+  gap: var(--space-xs);
+  padding: 14px var(--space-md);
   border: 0;
   color: var(--paper);
   background: var(--ink);
@@ -2646,20 +2658,20 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 0 12px;
+  gap: 0 var(--space-sm);
   background: var(--paper);
 }
 .expert-toolbar .section-tabs { flex: 1 1 auto; margin: 0; }
-.expert-toolbar .section-tabs button { padding-inline: 12px; }
+.expert-toolbar .section-tabs button { padding-inline: var(--space-sm); }
 .expert-toolbar .expert-sport-tabs { flex-grow: 0; }
 #expert-stats-filter { display: flex; flex-wrap: wrap; align-items: end; }
-#expert-stats-filter label { display: grid; gap: 4px; }
+#expert-stats-filter label { display: grid; gap: var(--space-2xs); }
 #expert-stats-filter select, #view-messages select { min-height: 34px; max-width: 100%; }
 .stat-help { border-left: 2px solid var(--accent); }
 .expert-table-head, .expert-row {
   background: var(--paper);
   grid-template-columns: minmax(0, 1.8fr) minmax(60px, .7fr) minmax(52px, .7fr) minmax(70px, .8fr);
-  gap: 8px;
+  gap: var(--space-xs);
 }
 .expert-table-head { background: var(--shade); border-top: 2px solid var(--ink); }
 .expert-name button { min-width: 0; }
@@ -2671,12 +2683,12 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   justify-content: space-between;
   align-items: center;
   gap: 20px;
-  padding: 28px 24px;
+  padding: 28px var(--space-lg);
   color: var(--paper);
   background: var(--ink);
   border-top: 3px solid var(--accent);
 }
-.member-hero h1 { margin: 0 0 8px; }
+.member-hero h1 { margin: 0 0 var(--space-xs); }
 .member-hero p { color: var(--on-ink-muted); font-size: 14px; }
 .member-hero #membership-current {
   margin: 0;
@@ -2689,11 +2701,11 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   grid-template-columns: minmax(0, 1fr) minmax(210px, .42fr);
   gap: 20px;
 }
-.plans-grid { grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); padding: 12px 0; }
+.plans-grid { grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); padding: var(--space-sm) 0; }
 .plan-card {
   display: flex;
   flex-direction: column;
-  padding: 18px 16px;
+  padding: 18px var(--space-md);
   border: 1px solid var(--line);
   border-top: 2px solid var(--accent);
   border-radius: 0;
@@ -2712,18 +2724,18 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 }
 .benefit-grid { display: block; padding: 0; }
 .benefit-grid article {
-  padding: 14px 2px;
+  padding: 14px var(--space-3xs);
   border-bottom: 1px solid var(--line);
   text-align: left;
 }
-.benefit-grid article h3 { margin: 0 0 4px; font-size: 14px; }
+.benefit-grid article h3 { margin: 0 0 var(--space-2xs); font-size: 14px; }
 .benefit-grid p { font-size: 13px; }
 .payment-note { color: var(--amber-text); background: var(--amber-soft); border-left: 2px solid var(--amber-text); }
 
 /* Account, management, and dialogs */
 .identity-card {
-  margin: 12px 0;
-  padding: 16px 20px;
+  margin: var(--space-sm) 0;
+  padding: var(--space-md) 20px;
   background: var(--paper);
   border: 0;
   border-left: 2px solid var(--accent);
@@ -2732,8 +2744,8 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
-  gap: 12px;
-  margin-top: 12px;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
 }
 .account-settings > :nth-child(n+3) { grid-column: 1 / -1; }
 .account-settings .settings-section { margin: 0; }
@@ -2749,8 +2761,8 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   display: grid;
   grid-template-columns: 155px minmax(0, 1fr);
   align-items: start;
-  gap: 16px;
-  margin-top: 16px;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
 }
 .admin-tabs {
   top: 70px;
@@ -2770,7 +2782,7 @@ h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
   background: var(--accent-soft);
 }
 .admin-panel { min-width: 0; }
-.admin-panel > .settings-section { margin: 0 0 12px; }
+.admin-panel > .settings-section { margin: 0 0 var(--space-sm); }
 .status-grid {
   padding: 0;
   margin-bottom: 14px;
@@ -2790,11 +2802,11 @@ dialog {
   box-shadow: 0 10px 38px var(--shadow);
 }
 dialog::backdrop { background: var(--backdrop); }
-.dialog-header { gap: 12px; }
+.dialog-header { gap: var(--space-sm); }
 .dialog-header h2 { font-size: 17px; }
 .content-dialog[open] { display: flex; flex-direction: column; overflow: clip; }
 .content-dialog .dialog-header { flex-shrink: 0; }
-#dialog-content { min-height: 0; overflow: auto; scroll-padding-block: 12px; }
+#dialog-content { min-height: 0; overflow: auto; scroll-padding-block: var(--space-sm); }
 .detail-hero {
   background: var(--ink);
   color: var(--paper);
@@ -2846,7 +2858,7 @@ dialog::backdrop { background: var(--backdrop); }
   body { background: var(--background); padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
   .header-inner { height: 54px; padding: 0; }
   .header-login { font-size: 12px; }
-  .main-layout { margin-top: 12px; }
+  .main-layout { margin-top: var(--space-sm); }
   .view { min-height: calc(100dvh - 144px); }
   .section-title { min-height: 52px; }
   .section-title h1, .member-hero h1 { font-size: 24px; }
@@ -2871,8 +2883,8 @@ dialog::backdrop { background: var(--backdrop); }
       "home score away detail"
       "odds odds odds odds";
     grid-template-rows: auto auto auto;
-    gap: 2px 4px;
-    padding: 4px 8px;
+    gap: var(--space-3xs) var(--space-2xs);
+    padding: var(--space-2xs) var(--space-xs);
   }
   .main-layout[data-page="scores"] .match-row[data-sport="basketball"] {
     grid-template-columns: minmax(0, 1fr) 82px minmax(0, 1fr) 28px;
@@ -2905,7 +2917,7 @@ dialog::backdrop { background: var(--backdrop); }
   .match-odds { grid-area: odds; justify-content: center; font-size: 11px; padding: 0; }
   .manual-bet-panel summary { min-height: 40px; }
   .manual-bet-panel .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .match-recommendations, .match-account-history { grid-row: auto; margin-inline: -8px; padding-inline: 8px; }
+  .match-recommendations, .match-account-history { grid-row: auto; margin-inline: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); }
   .match-recommendations { grid-row: 4; }
   .match-account-history { grid-row: 5; }
   .mobile-bottom { height: calc(60px + env(safe-area-inset-bottom)); box-shadow: none; }
@@ -2928,12 +2940,12 @@ dialog::backdrop { background: var(--backdrop); }
   .nav-icon-member::after { inset: 4px; border: 1px solid currentColor; border-radius: 50%; }
   .nav-icon-account { border: 0; border-bottom: 1.5px solid currentColor; }
   .nav-icon-account::after { inset: 0 5px auto; height: 7px; border: 1.5px solid currentColor; border-radius: 50%; }
-  .expert-toolbar .section-tabs button { padding-inline: 4px; white-space: normal; }
-  .expert-table-head, .expert-row { gap: 4px; padding-inline: 6px; }
-  .expert-name { gap: 4px; }
+  .expert-toolbar .section-tabs button { padding-inline: var(--space-2xs); white-space: normal; }
+  .expert-table-head, .expert-row { gap: var(--space-2xs); padding-inline: 6px; }
+  .expert-name { gap: var(--space-2xs); }
   .expert-name .avatar { display: none; }
   #expert-stats-filter input, #expert-stats-filter select { width: 100%; }
-  .member-hero { padding: 20px 14px; align-items: flex-start; flex-direction: column; gap: 12px; }
+  .member-hero { padding: 20px 14px; align-items: flex-start; flex-direction: column; gap: var(--space-sm); }
   .member-hero #membership-current { padding: 7px 10px; }
   .account-settings, .admin-workspace { grid-template-columns: minmax(0, 1fr); }
   .admin-tabs { display: flex; top: 54px; }
@@ -2941,4 +2953,298 @@ dialog::backdrop { background: var(--backdrop); }
   .admin-tabs button.active { border-left: 0; border-bottom: 2px solid var(--accent); }
   .detail-teams h3 { font-size: 16px; }
   .detail-teams strong { font-size: 23px; }
+}
+
+/* Sport poster, figures, and results sheet */
+.site-width { width: min(1320px, calc(100% - 2 * var(--gutter))); }
+.header-inner { height: 58px; gap: var(--space-lg); }
+.site-header { background: var(--ink); }
+.brand { font-size: 20px; }
+.brand-symbol { font: 800 24px/1 var(--font-display); }
+.main-nav button { padding-inline: var(--space-sm); }
+.main-nav button.active { color: var(--ink); background: var(--amber); border-color: var(--amber); }
+.main-nav button.active:focus-visible { outline-color: var(--paper); }
+.header-login { background: transparent; border-color: var(--on-ink-muted); }
+.main-layout[data-page] { display: block; margin-top: 0; }
+.main-layout[data-page="scores"] { width: 100%; }
+.view:not(#view-scores) { padding-block: 36px var(--space-sm); }
+.view:not(#view-scores) > .section-title {
+  min-height: 80px;
+  border-bottom: 2px solid var(--ink);
+}
+.view:not(#view-scores) > .section-title h1 { font-size: 40px; }
+.score-console {
+  display: grid;
+  align-items: end;
+  position: relative;
+  isolation: isolate;
+  min-height: 314px;
+  border: 0;
+}
+.score-cover, .score-console::after { position: absolute; inset: 0; width: 100%; height: 100%; }
+.score-cover { z-index: -2; object-fit: cover; object-position: 50% 51%; }
+.score-console::after {
+  z-index: -1;
+  content: "";
+  background: linear-gradient(90deg, var(--cover-scrim), var(--cover-edge) 78%);
+}
+.score-poster { padding-block: var(--space-xl); }
+.score-console .section-title {
+  min-height: 0;
+  justify-content: space-between;
+  align-items: end;
+  gap: var(--space-md);
+  padding: 0;
+}
+.score-console .section-title h1 {
+  max-width: 12ch;
+  color: var(--paper);
+  font-size: 66px;
+  font-weight: 850;
+  line-height: 1.07;
+}
+.score-console-bar { justify-content: start; margin-top: var(--space-lg); padding: 0; }
+.score-console .sports-bar { border-color: var(--on-ink-muted); background: var(--ink); }
+.score-console .sports-bar button { min-width: 80px; min-height: 40px; }
+.score-console .sports-bar button.active { background: var(--amber); }
+.score-console .sports-bar button.active:focus-visible { outline-color: var(--paper); }
+.score-figures {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: var(--space-lg) 0;
+  border-block: 1px solid var(--line);
+  border-top: 2px solid var(--ink);
+}
+.score-figures > div {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: end;
+  gap: var(--space-2xs);
+  padding: var(--space-sm) var(--space-md);
+  border-right: 1px solid var(--line);
+}
+.score-figures > div:first-child { padding-left: 0; }
+.score-figures > div:last-child { border: 0; }
+.score-figures dt { color: var(--muted); font-size: 12px; }
+.score-figures dd { margin: 0; font: 800 44px/1.05 var(--font-display); font-variant-numeric: tabular-nums; }
+.score-figures #last-updated { color: var(--ink); font-size: 38px; text-align: left; }
+.score-controls {
+  grid-template-columns: minmax(330px, .9fr) minmax(0, 1.1fr);
+  border: 0;
+  border-block: 1px solid var(--line);
+  background: var(--background);
+}
+.score-controls :is(.date-strip, .filter-row) { background: transparent; }
+.score-controls .homepage-match-tabs { border-right: 1px solid var(--line); }
+.score-controls .date-strip { border-right: 1px solid var(--line); }
+.section-tabs button.active, .date-strip #date-buttons button.active {
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--ink);
+}
+.score-tabs button.active { color: var(--ink); background: var(--shade); border-color: var(--ink); }
+.date-strip #date-buttons button.active small { color: var(--ink); }
+.score-table { margin-top: var(--space-md); border-inline: 0; background: transparent; }
+.main-layout[data-page="scores"] :is(.score-table-head, .match-row) {
+  grid-template-columns: 136px minmax(126px, .8fr) minmax(0, 1.5fr) 100px minmax(125px, 1fr) 56px;
+  gap: var(--space-sm);
+  padding-inline: var(--space-xs);
+}
+.score-table-head { text-align: left; background: var(--surface); }
+.main-layout[data-page="scores"] .match-row {
+  grid-template-areas: "status league teams score odds detail";
+  font-size: 13px;
+  text-align: left;
+}
+.match-row:nth-child(even) { background: transparent; }
+.match-row:hover, .match-row:focus-within { background: var(--surface); }
+.match-status { grid-area: status; display: flex; align-items: center; gap: var(--space-xs); }
+.match-status .match-phase { min-width: 46px; padding: 0 var(--space-2xs); text-align: center; }
+.match-status .match-time { color: var(--muted); }
+.match-league { grid-area: league; }
+.main-layout[data-page="scores"] .league-label { max-width: none; }
+.match-teams {
+  grid-area: teams;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+.match-versus { color: var(--muted); }
+.main-layout[data-page="scores"] .team-button { text-align: left; }
+.match-row .score-button { grid-area: score; text-align: left; font: 800 27px/1 var(--font-display); }
+.match-row .score-button:has(.basketball-half-score) { font-size: 22px; }
+.match-row:has(.match-phase.live) .score-button { color: var(--ink); }
+.match-row .match-odds { grid-area: odds; justify-content: flex-start; }
+.match-row > .detail-button { grid-area: detail; width: auto; text-align: right; }
+.match-recommendations, .match-account-history { grid-column: 1 / -1; margin-inline: 0; }
+.match-recommendations { grid-row: 2; }
+.match-account-history { grid-row: 3; }
+.score-notes { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); margin-top: var(--space-md); }
+.score-notes > * { margin: 0; padding: var(--space-sm) var(--space-xs); border: 0; border-top: 2px solid var(--ink); background: transparent; }
+.data-status { display: grid; gap: var(--space-2xs); font-size: 12px; }
+.score-body .data-footnote { padding-inline: 0; }
+.site-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-md);
+  padding-block: var(--space-lg);
+  text-align: left;
+  border-top: 2px solid var(--ink);
+}
+.footer-identity { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-md); }
+.footer-identity strong { color: var(--ink); font-size: 17px; }
+.footer-identity span { margin: 0; }
+.site-footer .left-rail { display: flex; flex-wrap: wrap; border: 0; }
+.site-footer .left-rail button { width: auto; padding: var(--space-2xs) var(--space-xs); }
+.site-footer a { display: inline-block; min-height: 24px; line-height: 24px; }
+.footer-credit { grid-column: 1 / -1; }
+.footer-credit a { text-decoration: underline; }
+
+/* Shared results-sheet rules for the other views */
+.primary-button { color: var(--ink); background: var(--amber); font-weight: 700; }
+.primary-button:hover { color: var(--paper); background: var(--accent-hover); }
+.expert-toolbar { background: transparent; }
+.stat-help { background: transparent; border-left: 0; }
+.expert-workspace { display: grid; grid-template-columns: 212px minmax(0, 1fr); gap: var(--space-lg); align-items: start; }
+#expert-stats-filter { display: grid; gap: var(--space-xs); border-top: 2px solid var(--ink); background: var(--surface); }
+.expert-workspace :is(#expert-ranking, #expert-signals) { min-width: 0; }
+#followed-experts { flex-shrink: 0; white-space: nowrap; }
+.expert-shortlist { margin-top: var(--space-lg); padding-top: var(--space-sm); border-top: 2px solid var(--ink); }
+#top-experts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: var(--space-md); }
+.message-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 248px; gap: 32px; }
+.message-index { grid-column: 1; grid-row: 1; min-width: 0; }
+.message-controls {
+  grid-column: 2;
+  grid-row: 1;
+  display: grid;
+  align-content: start;
+  align-self: start;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: var(--surface);
+}
+.message-controls label { display: grid; gap: var(--space-2xs); }
+.message-controls select { width: 100%; }
+.signal-card, .message-card { background: transparent; }
+.member-hero {
+  align-items: end;
+  min-height: 186px;
+  border-top: 0;
+  border-bottom: 2px solid var(--ink);
+}
+.member-hero h1 { font-size: 48px; }
+.membership-layout {
+  grid-template-columns: minmax(220px, .65fr) minmax(0, 1fr);
+  grid-template-areas: "benefits offers";
+  gap: 32px;
+}
+.membership-offers { grid-area: offers; }
+.membership-benefits { grid-area: benefits; }
+.plans-grid { display: block; }
+.plan-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-xs) var(--space-sm);
+  align-items: center;
+  padding: var(--space-md) 0;
+  border: 0;
+  border-top: 2px solid var(--ink);
+  background: transparent;
+}
+.plan-card + .plan-card { border-top: 1px solid var(--line); }
+.plan-price { margin: 0; font: 800 40px/1 var(--font-display); }
+.plan-card ul { grid-column: 1 / -1; min-height: 0; margin-block: var(--space-2xs); }
+.plan-card button { grid-column: 1 / -1; }
+.account-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: var(--space-lg); align-items: start; }
+.account-context .form-actions { padding-inline: 0; }
+.account-settings { gap: 0 var(--space-lg); }
+.account-settings .settings-section { border: 0; border-top: 1px solid var(--line); }
+.identity-card { border-left: 0; border-bottom: 2px solid var(--ink); }
+.admin-workspace { display: block; }
+.admin-tabs {
+  display: flex;
+  position: static;
+  margin-bottom: var(--space-md);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid var(--ink);
+}
+.admin-tabs button, .admin-tabs button.active { border: 0; white-space: nowrap; }
+.admin-tabs button.active { background: var(--amber); color: var(--ink); }
+.detail-hero { border: 0; text-align: left; }
+.detail-hero .detail-teams { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.detail-hero .detail-teams :last-child { text-align: right; }
+.detail-teams strong { font: 800 48px/1 var(--font-display); }
+.dialog-header, .detail-section { border-bottom: 1px solid var(--line); }
+
+@media (max-width: 960px) {
+  :root { --gutter: 20px; }
+  .header-inner { gap: var(--space-sm); }
+  .main-nav button { padding-inline: var(--space-xs); }
+  .main-layout[data-page="scores"] :is(.score-table-head, .match-row) {
+    grid-template-columns: 104px minmax(112px, .8fr) minmax(0, 1.5fr) 74px minmax(96px, 1fr) 40px;
+    gap: var(--space-xs);
+  }
+}
+@media (max-width: 850px) {
+  .score-controls { grid-template-columns: minmax(0, 1fr); }
+  .score-controls :is(.homepage-match-tabs, .date-strip) { border-right: 0; }
+}
+@media (max-width: 720px) {
+  :root { --gutter: 16px; }
+  .header-inner { height: 54px; }
+  .view:not(#view-scores) { padding-top: var(--space-md); }
+  .view:not(#view-scores) > .section-title { min-height: 58px; }
+  .view:not(#view-scores) > .section-title h1 { font-size: 28px; }
+  .score-console { min-height: 220px; }
+  .score-cover { object-position: 58% center; }
+  .score-poster { padding-block: var(--space-lg); }
+  .score-console .section-title h1 { font-size: 36px; }
+  .score-console-bar { margin-top: var(--space-md); }
+  .score-console .sports-bar button { min-width: 64px; }
+  .score-figures { margin: var(--space-sm) 0; }
+  .score-figures > div { padding: var(--space-xs); }
+  .score-figures dd { font-size: 26px; }
+  .score-figures #last-updated { font-size: 23px; }
+  .score-figures dt { font-size: 11px; }
+  .score-controls { grid-template-columns: minmax(0, 1fr); }
+  .score-controls :is(.homepage-match-tabs, .date-strip) { border-right: 0; }
+  .main-layout[data-page="scores"] .match-row,
+  .main-layout[data-page="scores"] .match-row[data-sport="basketball"] {
+    grid-template-columns: minmax(0, 1fr) 80px 32px;
+    grid-template-areas: "teams status favorite" "teams score detail" "league odds odds";
+    grid-template-rows: auto auto auto;
+    gap: var(--space-3xs) var(--space-2xs);
+    padding: var(--space-2xs) 0;
+  }
+  .match-status { gap: var(--space-2xs); justify-content: flex-end; }
+  .match-status .match-phase { min-width: 0; padding: 0 var(--space-3xs); }
+  .match-status .match-time { font-size: 11px; }
+  .main-layout[data-page="scores"] .match-league { display: contents; }
+  .main-layout[data-page="scores"] .league-label {
+    grid-area: league;
+    padding-left: var(--space-2xs);
+    line-height: 1.4;
+  }
+  .main-layout[data-page="scores"] .favorite { grid-area: favorite; width: 32px; justify-self: end; }
+  .match-teams { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .match-versus { display: none; }
+  .main-layout[data-page="scores"] .team-button { grid-area: auto; min-height: 24px; padding: 0 var(--space-2xs); }
+  .match-row .score-button { text-align: right; }
+  .match-row > .detail-button { min-height: 24px; padding: 0; }
+  .match-row .match-odds { justify-content: flex-end; padding-inline: 0; }
+  .match-recommendations { grid-row: 4; }
+  .match-account-history { grid-row: 5; }
+  .score-notes { grid-template-columns: minmax(0, 1fr); }
+  .site-footer { grid-template-columns: minmax(0, 1fr); }
+  .expert-workspace { grid-template-columns: minmax(0, 1fr); gap: var(--space-xs); }
+  .message-workspace, .account-workspace { grid-template-columns: minmax(0, 1fr); gap: var(--space-xs); }
+  .message-workspace > * { grid-area: auto; }
+  #expert-stats-filter { display: flex; }
+  .member-hero { min-height: 140px; align-items: start; }
+  .member-hero h1 { font-size: 32px; }
+  .membership-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "offers" "benefits"; gap: var(--space-sm); }
+  .detail-teams strong { font-size: 36px; }
 }

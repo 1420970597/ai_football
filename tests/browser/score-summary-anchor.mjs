@@ -14,9 +14,12 @@ try{
   page.on('request',r=>{if(['POST','PUT','PATCH','DELETE'].includes(r.method()))writes.push(new URL(r.url()).pathname);});
   page.on('pageerror',e=>errors.push(e.name));
   page.on('response',r=>{if(new URL(r.url()).pathname==='/api/v1/public/match-summaries')summaryResponses.push({status:r.status()});});
-  const facts=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/matches');
-  const start=Date.now();await page.goto(target+'/#scores',{waitUntil:'domcontentloaded'});
-  assert.equal((await facts).status(),200);
+  const start=Date.now();
+  const [facts]=await Promise.all([
+   page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/matches'),
+   page.goto(target+'/#scores?scope=all',{waitUntil:'domcontentloaded'}),
+  ]);
+  assert.equal(facts.status(),200);
   await page.locator('#matches-list .match-row').first().waitFor();
   const ids=await page.locator('#matches-list .match-row').evaluateAll(rs=>rs.map(r=>r.dataset.fixture));
   const first=page.locator('#matches-list .team-home').first();await first.focus();

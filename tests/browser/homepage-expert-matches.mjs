@@ -105,7 +105,11 @@ try{
     const home=await page.locator('.match-row .team-home').boundingBox();
     const score=await page.locator('.match-row .score-button').boundingBox();
     const away=await page.locator('.match-row .team-away').boundingBox();
-    assert.ok(home.x+home.width<=score.x+1&&score.x+score.width<=away.x+1,'basketball score must not overlap either team');
+    assert.ok(home && away && score, 'both teams and the score must be visible');
+    const intersects = (a, b) =>
+      a.x < b.x + b.width && b.x < a.x + a.width &&
+      a.y < b.y + b.height && b.y < a.y + a.height;
+    assert.ok(!intersects(score, home) && !intersects(score, away), 'basketball score must not overlap either team');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({path:output+'/homepage-expert-matches-'+width+'.png',fullPage:true});
     assert.deepEqual(writes,[]);

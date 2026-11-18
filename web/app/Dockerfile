@@ -2,6 +2,7 @@ FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e591939
 COPY web/app/nginx.conf /etc/nginx/conf.d/default.conf
 COPY web/app/index.html /usr/share/nginx/html/index.html
 COPY web/app/app.css /usr/share/nginx/html/assets/app.css
+COPY web/app/sport /usr/share/nginx/html/assets/sport
 COPY web/app/app.js /usr/share/nginx/html/assets/app.js
 COPY web/app/ui.js /usr/share/nginx/html/assets/ui.js
 COPY web/app/admin.js /usr/share/nginx/html/assets/admin.js

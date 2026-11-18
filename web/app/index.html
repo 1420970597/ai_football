@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width,initial-scale=1,viewport-fit=cover"
     />
-    <meta name="theme-color" content="#171d27" />
+    <meta name="theme-color" content="#101523" />
     <meta name="color-scheme" content="light" />
     <meta name="description" content="查看足球与篮球比分、赛程、专家推荐和审核记录。" />
     <title>球讯比分 · 专家与赛事</title>
@@ -38,23 +38,6 @@
       </div>
     </header>
     <main id="main" class="site-width main-layout" tabindex="-1">
-      <aside class="left-rail" aria-label="赛事与专家服务导航">
-        <h2>赛事中心</h2>
-        <button class="rail-active" data-page="scores" data-sport-label>
-          足球比分 <span id="fixture-count"></span></button
-        ><button data-page="scores" data-phase="live">滚球赛事</button
-        ><button data-page="scores" data-phase="scheduled">近日赛程</button
-        ><button data-page="scores" data-phase="finished">完场赛果</button>
-        <h2>专家服务</h2>
-        <button data-page="experts">专家排行榜</button
-        ><button data-page="messages">发言与审核原文</button
-        ><button data-page="membership">会员权益</button
-        ><button data-page="account">个人中心</button>
-        <div class="rail-note">
-          比赛、盘口：乐鱼<br />推荐意图：Telegram 专家<br />时间：北京时间
-          UTC+8
-        </div>
-      </aside>
       <div class="content-column">
         <section
           id="view-scores"
@@ -62,6 +45,8 @@
           aria-labelledby="score-title"
         >
           <div class="score-console">
+          <img class="score-cover" src="/assets/sport/stadium.webp" width="1000" height="450" alt="" fetchpriority="high" />
+          <div class="score-poster site-width">
           <div class="section-title">
             <h1 id="score-title">足球即时比分</h1>
             <button
@@ -79,9 +64,16 @@
             >
           </div>
           <span id="sport-context" class="sr-only">足球比分与盘口</span>
-          <span id="last-updated">等待更新</span>
           </div>
           </div>
+          </div>
+          <div class="score-body site-width">
+          <dl class="score-figures">
+            <div><dt>比赛日期</dt><dd id="score-figure-date"></dd></div>
+            <div><dt>已载入赛事</dt><dd id="fixture-count"></dd></div>
+            <div><dt>本页滚球</dt><dd id="score-figure-live"></dd></div>
+            <div><dt>更新时间（北京时间）</dt><dd id="last-updated">等待更新</dd></div>
+          </dl>
           <div class="score-controls">
           <div class="section-tabs homepage-match-tabs" role="group" aria-label="首页比赛范围">
             <button class="active" data-match-scope="recommended" aria-pressed="true">专家关联比赛</button>
@@ -130,7 +122,6 @@
           </div>
           </div>
           <div id="matches-notice" class="notice" role="status" hidden></div>
-          <section id="account-history-summary" class="account-history-summary" aria-live="polite" aria-label="本人近七日实盘记录">登录后查看本人近 7 日账户记录。</section>
           <section id="manual-bet-panel" class="manual-bet-panel" aria-label="一键实盘下注设置" hidden>
             <details>
             <summary>一键实盘下注金额</summary>
@@ -147,9 +138,8 @@
           </section>
           <div class="score-table">
             <div class="score-table-head" aria-hidden="true">
-              <span>联赛</span><span>时间</span><span>状态</span
-              ><span>主队</span><span>比分</span><span>客队</span
-              ><span id="match-market-heading">专家关联盘口</span><span>详情</span>
+              <span>赛况</span><span>联赛</span><span>对阵</span>
+              <span>比分</span><span id="match-market-heading">专家关联盘口</span><span>详情</span>
             </div>
             <div id="matches-list" aria-live="polite"></div>
             <div id="matches-state" class="empty-state"></div>
@@ -160,6 +150,11 @@
           <p class="data-footnote" id="matches-footnote">
             专家记录展示推荐时的盘口与系统赔率，供查询原文及结算；不代表当前成交价格。关注仅保存在当前浏览器。
           </p>
+          <div class="score-notes">
+            <section id="account-history-summary" class="account-history-summary" aria-live="polite" aria-label="本人近七日实盘记录">登录后查看本人近 7 日账户记录。</section>
+            <section class="data-status" aria-label="数据状态"><h2>数据状态</h2><p id="service-state">正在连接赛事服务</p><p class="muted">采集新鲜度与服务连通分别展示。</p></section>
+          </div>
+          </div>
         </section>
         <section id="view-experts" class="view" aria-labelledby="experts-title">
           <div class="section-title">
@@ -192,6 +187,7 @@
             </button>
           </div>
           <div id="experts-state" class="empty-state" hidden></div>
+          <div class="expert-workspace">
           <form id="expert-stats-filter" class="filter-row" aria-label="专家统计筛选">
             <label>运动<select name="sport"><option value="football">足球</option><option value="basketball">篮球</option></select></label>
             <label>统计窗口<select name="days"><option value="7">近7天</option><option value="30" selected>近30天</option><option value="90">近90天</option><option value="365">近365天</option></select></label>
@@ -232,6 +228,11 @@
               </button>
             </div>
           </div>
+          </div>
+          <section class="expert-shortlist" aria-labelledby="expert-shortlist-title">
+            <h2 id="expert-shortlist-title">专家榜</h2>
+            <div id="top-experts"></div>
+          </section>
         </section>
         <section
           id="view-messages"
@@ -242,7 +243,8 @@
             <h1 id="messages-title">发言与审核原文</h1>
             <button id="refresh-messages" class="small-button">↻ 刷新</button>
           </div>
-          <div class="filter-row">
+          <div class="message-workspace">
+          <div class="message-controls filter-row">
             <label
               >专家
               <select id="message-expert">
@@ -250,11 +252,14 @@
               </select></label
             ><span class="muted">含未解决与审核失败的消息</span>
           </div>
+          <div class="message-index">
           <div id="messages-state" class="empty-state" hidden></div>
           <div id="messages-list"></div>
           <button id="messages-more" class="load-more" hidden>
             继续加载发言
           </button>
+          </div>
+          </div>
         </section>
         <section
           id="view-membership"
@@ -305,6 +310,8 @@
               退出用户登录
             </button>
           </div>
+          <div class="account-workspace">
+          <div class="account-context">
           <div id="identity-panel"></div>
           <div class="form-actions">
             <button
@@ -314,6 +321,7 @@
             >
               独立管理入口</button
             ><span class="form-note">管理功能需要单独登录管理身份。</span>
+          </div>
           </div>
           <div id="account-content" class="account-settings" hidden>
             <details class="settings-section" open>
@@ -520,6 +528,7 @@
                 取消注销申请
               </button>
             </details>
+          </div>
           </div>
         </section>
         <section id="view-admin" class="view" aria-labelledby="admin-title">
@@ -908,25 +917,16 @@
           </div>
         </section>
       </div>
-      <aside class="right-rail" aria-label="赛事与专家服务说明">
-        <section class="side-panel">
-          <h2>专家榜 <button data-page="experts">查看全部</button></h2>
-          <div id="top-experts"></div>
-        </section>
-        <section class="side-member">
-          <h2>球讯会员</h2>
-          <button data-page="membership">查看会员权益</button>
-        </section>
-        <section class="side-panel">
-          <h2>数据状态</h2>
-          <p id="service-state">正在连接赛事服务</p>
-          <p class="muted">采集新鲜度与服务连通分别展示。</p>
-        </section>
-      </aside>
     </main>
     <footer class="site-footer site-width">
-      球讯比分与专家推荐记录　<span>所有时间均为北京时间（UTC+8）</span
-      ><button data-page="admin">管理中心</button>
+      <div class="footer-identity"><strong>球讯比分</strong><span>所有时间均为北京时间（UTC+8）</span></div>
+      <nav class="left-rail" aria-label="服务导航">
+        <button data-page="messages">发言与审核原文</button>
+        <button data-page="account">个人中心</button>
+        <button data-page="membership">会员权益</button>
+        <button data-page="admin">管理中心</button>
+      </nav>
+      <p class="footer-credit">比赛与盘口来自乐鱼，推荐来自 Telegram 专家。<a href="https://commons.wikimedia.org/wiki/File:Worldcup_2010_Soccer_Stadium_at_night_-_panoramio.jpg">球场照片 ngrund</a>，<a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>，已裁剪和调色。</p>
     </footer>
     <nav class="mobile-bottom" aria-label="手机主导航">
       <button data-page="scores" class="active"><span class="nav-icon nav-icon-scores" aria-hidden="true"></span>比分</button

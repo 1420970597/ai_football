@@ -1896,11 +1896,15 @@ await test("手机多盘口与长队名保持分行且不遮挡比赛按钮", as
       const geometry = await page.locator('.match-row').first().evaluate(row => {
         const box = element => element.getBoundingClientRect();
         const odds = box(row.querySelector('.match-odds'));
-        const buttons = [...row.querySelectorAll('.team-button, .score-button')].map(box);
+        const home = box(row.querySelector('.team-home'));
+        const away = box(row.querySelector('.team-away'));
+        const score = box(row.querySelector('.score-button'));
         const bounds = box(row);
-        return { oddsTop: odds.top, oddsBottom: odds.bottom, buttonBottom: Math.max(...buttons.map(x => x.bottom)),
+        return { homeBottom: home.bottom, awayTop: away.top, oddsTop: odds.top,
+          oddsBottom: odds.bottom, buttonBottom: Math.max(home.bottom, away.bottom, score.bottom),
           rowBottom: bounds.bottom, rowOverflow: row.scrollWidth > row.clientWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth };
       });
+      assert.ok(geometry.homeBottom <= geometry.awayTop, JSON.stringify({ width, geometry }));
       assert.ok(geometry.oddsTop >= geometry.buttonBottom, JSON.stringify({ width, geometry }));
       assert.ok(geometry.oddsBottom <= geometry.rowBottom, JSON.stringify({ width, geometry }));
       assert.equal(geometry.rowOverflow, false);

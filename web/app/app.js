@@ -192,7 +192,7 @@ function route(
     if (x.classList.contains("active")) x.setAttribute("aria-current", "page");
     else x.removeAttribute("aria-current");
   });
-  $$(".left-rail [data-page]").forEach((button) => {
+  $$(".site-footer [data-page]").forEach((button) => {
     const selected = button.dataset.page === page &&
       (page !== "scores" || (button.dataset.phase || "all") === state.phase);
     button.classList.toggle("rail-active", selected);
@@ -225,6 +225,7 @@ function route(
 function renderDates() {
   const selected = state.date;
   $("#date-picker").value = selected;
+  $("#score-figure-date").textContent = selected.slice(5).replace("-", "/");
   $("#date-buttons").innerHTML = [-2, -1, 0, 1, 2]
     .map((offset) => {
       const date = shiftDay(selected, offset),
@@ -308,8 +309,31 @@ function matchRecommendationMarkup(match) {
 function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
-    .map((m) => {
-      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${state.matchScope === 'recommended' ? '推荐盘口见下方' : renderMatchOdds(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
+    .map((match) => {
+      const id = esc(match.id);
+      const home = esc(match.home_team);
+      const away = esc(match.away_team);
+      const league = esc(match.competition_name || "联赛未标注");
+      const following = favorites.has(match.id);
+      const phase = match.phase === "live" && match.clock_minute != null
+        ? esc(match.clock_minute) + "′"
+        : esc(phases[match.phase] || match.match_state || "未知");
+      return `<article class="match-row" data-fixture="${id}" data-sport="${esc(match.sport || state.sport)}">
+        <div class="match-status"><span class="match-phase ${esc(match.phase)}">${phase}</span><span class="match-time">${time(match.kickoff_at)}</span></div>
+        <div class="match-league">
+          <span class="league-label" title="${league}">${league}</span>
+          <button class="favorite" data-favorite="${id}" aria-label="关注 ${home} 对 ${away}" aria-pressed="${following}">${following ? "★" : "☆"}</button>
+        </div>
+        <div class="match-teams">
+          <button class="team-button team-home" data-match="${id}">${home}</button>
+          <span class="match-versus" aria-hidden="true">/</span>
+          <button class="team-button team-away" data-match="${id}">${away}</button>
+        </div>
+        <button class="score-button" data-match="${id}" aria-label="查看比赛详情">${scoreMarkup(match)}</button>
+        <div class="match-odds">${state.matchScope === "recommended" ? "推荐盘口见下方" : renderMatchOdds(match)}</div>
+        <button class="detail-button" data-match="${id}" aria-label="查看 ${home} 比赛详情">详情</button>
+        ${state.matchScope === "recommended" ? matchRecommendationMarkup(match) : ""}
+      </article>`;
     })
     .join("");
   $$('#matches-list > .match-row').forEach((row, index) => {
@@ -318,6 +342,7 @@ function renderMatches() {
   });
   $("#fixture-count").textContent =
     state.matches.length + (state.cursor ? "+" : "");
+  $("#score-figure-live").textContent = items.filter((match) => match.phase === "live").length;
   $("#load-more").hidden = !state.cursor;
   if (items.length) $("#matches-state").hidden = true;
   else
@@ -481,7 +506,7 @@ async function loadMatches(append = false) {
     state.cursor = cursor;
     renderMatches();
     if (!append) scrollTo({ top: scrollPosition, behavior: "instant" });
-    $("#last-updated").textContent = "更新 " + time(result.server_time);
+    $("#last-updated").textContent = time(result.server_time);
     updateMatchServiceState();
     if (summaryIds.length) void loadMatchSummaries([...new Set(summaryIds)], sequence, controller.signal);
   } catch (error) {

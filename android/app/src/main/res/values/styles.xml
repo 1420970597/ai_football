@@ -1,9 +1,8 @@
 <resources>
-  <color name="score_ink">#171d27</color>
-  <color name="score_panel">#242d3b</color>
-  <color name="score_accent">#204fd6</color>
-  <color name="score_amber">#ffd476</color>
-  <color name="score_background">#f0f2f5</color>
+  <color name="score_ink">#101523</color>
+  <color name="score_panel">#20283d</color>
+  <color name="score_accent">#c9ec33</color>
+  <color name="score_background">#f2f5f7</color>
   <color name="score_muted">#505d6e</color>
   <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
     <item name="android:fontFamily">sans</item><item name="android:colorAccent">@color/score_accent</item>
