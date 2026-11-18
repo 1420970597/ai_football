@@ -40,6 +40,19 @@
 
 以 23:32 至 23:33 UTC 的三轮 Polymarket 归档复算，主、平、客的区间分别为 0.40–0.41、0.26–0.27、0.33–0.34。在该单一来源和区间假设下，客队平手的成本前保守分界约为 2.2424，有效本金比例下界为 0.73。三轮归档都晚于原赛前成交且缺同步的乐鱼预检。完整定价入口均拒绝单源输入。 [离线定价器](market_reference.py) [结算与边界回归](test_three_way_books.py)
 
+## Polymarket US 公开订单簿
+
+11 月 18 日 23:54:17 至 23:55:37 UTC，用公开接口采集 11 月 19 日 22:30 UTC 开球的瓦斯科达伽马对巴西国际。两边赛事目录的球队、开球时间和正常完赛期间一致。US 的比赛延期规则可能使用最后的公平市场价格，国际站的无结果规则单独规定各选项的结算。这些区别影响对三项概率与异常赛事的解释。 [美国市场赛事](https://gateway.polymarket.us/v1/events/slug/bra-vas-int-2026-11-19) [国际市场赛事](https://gamma-api.polymarket.com/events/slug/bra-vas-int-2026-11-19)
+
+| 五轮固定采样 | 双边报价及来源时点 | 每轮内部最大时差的范围 | 最旧一份报价的年龄范围 |
+| --- | ---: | ---: | ---: |
+| 国际站，三项各两个选项订单簿 | 30 份 | 0.459–38.229 秒 | 0.625–39.783 秒 |
+| 美国站，三项各一个 YES 买卖订单簿 | 15 份 | 109.687–166.497 秒 | 112.824–192.531 秒 |
+
+五轮无请求失败。美国站样本均为开放状态，并返回 `transactTime`、USD 价格及首档数量。采样器保存原始亚微秒精度字符串和本地接收时点，核对市场标识，并保留停盘或缺边状态。一轮客胜相距 2.239 秒，当时国际站买卖价为 0.17–0.19，美国站 0.17–0.18。同期三项仍无法配齐，两地亦缺同轮乐鱼执行预检。公开接口可用于重复取证。美国站的中央订单簿与国际站的链上结算架构有不同的交易机制，仍需评估流动性来源相关性和异步报价对估值的影响。 [美国站订单簿](https://docs.polymarket.us/api-reference/markets/get-market-book) [美国站市场机制](https://docs.polymarket.us/concepts/market-data) [国际站订单生命周期](https://docs.polymarket.com/concepts/order-lifecycle)
+
+三笔自然成交涉及的巴甲赛事也都出现在美国站目录。本次逐场读到的挂牌仅覆盖全场胜平负，无法覆盖雷默的大小球及弗拉门戈的让球组合。对其中的克鲁塞罗对帕尔梅拉斯，滚球时在 23:57:25 至 23:58:45 UTC 又采了五轮。国际站 30 份、美国站 15 份均保有双边深度和原生时点。跨两地完整三项的原生时差为 11.460–28.286 秒，美国站内部三项为 7.441–25.832 秒。23:58:00 UTC 乐鱼投影在第 26 分钟，胜平负报价最近原生更新时间为 23:57:25.196 UTC，投影比分未知。该时段未取得同时刻执行预检和独立赛况，留作报价覆盖证据。 [克鲁塞罗对帕尔梅拉斯](https://gateway.polymarket.us/v1/events/slug/bra-cru-pal-2026-11-18) [雷默对沙佩科人](https://gateway.polymarket.us/v1/events/slug/bra-cre-cha-2026-11-18) [弗拉门戈对巴拉纳竞技](https://gateway.polymarket.us/v1/events/slug/bra-fla-cap-2026-11-18)
+
 ## 复跑
 
 历史脚本的 `--kalshi-peer-ticker` 可重复传入一至两次，选择原盘口与其他盘口共同拥有有效买卖收值的最近已闭合分钟。缺共同分钟时返回空值。以下复现第三单的共同分钟。 [历史采样脚本](reference_history.py) [回归测试](test_reference_history.py)
@@ -53,3 +66,5 @@ docker run --rm --network host --cpus .25 --memory 128m --entrypoint python \
 ```
 
 当前订单簿可用同一挂载，改用 `/research/reference_orderbooks.py`，分别通过 `--polymarket` 和 `--kalshi` 传入已核验的公开市场编号。每轮输出一行 JSON。用 `--samples 5 --interval-seconds 20` 可复跑相同的有限采样窗口。
+
+美国站使用 `--polymarket-us atc-bra-vas-int-2026-11-19-vas` 传入公开市场标识。对应国际站传入 `--polymarket bra-vas-int-2026-11-19-vas`。平局和客胜分别使用赛事目录给出的 `-draw` 与 `-int` 标识。每轮最多查询八个市场。 [美国站市场标识文档](https://docs.polymarket.us/api-reference/markets/get-market-by-slug)

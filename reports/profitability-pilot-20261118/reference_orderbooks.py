@@ -12,6 +12,8 @@ from time import monotonic, sleep
 
 from reference_history import CLOB, GAMMA, KALSHI, get_json
 
+POLYMARKET_US = 'https://gateway.polymarket.us'
+
 
 def now():
     return datetime.now(timezone.utc)
@@ -50,6 +52,33 @@ def polymarket_book(book, condition, token, received_at):
     return result | {
         'quote_time': quoted_at, 'quote_age_seconds': (received_at - quoted_at).total_seconds() if quoted_at else None,
         'snapshot_hash': book.get('hash'),
+    }
+
+
+def polymarket_us_book(book, slug, received_at):
+    if book['marketSlug'] != slug:
+        raise ValueError('order book identity mismatch')
+    timestamp = book['transactTime']
+    if not isinstance(timestamp, str) or not timestamp.endswith('Z') or 'T' not in timestamp:
+        raise ValueError('invalid native order book timestamp')
+    quoted_at = datetime.fromisoformat(timestamp)
+    if received_at.utcoffset() is None or quoted_at > received_at:
+        raise ValueError('invalid order book observation time')
+
+    state = book['state']
+    if state == 'MARKET_STATE_OPEN':
+        bids, offers = book['bids'], book['offers']
+        if any(level['px']['currency'] != 'USD' for levels in (bids, offers) for level in levels):
+            raise ValueError('unexpected order book currency')
+        result = top_book(
+            top_level([(level['px']['value'], level['qty']) for level in bids], bid=True),
+            top_level([(level['px']['value'], level['qty']) for level in offers], bid=False),
+        )
+    else:
+        result = {'status': 'market_not_open'}
+    return result | {
+        'quote_time': quoted_at, 'native_transact_time': timestamp, 'market_state': state,
+        'quote_age_seconds': (received_at - quoted_at).total_seconds(),
     }
 
 
@@ -118,6 +147,18 @@ def capture_market(source, identifier):
             'condition_id': condition,
         }
         rules = market['description']
+    elif source == 'polymarket_us':
+        market = get_json(f'{POLYMARKET_US}/v1/market/slug/{identifier}')['market']
+        if market['slug'] != identifier or json.loads(market['outcomes']) != ['Yes', 'No']:
+            raise ValueError('unexpected market identity or outcome set')
+        raw = get_json(f'{POLYMARKET_US}/v1/markets/{identifier}/book')['marketData']
+        received_at = now()
+        books = [polymarket_us_book(raw, identifier, received_at) | {'outcome': 'Yes', 'received_at': received_at}]
+        metadata = {
+            'market_id': market['id'], 'market_type': market.get('sportsMarketType'), 'line': market.get('line'),
+            'scheduled_start': market.get('gameStartTime'), 'active': market['active'], 'closed': market['closed'],
+        }
+        rules = market['description']
     else:
         market = get_json(f'{KALSHI}/markets/{identifier}')['market']
         if market['ticker'] != identifier:
@@ -149,21 +190,26 @@ def capture(markets):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--polymarket', action='append', default=[])
+    parser.add_argument('--polymarket-us', action='append', default=[])
     parser.add_argument('--kalshi', action='append', default=[])
     parser.add_argument('--replay-kalshi-tickers', action='store_true',
                         help='read newline-delimited captured ticker frames with their original receive times on stdin')
     parser.add_argument('--samples', type=int, default=1)
     parser.add_argument('--interval-seconds', type=int, default=30)
     args = parser.parse_args()
-    markets = [('polymarket', slug) for slug in args.polymarket] + [('kalshi', ticker) for ticker in args.kalshi]
+    markets = (
+        [('polymarket', slug) for slug in args.polymarket]
+        + [('polymarket_us', slug) for slug in args.polymarket_us]
+        + [('kalshi', ticker) for ticker in args.kalshi]
+    )
     if (not 1 <= len(markets) <= 8 or len(set(markets)) != len(markets)
-            or any(not re.fullmatch(r'[a-z0-9-]{1,160}', slug) for slug in args.polymarket)
+            or any(not re.fullmatch(r'[a-z0-9-]{1,160}', slug) for slug in args.polymarket + args.polymarket_us)
             or any(not re.fullmatch(r'[A-Z0-9-]{1,160}', ticker) for ticker in args.kalshi)):
         parser.error('provide one to eight distinct public market IDs')
     if not 1 <= args.samples <= 20 or not 20 <= args.interval_seconds <= 300:
         parser.error('samples must be 1-20 and interval must be 20-300 seconds')
     if args.replay_kalshi_tickers:
-        if args.polymarket or args.samples != 1:
+        if args.polymarket or args.polymarket_us or args.samples != 1:
             parser.error('ticker replay only accepts Kalshi market IDs and one input stream')
         for ticker in replay_kalshi_tickers(sys.stdin, set(args.kalshi)):
             print(json.dumps(ticker, default=str), flush=True)

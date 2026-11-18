@@ -5,7 +5,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from reference_orderbooks import capture, kalshi_book, polymarket_book, replay_kalshi_tickers
+from reference_orderbooks import capture, capture_market, kalshi_book, polymarket_book, polymarket_us_book, replay_kalshi_tickers
 
 
 class ReferenceOrderBookTests(unittest.TestCase):
@@ -35,6 +35,36 @@ class ReferenceOrderBookTests(unittest.TestCase):
         self.assertEqual('missing_side', book([], [('0.40', '8')])['status'])
         with self.assertRaises(ValueError):
             book([('0.59', '0')], [('0.40', '8')])
+
+    def test_polymarket_us_capture_checks_market_and_preserves_order_book_time(self):
+        slug = 'atc-fixture-home'
+        received = datetime(2026, 11, 18, 23, 27, 46, tzinfo=timezone.utc)
+        book_time = '2026-11-18T23:27:45.721064983Z'
+        market = {'slug': slug, 'id': '123', 'outcomes': '["Yes","No"]', 'active': True, 'closed': False,
+                  'description': 'Regulation play', 'sportsMarketType': 'soccer_team_full_time_winner'}
+        book = {
+            'marketSlug': slug, 'transactTime': book_time, 'state': 'MARKET_STATE_OPEN',
+            'bids': [{'px': {'value': '0.58', 'currency': 'USD'}, 'qty': '7.25'}],
+            'offers': [{'px': {'value': '0.59', 'currency': 'USD'}, 'qty': '3.125'}],
+        }
+        with patch('reference_orderbooks.get_json', side_effect=[{'market': market}, {'marketData': book}]), \
+                patch('reference_orderbooks.now', return_value=received):
+            observation = capture_market('polymarket_us', slug)
+        quote, = observation['books']
+        self.assertEqual('123', observation['market_id'])
+        self.assertEqual('two_sided', quote['status'])
+        self.assertEqual(book_time, quote['native_transact_time'])
+        self.assertEqual(0.278936, quote['quote_age_seconds'])
+        self.assertEqual(Decimal('3.125'), quote['ask_size'])
+        for change in ({'marketSlug': 'different'}, {'transactTime': None},
+                       {'transactTime': '2026-11-18T23:28:00Z'},
+                       {'bids': [{'px': {'value': '0.58', 'currency': 'EUR'}, 'qty': '7'}]}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                polymarket_us_book(book | change, slug, received)
+        suspended = polymarket_us_book(book | {'state': 'MARKET_STATE_SUSPENDED'}, slug, received)
+        self.assertEqual('market_not_open', suspended['status'])
+        self.assertNotIn('bid', suspended)
+        self.assertEqual('missing_side', polymarket_us_book(book | {'bids': []}, slug, received)['status'])
 
     def test_failed_market_does_not_interrupt_the_sample(self):
         observation = {'source': 'kalshi', 'market': 'SECOND'}
