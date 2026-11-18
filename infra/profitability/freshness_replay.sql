@@ -12,7 +12,9 @@ WITH bounds AS (
                 THEN (receipt.payload->>'net_profit')::numeric END AS net,
            (permit.captured_at >= s.created_at AND s.created_at >= m.posted_at
                 AND permit.captured_at <= o.provider_placed_at) IS TRUE AS time_verified,
+           s.created_at - m.posted_at AS publication_to_signal,
            permit.captured_at - s.created_at AS signal_age,
+           o.provider_placed_at - permit.captured_at AS authorization_to_fill,
            permit.captured_at - m.posted_at AS message_age
     FROM v2_bet_orders o CROSS JOIN bounds b
     LEFT JOIN v2_expert_signals s ON s.id = o.signal_id
@@ -43,6 +45,21 @@ WITH bounds AS (
            count(DISTINCT (account_id, provider_identity_hash)) AS account_bindings,
            count(DISTINCT currency) AS known_currencies
     FROM fills
+), scoped_fills AS (
+    SELECT f.* FROM fills f CROSS JOIN coverage c
+    WHERE c.account_bindings = 1 AND c.unverified_binding = 0 AND c.known_currencies <= 1
+), timings AS (
+    SELECT period, CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase, stage,
+           count(*) AS verified_fills,
+           round((percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM elapsed)))::numeric, 2)
+               AS median_seconds,
+           round((percentile_cont(0.9) WITHIN GROUP (ORDER BY extract(epoch FROM elapsed)))::numeric, 2)
+               AS p90_seconds
+    FROM scoped_fills
+    CROSS JOIN LATERAL (VALUES ('publication_to_signal', publication_to_signal),
+        ('signal_to_authorization', signal_age), ('authorization_to_fill', authorization_to_fill)) AS stages(stage, elapsed)
+    WHERE time_verified
+    GROUP BY period, stage, GROUPING SETS ((), (phase))
 ), results AS (
     SELECT period, CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase, rule,
            count(*) AS opportunities,
@@ -55,16 +72,16 @@ WITH bounds AS (
            sum(stake) FILTER (WHERE keep AND net IS NOT NULL) AS settled_stake,
            sum(net) FILTER (WHERE keep) AS receipt_net,
            round(avg(net / nullif(stake, 0)) FILTER (WHERE keep) * 100, 2) AS equal_stake_receipt_pct
-    FROM fills CROSS JOIN coverage c
+    FROM scoped_fills
     CROSS JOIN LATERAL (VALUES
        ('baseline', true),
        ('signal_age_60s', time_verified AND signal_age <= interval '60 seconds'),
        ('message_age_120s', time_verified AND message_age <= interval '120 seconds')
     ) rules(rule, keep)
-    WHERE c.account_bindings = 1 AND c.unverified_binding = 0 AND c.known_currencies <= 1
     GROUP BY period, rule, GROUPING SETS ((), (phase))
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
-    'results', coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY period, phase, rule) FROM results r), '[]'::jsonb))
+    'results', coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY period, phase, rule) FROM results r), '[]'::jsonb),
+    'timings', coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY period, phase, stage) FROM timings t), '[]'::jsonb))
 FROM bounds b CROSS JOIN coverage c;
 ROLLBACK;

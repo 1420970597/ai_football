@@ -53,6 +53,8 @@ Run `source_holdout.sql` with the same four UTC parameters as the fixture exposu
 
 Run `freshness_replay.sql` with the same four UTC parameters as the fixture exposure replay. It compares all observed automatic fills against two pre-send limits, 60 seconds since signal creation and 120 seconds since the original message. It uses the authorization timestamp for the execution attempt that filled the order. Missing or inconsistent timestamps stay visible in the baseline and fail the candidate limits. This replay covers existing fills and does not capture new opportunities that faster processing might make available.
 
+The `timings` array reports the median and 90th percentile by cohort and match phase for publication to signal, signal to authorization, and authorization to native placement. It uses only chronologically consistent timestamps. The `coverage` counts track fills excluded from the timing statistics. Publication to signal includes time before the platform receives the message, so these timings do not isolate processing time inside the collector or Hermes.
+
 # Historical option coverage
 
 Run `review_price_coverage.sql` as a read-only diagnostic over the last 72 hours of retained review evidence. It matches the selected option to the immutable recommendation, then requires the expected distinct options from the same review attempt, database read time, native market instance, line, phase and score context. It reports the stricter count with one shared upstream quote timestamp. The sum of inverse prices describes the provider's quote set at review time. It does not establish a fair price, execution price, or realizable return.
