@@ -18,7 +18,12 @@ WITH bounds AS (
                  AND s.score_baseline->>'home' = p.evidence->'score_baseline'->>'home'
                  AND s.score_baseline->>'away' = p.evidence->'score_baseline'->>'away'
                  AND concat(s.score_baseline->>'home', ':', s.score_baseline->>'away') = p.evidence->>'score_benchmark'
-                 AND s.period = 'full_time'
+                 AND (s.period = 'full_time' OR (
+                       -- Native market 18 settles on the entire first half.
+                       s.period = 'first_half' AND f.sport = 'football' AND s.fixture_id ~ '^leyu:[0-9]+$'
+                       AND s.market_id = '18' AND s.market_kind = 'total'
+                       AND s.score_basis IN ('unknown', 'full_period')
+                 ))
              )) AS same_snapshot_contract,
            options.selected_price = s.recommendation_price
              AND options.sides = CASE
