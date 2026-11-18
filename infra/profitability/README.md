@@ -37,6 +37,10 @@ Run `source_holdout.sql` with the same four UTC parameters as the fixture exposu
 
 Run `freshness_replay.sql` with the same four UTC parameters as the fixture exposure replay. It compares all observed automatic fills against two pre-send limits, 60 seconds since signal creation and 120 seconds since the original message. It uses the authorization timestamp for the execution attempt that filled the order. Missing or inconsistent timestamps stay visible in the baseline and fail the candidate limits. This replay covers existing fills and does not capture new opportunities that faster processing might make available.
 
+# Historical option coverage
+
+Run `review_price_coverage.sql` as a read-only diagnostic over the last 72 hours of retained review evidence. It matches the selected option to the immutable recommendation, then requires the expected distinct options from the same review attempt, database read time, native market instance, line, phase and score context. It reports the stricter count with one shared upstream quote timestamp. The sum of inverse prices describes the provider's quote set at review time. It does not establish a fair price, execution price, or realizable return.
+
 # Private wallet observations
 
 Install `install_wallet_observation.sql` as a database administrator in a single transaction after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the active binding is healthy and its provider identity matches the order ledger. The monitor role receives function execution only, without account-table column access.
