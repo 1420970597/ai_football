@@ -1,6 +1,7 @@
 """本人账户、异步校验、订单许可与独立执行器受限接口。"""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -463,7 +464,8 @@ async def dispatch(request: Request):
     service_auth(request)
     settings = request.app.state.settings
     count = 0
-    skipped = {}
+    skipped: Counter[str] = Counter()
+    rejection_reasons: Counter[str] = Counter()
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             for policy in await orders.invalid_policies(conn):
@@ -509,9 +511,9 @@ async def dispatch(request: Request):
                         if reserved['signal_id'] == pair['signal_id']:
                             count += 1
                 except HTTPException as exc:
-                    key = str(exc.status_code)
-                    skipped[key] = skipped.get(key, 0) + 1
-                    continue
+                    skipped[str(exc.status_code)] += 1
+                    reason = exc.reason if isinstance(exc, orders.OrderEligibilityError) else f"http_{exc.status_code}"
+                    rejection_reasons[reason] += 1
         async with conn.transaction():
             rows = await conn.fetch("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state='healthy' AND a.renewal_state='ready' "
                 "AND (a.renewal_retry_after IS NULL OR a.renewal_retry_after<=now()) "
@@ -520,8 +522,9 @@ async def dispatch(request: Request):
             for account in rows:
                 await jobs.enqueue(conn, account, "refresh")
     if skipped:
-        log.warning('automatic dispatch blocked status_counts=%s', skipped)
-    return {"reserved": count, "blocked_status_counts": skipped}
+        log.warning('automatic dispatch blocked status_counts=%s reason_counts=%s', dict(skipped),
+                    json.dumps(rejection_reasons, sort_keys=True))
+    return {"reserved": count, "blocked_status_counts": dict(skipped)}
 
 
 @executor_router.post("/jobs/{job_id}/renewal/claim")
