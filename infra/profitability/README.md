@@ -19,6 +19,8 @@ Order snapshots and their health timestamp are written independently of optional
 
 For each settled order the monitor compares the projection to the latest stored settled receipt. The window includes aggregate counts of missing and inconsistent receipts. Four-window verification requires the same platform and provider account, one known currency, and verifiable costs. Apply `grants.sql` when updating the dedicated monitor role. Snapshot output contains neither order identifiers nor account identities.
 
+If an order has no native settlement time, the observed receipt timestamp still groups it for diagnostics. Every closed window overlapping the possible interval, from the earliest recorded placement bound to the observed receipt, remains unverified. An overlap count can include the same order in successive windows. Its receipt amount is counted only once in the diagnostic totals.
+
 # Execution price diagnostic
 
 Run `execution_quality.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v anchor=<UTC event boundary>` using authorized read access to the order, signal, settlement and quote records. It emits the preceding 48-hour baseline and up to the first 48 hours after the anchor. It keeps all settled orders in the totals. The price comparison uses the preflight record for the actual execution attempt. The recommendation comparison uses matching contract fields and accepts a live basis resolved in the matching settlement record under a verified Leyu rule. The verified remaining-period rule also requires agreement between the recommendation, preflight, and submitted score baseline. Reconstructed results are diagnostic and do not count toward the real profitability target.
