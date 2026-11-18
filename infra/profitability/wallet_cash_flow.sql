@@ -49,6 +49,10 @@ WITH bounds AS (
                count(*) FILTER (WHERE dated_settlement AND provider_stake IS NULL) AS missing_settled_principal,
                count(*) FILTER (WHERE dated_placement) AS placements,
                count(*) FILTER (WHERE dated_settlement) AS settlements,
+               count(net_difference) AS receipt_net_compared,
+               count(*) FILTER (WHERE net_difference <> 0) AS receipt_net_mismatches,
+               sum(net_difference) AS receipt_net_difference,
+               sum(abs(net_difference)) AS absolute_receipt_net_difference,
                count(*) FILTER (WHERE (dated_placement AND provider_stake IS NULL)
                                    OR (dated_settlement AND provider_payout IS NULL)) AS missing_amount,
                count(*) FILTER (WHERE missing_placement OR missing_settlement) AS missing_time,
@@ -57,6 +61,9 @@ WITH bounds AS (
                                    OR (dated_settlement AND settled_at = p.observed_at)) AS at_sample_time
         FROM (
             SELECT provider_stake, provider_payout, provider_placed_at, settled_at,
+                CASE WHEN state = 'settled' AND settled_at > p.previous_at AND settled_at <= p.observed_at
+                          AND pnl_basis = 'provider_reported_net'
+                     THEN settled_net - (provider_payout - provider_stake) END AS net_difference,
                 provider_order_no IS NOT NULL
                     AND provider_placed_at > p.previous_at AND provider_placed_at <= p.observed_at AS dated_placement,
                 state = 'settled' AND settled_at > p.previous_at AND settled_at <= p.observed_at AS dated_settlement,
@@ -88,6 +95,10 @@ WITH bounds AS (
            count(*) FILTER (WHERE evidence = 'incomplete') AS incomplete_intervals,
            count(*) FILTER (WHERE cash_flow_difference <> 0) AS intervals_with_difference,
            sum(placements) AS placements, sum(settlements) AS settlements,
+           coalesce(sum(receipt_net_compared), 0) AS receipt_net_compared,
+           coalesce(sum(receipt_net_mismatches), 0) AS receipt_net_mismatches,
+           sum(receipt_net_difference) AS receipt_net_difference,
+           sum(absolute_receipt_net_difference) AS absolute_receipt_net_difference,
            sum(placed_stake) AS placed_stake, sum(settled_payout) AS settled_payout,
            coalesce(sum(missing_settled_principal), 0) AS missing_settled_principal,
            CASE WHEN bool_and(missing_settled_principal = 0) THEN sum(settled_principal) END AS settled_principal,
