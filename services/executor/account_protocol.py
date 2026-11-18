@@ -370,9 +370,14 @@ class AccountProtocolClient:
             raise LeyuError("selected_native_market_not_unique")
         market = markets[0]
         expected_status = "0" if selection.phase == "scheduled" else "1"
-        if (str(market.get("matchStatus")) != expected_status or str(market.get("matchOver", "0")) != "0"
-                or str(market.get("matchHandicapStatus")) != "0" or str(market.get("status")) != "0"):
-            raise LeyuError("selected_native_market_not_open")
+        if str(market.get("matchStatus")) != expected_status:
+            raise LeyuError("selected_native_market_not_open_phase")
+        if str(market.get("matchOver", "0")) != "0":
+            raise LeyuError("selected_native_market_not_open_match_over")
+        if str(market.get("matchHandicapStatus")) != "0":
+            raise LeyuError("selected_native_market_not_open_fixture_flag")
+        if str(market.get("status")) != "0":
+            raise LeyuError("selected_native_market_not_open_market_flag")
         options = [row for row in _rows(market.get("marketOddsList"))
                    if str(row.get("oddsType")) == selection.selection_code
                    and str(row.get("oddsStatus")) in {"0", "1"}]

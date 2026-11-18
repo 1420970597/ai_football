@@ -49,6 +49,8 @@ WITH bounds AS (
     SELECT s.sport,s.phase,s.market_kind,s.period,o.state,
            CASE WHEN o.reason IN (
                 'eligibility_changed','executor_api_rejected','selected_native_market_not_open',
+                'selected_native_market_not_open_phase','selected_native_market_not_open_match_over',
+                'selected_native_market_not_open_fixture_flag','selected_native_market_not_open_market_flag',
                 'selected_native_market_not_unique','selected_native_option_not_open','selected_native_quote_changed',
                 'native_limits_not_unique','native_limits_rejected','account_stake_outside_available_limits',
                 'account_transport_failure','account_http_rejected','session_expired','executor_live_orders_disabled',

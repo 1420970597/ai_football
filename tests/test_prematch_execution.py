@@ -42,9 +42,21 @@ class PrematchProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.responses[LATEST_MARKET_PATH] = protocol_fixture.latest()
             self.responses[LATEST_MARKET_PATH][0]['matchStatus'] = status
             self.requests.clear()
-            with self.subTest(status=status), self.assertRaisesRegex(LeyuError, 'selected_native_market_not_open'):
+            with self.subTest(status=status), self.assertRaises(LeyuError) as raised:
                 await self.client.preflight(protocol_fixture.selection(phase='scheduled', score_benchmark=''), Decimal('2'))
+            self.assertEqual('selected_native_market_not_open_phase', raised.exception.category)
             self.assertEqual([LATEST_MARKET_PATH], [r.url.path for r in self.requests])
+
+    async def test_preflight_reports_which_market_flag_stopped_preparation(self):
+        for field, cause in (('matchOver', 'match_over'), ('matchHandicapStatus', 'fixture_flag'), ('status', 'market_flag')):
+            for value in (1, None, 'unexpected'):
+                self.responses[LATEST_MARKET_PATH] = protocol_fixture.latest()
+                self.responses[LATEST_MARKET_PATH][0][field] = value
+                self.requests.clear()
+                with self.subTest(field=field, value=value), self.assertRaises(LeyuError) as raised:
+                    await self.client.preflight(protocol_fixture.selection(), Decimal('2'))
+                self.assertEqual('selected_native_market_not_open_' + cause, raised.exception.category)
+                self.assertEqual([LATEST_MARKET_PATH], [r.url.path for r in self.requests])
 
     async def test_unknown_prematch_submission_is_never_repeated(self):
         prepared = await self.prepare_prematch()

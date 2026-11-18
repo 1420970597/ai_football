@@ -124,4 +124,4 @@ class BasketballPreflightTests(unittest.IsolatedAsyncioTestCase):
     async def test_closed_basketball_market_is_never_prepared(self):
         with self.assertRaises(LeyuError) as raised:
             await self.prepare(basketball_selection(), closed=True)
-        self.assertEqual("selected_native_market_not_open", raised.exception.category)
+        self.assertEqual("selected_native_market_not_open_market_flag", raised.exception.category)
