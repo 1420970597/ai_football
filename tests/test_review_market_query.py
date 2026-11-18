@@ -61,3 +61,23 @@ class MarketQueryTests(unittest.TestCase):
                                selection='over', market_query='大2.5')
         self.assertEqual('first_half', market_filters(body)['period'])
         self.assertEqual('大2.5', body.market_query)
+
+    def test_half_total_shorthand_uses_explicit_first_half_scope(self):
+        body = SimpleNamespace(market_kind='total', period='first_half', source_periods=['first_half'],
+                               line=None, selection=None, market_query='半大2.5/3')
+        self.assertEqual({'market_kind': 'total', 'period': 'first_half', 'line': Decimal('2.75'),
+                          'selection': 'over', 'market_query': None}, market_filters(body))
+        self.assertEqual('半大2.5/3', body.market_query)
+
+    def test_half_total_does_not_infer_or_override_scope(self):
+        original = dict(market_kind='total', period='first_half', source_periods=['first_half'],
+                        line=None, selection=None, market_query='半大2.5/3')
+        for overrides in ({'source_periods': None}, {'source_periods': ['first_half', 'second_half']},
+                          {'period': 'second_half', 'source_periods': ['second_half']}, {'period': None},
+                          {'market_kind': None}, {'market_kind': 'team_total'},
+                          {'line': Decimal('2.5')}, {'selection': 'under'},
+                          {'market_query': '半大2.5/3赔率1.9'}):
+            with self.subTest(overrides=overrides):
+                values = original | overrides
+                result = market_filters(SimpleNamespace(**values))
+                self.assertEqual({k: v for k, v in values.items() if k != 'source_periods'}, result)
