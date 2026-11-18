@@ -11,6 +11,10 @@ Supply the input through a private process pipe. The result contains counts, win
 
 On the production Docker host, `bash infra/profitability/reconcile_live_window.sh <UTC start>` runs the single-window check through the existing API and executor containers. It uses the healthy session for the one account binding present in the order ledger and opens a read-only database transaction. Credentials and order identifiers travel only through the process pipe. The command can run after the boundary without changing the account, order ledger, or deployment.
 
+The first four one-shot timers save their reports in the private reconciliation directory. Run `reconcile_due_windows.sh <fixed UTC anchor> <private reconciliation directory>` from a recurring timer to continue after the first 48 hours. It begins when the fifth window has been closed for at least 350 seconds, checks one missing report per invocation, and preserves existing nonempty reports. A failed command leaves its window eligible for retry. An incomplete upstream response can still produce a report and is visible in its reconciliation fields. The same fixed anchor determines every later boundary.
+
+The production transient timer uses the UTC calendar `*-*-* 02,14:25,45:00 UTC`. Register it again after a host reboot. The reconciliation directory retains reports across reboots and the script starts with the earliest missing report.
+
 The check compares reported stake, payout, profit, currency and fees. `complete_page` describes the full scan, which reads up to three pages per window. It requires a consistent provider total matching the count of distinct valid settled orders. `pages_read` and `scan_issue` expose interrupted, repeated, or limited scans. `order_receipt_fields_reconciled` also requires a nonempty, one-to-one match with native settlement times, amounts, fees and one currency. The report counts mismatches and fields available upstream for possible recovery. Separate wallet evidence is required to establish fee treatment and the account-level net result.
 
 # Continuous snapshots
