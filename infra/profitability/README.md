@@ -111,6 +111,8 @@ systemd-run --unit=ai-football-profitability-preflight-cohorts --collect \
 
 Run `opportunity_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to count all saved recommendations alongside the recorded automatic order states for the unique ledger account binding. Counts use the recommendation as the unit, including withdrawn recommendations and those with no automatic order. Manual orders do not contribute to automatic order states. An absent order does not identify why execution did not occur, or whether the recommendation was eligible at the time.
 
+`automatic_order_stops` reports cancelled and rejected automatic orders by recorded reason, phase and contract. It counts order rows, including a cancelled attempt for a recommendation that also has a successful order. Missing reasons are marked `unrecorded`. Reasons outside the known service codes are counted as `other_recorded` without exposing their contents. Recommendations with no automatic order remain in the separate coverage totals.
+
 # Private wallet observations
 
 Install `install_wallet_observation.sql` as a database administrator in a single transaction after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the active binding is healthy and its provider identity matches the order ledger. The monitor role receives function execution only, without account-table column access.
