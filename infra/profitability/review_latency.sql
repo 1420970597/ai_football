@@ -89,6 +89,9 @@ WITH bounds AS (
     FROM result_metrics
 ), tool_metrics AS (
     SELECT trace_kind, payload->>'status' AS status,
+           CASE WHEN jsonb_typeof(payload->'refresh'->'attempted')='boolean'
+                THEN (payload->'refresh'->>'attempted')::boolean END AS refresh_attempted,
+           nullif(payload->'refresh'->>'reason','') AS refresh_reason,
            CASE WHEN jsonb_typeof(payload->'elapsed_ms')='number'
                 THEN (payload->>'elapsed_ms')::numeric END AS elapsed_ms
     FROM attempt_traces
@@ -98,11 +101,20 @@ WITH bounds AS (
            round((percentile_cont(0.9) WITHIN GROUP (ORDER BY elapsed_ms)
                FILTER (WHERE elapsed_ms>=0))::numeric,2) AS p90_ms
     FROM tool_metrics GROUP BY trace_kind,status
+), market_refresh_summary AS (
+    SELECT status, refresh_attempted, refresh_reason,
+           count(*) AS calls, count(*) FILTER (WHERE elapsed_ms>=0) AS timed_calls,
+           round((percentile_cont(0.9) WITHIN GROUP (ORDER BY elapsed_ms)
+               FILTER (WHERE elapsed_ms>=0))::numeric,2) AS p90_ms
+    FROM tool_metrics WHERE trace_kind='mcp_list_match_markets'
+    GROUP BY status,refresh_attempted,refresh_reason
 )
 SELECT jsonb_build_object('bounds',to_jsonb(b),'scope',to_jsonb(c),
     'coverage',(SELECT jsonb_agg(to_jsonb(v) ORDER BY phase) FROM coverage v),
     'timings',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY phase,stage) FROM timings t),'[]'::jsonb),
     'attempt_summary',(SELECT to_jsonb(a) FROM attempt_summary a),
-    'tool_summary',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY trace_kind,status) FROM tool_summary t),'[]'::jsonb))
+    'tool_summary',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY trace_kind,status) FROM tool_summary t),'[]'::jsonb),
+    'market_refresh_summary',coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY status,refresh_attempted,refresh_reason)
+        FROM market_refresh_summary r),'[]'::jsonb))
 FROM bounds b CROSS JOIN scope c;
 ROLLBACK;
