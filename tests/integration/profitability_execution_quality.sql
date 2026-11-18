@@ -24,19 +24,25 @@ SELECT n, 'leyu:123', 'live', CASE WHEN n IN (2,3) THEN 'handicap' ELSE 'total' 
     CASE WHEN n IN (2,3) THEN '4' WHEN n=5 THEN 'other' ELSE '2' END,
     'full_time', 1.5, CASE WHEN n IN (2,3) THEN 'home' ELSE 'over' END,
     'unknown', '{"home":1,"away":0}', :'anchor'::timestamptz, 2.00,
-    CASE WHEN n=2 THEN 'half_win' ELSE 'win' END, CASE WHEN n=2 THEN 0.50 ELSE 1.00 END, 2
-FROM generate_series(1,8) n;
+    CASE n WHEN 2 THEN 'half_win' WHEN 11 THEN 'pending' ELSE 'win' END,
+    CASE WHEN n=2 THEN 0.50 ELSE 1.00 END, 2
+FROM generate_series(1,12) n;
 INSERT INTO v2_bet_orders
 SELECT id, id, id, created_at + interval '8 hours', created_at + interval '8 hours',
-    created_at + interval '10 seconds', 5, 2.10,
+    created_at + interval '10 seconds', 5, CASE WHEN id=12 THEN NULL ELSE 2.10 END,
     CASE id WHEN 1 THEN 5.49 WHEN 2 THEN 0 WHEN 6 THEN NULL ELSE 5.50 END, 'settled', false
 FROM v2_expert_signals;
+INSERT INTO v2_bet_orders
+VALUES (13, 13, 13, :'anchor'::timestamptz + interval '8 hours',
+    :'anchor'::timestamptz + interval '8 hours', :'anchor'::timestamptz + interval '10 seconds',
+    5, 2.10, 5.50, 'settled', false);
 INSERT INTO v2_quote_evidence
-SELECT id, id, fixture_id, market_id, period, selection, line,
+SELECT id, id, fixture_id, market_id, period, CASE WHEN id=9 THEN 'under' ELSE selection END, line,
     CASE id WHEN 1 THEN 1.90 WHEN 2 THEN 2.25 ELSE 2.10 END,
     jsonb_build_object('stage','preflight_validated','attempt_id',id::text,'signal_id',
        CASE WHEN id=7 THEN 'wrong' ELSE id::text END,'phase',phase,'market_kind',market_kind,
-       'score_basis',score_basis,'score_baseline',score_baseline,'score_benchmark',CASE WHEN id=3 THEN '2:0' ELSE '1:0' END),
+       'score_basis',CASE WHEN id=10 THEN 'full_period' ELSE score_basis END,
+       'score_baseline',score_baseline,'score_benchmark',CASE WHEN id=3 THEN '2:0' ELSE '1:0' END),
     'order_attempt', created_at + CASE WHEN id=8 THEN interval '11 seconds' ELSE interval '5 seconds' END
 FROM v2_expert_signals;
 INSERT INTO v2_signal_settlements

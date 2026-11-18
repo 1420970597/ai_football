@@ -5,25 +5,24 @@ WITH bounds AS (
 ), settled AS MATERIALIZED (
     SELECT CASE WHEN coalesce(b.settled_at,b.receipt_observed_at) < a.anchor THEN 'prior_48h'
                 ELSE 'initial_48h' END AS cohort,
-           f.sport, s.phase, s.market_kind, b.manual, b.provider_stake, b.provider_price,
+           f.sport, s.phase, s.market_kind, s.period, s.id AS signal_id, s.score_basis, b.manual,
+           b.provider_stake, b.provider_price,
            b.settled_net, b.provider_placed_at, s.created_at AS signal_at,
-           s.recommendation_price, s.outcome, p.price AS preflight_price,
+           s.recommendation_price, s.outcome, p.price AS preflight_price, p.id AS preflight_id,
            p.fixture_id = s.fixture_id AND p.market_id = s.market_id AND p.period = s.period
                AND p.selection = s.selection AND p.line IS NOT DISTINCT FROM s.line
-               AND p.evidence->>'phase' = s.phase AND p.evidence->>'market_kind' = s.market_kind
-               AND p.evidence->>'score_basis' = s.score_basis
-               AND (s.phase <> 'live' OR s.score_basis = 'full_period'
-                    OR rule.basis = 'full_period'
-                    OR ((s.score_basis = 'remaining_period' OR rule.basis = 'remaining_period') AND s.period = 'full_time'
-                        AND s.score_baseline->>'home' = p.evidence->'score_baseline'->>'home'
-                        AND s.score_baseline->>'away' = p.evidence->'score_baseline'->>'away'
-                        AND (s.score_baseline->>'home') || ':' || (s.score_baseline->>'away') = p.evidence->>'score_benchmark'))
-               AS same_contract,
+               AND p.evidence->>'phase' = s.phase AND p.evidence->>'market_kind' = s.market_kind AS native_terms_match,
+           p.evidence->>'score_basis' = s.score_basis AS score_basis_matches,
+           s.period = 'full_time'
+               AND s.score_baseline->>'home' = p.evidence->'score_baseline'->>'home'
+               AND s.score_baseline->>'away' = p.evidence->'score_baseline'->>'away'
+               AND (s.score_baseline->>'home') || ':' || (s.score_baseline->>'away') = p.evidence->>'score_benchmark'
+               AS remaining_baseline_matches,
            rule.basis AS verified_rules_basis
     FROM v2_bet_orders b LEFT JOIN v2_expert_signals s ON s.id = b.signal_id
     LEFT JOIN v2_fixtures f ON f.id = s.fixture_id CROSS JOIN bounds a
     LEFT JOIN LATERAL (
-        SELECT q.fixture_id,q.market_id,q.period,q.selection,q.line,q.price,q.evidence
+        SELECT q.id,q.fixture_id,q.market_id,q.period,q.selection,q.line,q.price,q.evidence
         FROM v2_quote_evidence q
         WHERE q.reference_id = b.id AND q.evidence_kind = 'order_attempt'
             AND q.evidence->>'stage' = 'preflight_validated'
@@ -52,20 +51,35 @@ WITH bounds AS (
     WHERE b.state = 'settled'
         AND coalesce(b.settled_at,b.receipt_observed_at) >= a.anchor - interval '48 hours'
         AND coalesce(b.settled_at,b.receipt_observed_at) < least(a.observed_at,a.anchor + interval '48 hours')
+), contract_checked AS (
+    SELECT *, CASE
+        WHEN signal_id IS NULL THEN 'missing_signal'
+        WHEN preflight_id IS NULL THEN 'missing_matching_preflight'
+        WHEN native_terms_match IS NOT TRUE THEN 'native_terms_mismatch'
+        WHEN score_basis_matches IS NOT TRUE THEN 'score_basis_mismatch'
+        WHEN phase <> 'live' OR coalesce(verified_rules_basis, score_basis) = 'full_period' THEN NULL
+        WHEN coalesce(verified_rules_basis, score_basis) <> 'remaining_period' THEN 'unverified_live_score_basis'
+        WHEN remaining_baseline_matches IS NOT TRUE THEN 'remaining_score_evidence_mismatch'
+    END AS contract_exclusion
+    FROM settled
 ), comparable AS (
-    SELECT *, (same_contract AND provider_stake > 0 AND settled_net IS NOT NULL
-                  AND provider_price > 1 AND preflight_price > 1 AND recommendation_price > 1
-                  AND outcome IN ('win','half_win','loss','half_loss','push','void')) IS TRUE AS price_bridge_available,
+    SELECT *, contract_exclusion IS NULL AS same_contract,
+        CASE
+            WHEN contract_exclusion IS NOT NULL THEN contract_exclusion
+            WHEN (outcome IN ('win','half_win','loss','half_loss','push','void')) IS NOT TRUE THEN 'unresolved_signal_outcome'
+            WHEN (provider_stake > 0 AND settled_net IS NOT NULL) IS NOT TRUE THEN 'missing_receipt_amounts'
+            WHEN (provider_price > 1 AND preflight_price > 1 AND recommendation_price > 1) IS NOT TRUE THEN 'missing_valid_prices'
+        END AS price_bridge_exclusion,
         CASE outcome WHEN 'win' THEN 1 WHEN 'half_win' THEN 0.5 ELSE 0 END AS win_fraction,
         CASE outcome WHEN 'loss' THEN 1 WHEN 'half_loss' THEN 0.5 ELSE 0 END AS loss_fraction
-    FROM settled
+    FROM contract_checked
 ), priced AS (
-    SELECT *,
-        CASE WHEN price_bridge_available THEN
+    SELECT *, price_bridge_exclusion IS NULL AS price_bridge_available,
+        CASE WHEN price_bridge_exclusion IS NULL THEN
             round(provider_stake * (win_fraction * (recommendation_price - 1) - loss_fraction), 2) END AS at_recommendation,
-        CASE WHEN price_bridge_available THEN
+        CASE WHEN price_bridge_exclusion IS NULL THEN
             round(provider_stake * (win_fraction * (preflight_price - 1) - loss_fraction), 2) END AS at_preflight,
-        CASE WHEN price_bridge_available THEN
+        CASE WHEN price_bridge_exclusion IS NULL THEN
             round(provider_stake * (win_fraction * (provider_price - 1) - loss_fraction), 2) END AS at_fill
     FROM comparable
 ), summary AS (
@@ -98,8 +112,16 @@ WITH bounds AS (
            count(*) FILTER (WHERE settled_net = 0 AND abs(at_fill) > 0.01) AS zero_receipts_with_nonzero_reconstruction
     FROM priced
     GROUP BY GROUPING SETS ((cohort), (cohort,sport,phase,market_kind,manual))
+), exclusions AS (
+    SELECT cohort, sport, phase, market_kind, period, price_bridge_exclusion AS reason,
+           count(*) AS orders, count(settled_net) AS with_receipt_net, sum(settled_net) AS provider_net
+    FROM priced
+    WHERE price_bridge_exclusion IS NOT NULL
+    GROUP BY 1,2,3,4,5,6
 )
 SELECT jsonb_build_object('anchor',anchor,'observed_at',observed_at,'cohorts',coalesce((
     SELECT jsonb_agg(to_jsonb(s) ORDER BY cohort, all_markets DESC, sport, phase, market_kind, manual) FROM summary s
+), '[]'::jsonb), 'price_bridge_exclusions', coalesce((
+    SELECT jsonb_agg(to_jsonb(e) ORDER BY cohort, reason, sport, phase, market_kind, period) FROM exclusions e
 ), '[]'::jsonb)) FROM bounds;
 ROLLBACK;
