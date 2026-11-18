@@ -180,6 +180,8 @@ class ManualBuyIntentTests(unittest.IsolatedAsyncioTestCase):
         from services.api.app.signal_identity import previous_intent_order
         signal, _ = await self.configured()
         await self.pool.execute("UPDATE v2_expert_signals SET score_basis='remaining_period',score_baseline='{\"home\":1,\"away\":0}'::jsonb WHERE id=$1", signal)
+        await self.pool.execute("UPDATE v2_fixtures SET home_score=1,away_score=0 "
+                                "WHERE id=(SELECT fixture_id FROM v2_expert_signals WHERE id=$1)", signal)
         first = await self.reserve(signal)
         for change in ({'line':Decimal('3.5')}, {'period':'first_half'}, {'selection':'under'},
                        {'score_baseline':{'home':2,'away':0}}):

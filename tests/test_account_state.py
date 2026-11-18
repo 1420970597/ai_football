@@ -14,7 +14,7 @@ import uuid
 
 import asyncpg
 import dbsupport
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import httpx
 
 from services.api.app import account_jobs, database, orders
@@ -175,9 +175,9 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 await self.worker_api.post('/internal/executor/dispatch')
                 self.assertEqual('idle',(await self.worker_api.post('/internal/executor/claim')).json()['kind'])
 
-    async def signal(self):
+    async def signal(self, *, fixture=None):
         source,expert,message,signal,quote=[uuid.uuid4() for _ in range(5)]
-        fixture='leyu:'+uuid.uuid4().hex
+        fixture=fixture or 'leyu:'+uuid.uuid4().hex
         await self.pool.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,$2,'群')",source,str(source))
         await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,$2,'专家昵称')",expert,str(expert))
         await self.pool.execute('INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2)',source,expert)
@@ -895,6 +895,53 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             result=await self.worker_api.post(f"/internal/executor/orders/{order['id']}/authorize",json={'attempt_id':work['attempt_id'],'prepared_digest':digest,'payload_json':encoded,'quote_checked_at':prepared.checked_at})
             self.assertEqual(422,result.status_code,result.text)
         self.assertEqual('pending',await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1',order['id']))
+
+    async def test_remaining_period_requires_consistent_scores_at_reserve_and_send(self):
+        from services.executor.account_protocol import NativeSelection
+
+        await self.healthy()
+        fixture = 'leyu:123456'
+        signal, expert, _, quote = await self.signal(fixture=fixture)
+        await self.enable([expert])
+        await self.pool.execute(
+            "UPDATE v2_current_quotes SET market_id='4',market_kind='handicap',selection='home',line=-0.5,play_id='4' WHERE id=$1", quote)
+        await self.pool.execute(
+            "UPDATE v2_expert_signals SET market_id='4',market_kind='handicap',selection='home',line=-0.5,score_baseline=$2 WHERE id=$1",
+            signal, {'home': 1, 'away': 0})
+        with self.assertRaisesRegex(HTTPException, '推荐比分缺失或已经变化'):
+            await self.reserve(signal)
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=1,away_score=0 WHERE id=$1', fixture)
+        order = await self.reserve(signal)
+        self.assertEqual('1:0', order['quote_snapshot']['score_benchmark'])
+        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+        self.assertEqual('order', work['kind'])
+
+        def native_handicap(request):
+            response = self.native(request)
+            if request.url.path != LATEST_MARKET_PATH:
+                return response
+            payload = response.json()
+            market = payload['data'][0]
+            market.update(playId='4', marketValue='-0.5')
+            market['marketOddsList'][0]['oddsType'] = '1'
+            return httpx.Response(200, json=payload)
+
+        manager = AccountSessionManager(AccountScope(**work['scope']), work['config'], RenewalHooks(None,None,None))
+        async with AccountProtocolClient(manager.scope, manager.venue_session(), transport=httpx.MockTransport(native_handicap)) as client:
+            prepared = await client.preflight(NativeSelection.from_snapshot(work['selection']), Decimal(work['stake']),
+                                              device_imei=work['config']['leyu_app_uuid'])
+        body = {'attempt_id': work['attempt_id'], 'prepared_digest': prepared.digest,
+                'payload_json': prepared.payload_json, 'quote_checked_at': prepared.checked_at}
+        url = f"/internal/executor/orders/{order['id']}/authorize"
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=2 WHERE id=$1', fixture)
+        rejected = await self.worker_api.post(url, json=body)
+        self.assertEqual(409, rejected.status_code, rejected.text)
+        self.assertIn('推荐比分缺失或已经变化', rejected.json()['detail'])
+        self.assertEqual('pending', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=1 WHERE id=$1', fixture)
+        authorized = await self.worker_api.post(url, json=body)
+        self.assertEqual(200, authorized.status_code, authorized.text)
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
 
     async def test_exact_official_receipt_releases_only_matching_exposure(self):
         await self.healthy()

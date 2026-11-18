@@ -10,6 +10,7 @@ from execution_scope import execution_market_supported, native_sport_id  # pyrig
 
 from .auth import audit
 from .membership import has_entitlement
+from .score_rules import settlement_rule
 from .security import decrypt_secret
 from .expert_profitability import require_expert_permission
 from .signal_identity import previous_intent_order
@@ -141,6 +142,19 @@ async def exposure_totals(conn, user_id, daily_timezone: str, at: datetime | Non
     )
 
 
+def remaining_period_benchmark(signal):
+    if signal["phase"] != "live" or signal["period"] != "full_time":
+        return None
+    rule = settlement_rule({"id": signal["fixture_id"], "sport": signal["sport"]}, dict(signal))
+    if signal["score_basis"] != "remaining_period" and (rule or {}).get("score_basis") != "remaining_period":
+        return None
+    baseline = signal["score_baseline"] or {}
+    home, away = signal["home_score"], signal["away_score"]
+    if home is None or away is None or (baseline.get("home"), baseline.get("away")) != (home, away):
+        raise HTTPException(409, "滚球剩余时间盘口的推荐比分缺失或已经变化")
+    return f"{home}:{away}"
+
+
 async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = False,
                          request_id: uuid.UUID | None = None):
     if manual:
@@ -180,6 +194,7 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
     score = ""
     if signal["current_phase"] == "live" and signal['home_score'] is not None and signal['away_score'] is not None:
         score = f"{signal['home_score']}:{signal['away_score']}"
+    score = remaining_period_benchmark(signal) or score
     snapshot = {"match_id": signal["fixture_id"].split(":", 1)[-1], "market_instance_id": signal["market_instance_id"],
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
                 "selection_code": {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"]),
@@ -238,6 +253,9 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
         if order["stake"] > policy["max_per_order"]:
             raise HTTPException(409, "推荐或单笔许可已失效")
     current = order["quote_snapshot"]
+    benchmark = remaining_period_benchmark(signal)
+    if benchmark is not None and current["score_benchmark"] != benchmark:
+        raise HTTPException(409, "滚球剩余时间盘口的预留比分已经变化")
     if current["phase"] != signal["current_phase"] or current["sport_id"] != native_sport_id(signal["sport"]):
         raise HTTPException(409, "比赛阶段或体育项目已经变化")
     if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id")):
