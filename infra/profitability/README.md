@@ -41,9 +41,11 @@ The diagnostic also reconstructs Leyu football period totals with an existing eq
 
 # Fixture exposure replay
 
-Run `fixture_exposure.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC start> -v split=<UTC cohort boundary> -v end=<UTC end> -v observed=<UTC receipt cutoff>` using read access to orders, expert signals and receipts. The replay compares no cap with a cap of one or two open fills per fixture for new automatic orders. All sports and markets are included. Manual and pre-period fills remain in the exposure. A fill releases its slot once its first settled receipt was observable. Fills with no such receipt stay open at the evidence cutoff.
+Run `fixture_exposure.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC start> -v split=<UTC cohort boundary> -v end=<UTC end> -v observed=<UTC receipt cutoff>` using read access to orders, expert signals and receipts. The replay compares no cap with a cap of one or two open fills per fixture for new automatic orders. All sports and markets are included. Manual and pre-period fills remain in the exposure. A matching accepted, unsettled or settled receipt confirms the fill. A fill releases its slot once its first settled receipt was observable. Fills with no such receipt stay open at the evidence cutoff.
 
 Inspect coverage, tied timestamps and unresolved outcomes before interpreting the figures. The aggregate requires a single account binding and rejects mixed known currencies or incomplete fill evidence. Missing fee or currency fields are counted separately from receipt net. The counterfactual reuses existing fills and misses rejected or unsubmitted opportunities, rescheduled orders, and changes to remaining account budget. Treat the output as a concentration diagnostic.
+
+The `fixture_sensitivity` rows summarize observed receipt net by fixture in the same placement cohorts, overall and by recommendation phase. The lowest and highest net are obtained by removing one fixture with observed receipts. The range is null when fewer than two fixtures have a net. `fixtures_missing_any_net` includes fully pending fixtures and fixtures with both settled and missing receipts. In the phase rows the calculation removes only that phase's fills for the fixture.
 
 # Source and author holdout
 

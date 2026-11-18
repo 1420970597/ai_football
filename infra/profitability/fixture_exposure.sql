@@ -4,7 +4,7 @@ WITH RECURSIVE bounds AS (
     SELECT :'begin'::timestamptz AS begin_at, :'split'::timestamptz AS split_at,
            :'end'::timestamptz AS end_at, :'observed'::timestamptz AS observed_at
 ), fills AS MATERIALIZED (
-    SELECT o.id, o.account_id, o.provider_identity_hash, s.fixture_id, o.manual,
+    SELECT o.id, o.account_id, o.provider_identity_hash, s.fixture_id, s.phase, o.manual,
            o.provider_placed_at AS placed_at, o.provider_stake AS stake,
            first_receipt.observed_at AS closed_at, confirmation.observed_at AS accepted_at,
            CASE WHEN pg_input_is_valid(latest.payload->>'net_profit', 'numeric')
@@ -22,7 +22,8 @@ WITH RECURSIVE bounds AS (
     LEFT JOIN LATERAL (
         SELECT min(e.observed_at) AS observed_at FROM v2_order_receipt_evidence e
         WHERE e.order_id = o.id AND e.observed_at <= b.observed_at
-          AND e.payload->>'order_no' = o.provider_order_no AND e.payload->>'state' IN ('accepted', 'settled')
+          AND e.payload->>'order_no' = o.provider_order_no
+          AND e.payload->>'state' IN ('accepted', 'unsettled', 'settled')
     ) confirmation ON true
     LEFT JOIN LATERAL (
         SELECT e.payload
@@ -82,8 +83,27 @@ WITH RECURSIVE bounds AS (
     FROM replay r JOIN sequence s USING (fixture_id, step) CROSS JOIN bounds b
     WHERE s.placed_at >= b.begin_at
     GROUP BY 1, 2
+), fixture_receipts AS (
+    SELECT CASE WHEN s.placed_at < b.split_at THEN 'early' ELSE 'late' END AS period,
+           CASE WHEN grouping(s.phase) = 1 THEN 'all' ELSE coalesce(s.phase, 'unknown') END AS phase,
+           s.fixture_id, count(*) AS fills, count(s.net) AS fills_with_net, sum(s.net) AS net
+    FROM sequence s CROSS JOIN bounds b
+    WHERE s.placed_at >= b.begin_at
+    GROUP BY 1, s.fixture_id, GROUPING SETS ((), (s.phase))
+), fixture_sensitivity AS (
+    SELECT period, phase, count(*) AS fixtures, count(net) AS fixtures_with_net,
+           count(*) FILTER (WHERE fills_with_net < fills) AS fixtures_missing_any_net,
+           count(*) FILTER (WHERE net < 0) AS negative_fixtures,
+           count(*) FILTER (WHERE net > 0) AS positive_fixtures,
+           sum(net) AS receipt_net,
+           CASE WHEN count(net) > 1 THEN sum(net) - max(net) END AS lowest_net_excluding_one,
+           CASE WHEN count(net) > 1 THEN sum(net) - min(net) END AS highest_net_excluding_one
+    FROM fixture_receipts
+    GROUP BY period, phase
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
-    'comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY period, cap) FROM comparison p), '[]'::jsonb))
+    'comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY period, cap) FROM comparison p), '[]'::jsonb),
+    'fixture_sensitivity', coalesce((SELECT jsonb_agg(to_jsonb(f) ORDER BY period, phase)
+        FROM fixture_sensitivity f), '[]'::jsonb))
 FROM bounds b CROSS JOIN coverage c;
 ROLLBACK;
