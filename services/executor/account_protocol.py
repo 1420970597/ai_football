@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import logging
 import re
 import time
 from typing import Any, Mapping
@@ -24,6 +25,15 @@ ORDERS_PATH = "/yewu13/v1/betOrder/client/getOrderListV4PB"
 LATEST_MARKET_PATH = "/yewu13/v1/betOrder/client/queryLatestMarketInfo"
 LIMITS_PATH = "/yewu13/v1/betOrder/client/queryMarketMaxMinBetMoney"
 BET_PATH = "/yewu13/v1/betOrder/client/bet"
+
+log = logging.getLogger("platform.executor.account_protocol")
+REQUEST_OPERATIONS = {
+    AMOUNT_PATH: "balance",
+    ORDERS_PATH: "order_history",
+    LATEST_MARKET_PATH: "market_preflight",
+    LIMITS_PATH: "order_limits",
+    BET_PATH: "order_submission",
+}
 
 
 class SubmissionUnknown(LeyuError):
@@ -281,7 +291,9 @@ class AccountProtocolClient:
                         raise AuthExpired("session_expired", code)
                     raise LeyuError("account_http_rejected", str(response.status_code))
                 return payload if submission else decode_envelope(payload) if isinstance(payload, Mapping) and "code" in payload else payload
-        except (httpx.HTTPError, TimeoutError):
+        except (httpx.HTTPError, TimeoutError) as exc:
+            log.warning("account transport failure operation=%s error_type=%s",
+                        REQUEST_OPERATIONS.get(path, "unknown"), type(exc).__name__)
             raise LeyuError("account_transport_failure") from None
 
     async def balance(self) -> dict[str, Any]:

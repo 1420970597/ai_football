@@ -82,6 +82,7 @@ class Executor:
         root = f"/jobs/{work['job_id']}"
         result = {"attempt_id": work["attempt_id"], "status": "failed", "category": ""}
         manager = None
+        stage = "session"
         try:
             async with asyncio.timeout(270):
                 manager = self.manager(work)
@@ -89,16 +90,20 @@ class Executor:
                     session = await manager.renew("authorized_bootstrap")
                 else:
                     session = manager.venue_session()
+                stage = "initial_balance"
                 try:
                     async with self.client_factory(manager.scope, session) as client:
                         balance = await client.balance()
                 except AuthExpired:
+                    stage = "renewal"
                     session = await manager.renew("session_expired")
+                    stage = "renewed_balance"
                     async with self.client_factory(manager.scope, session) as client:
                         balance = await client.balance()
                 receipts = []
                 scanned = []
                 reconciliation_errors = []
+                stage = "order_history"
                 async with self.client_factory(manager.scope, session) as client:
                     planned_orders = work.get("orders", [])[:2]
                     lookups = {}
@@ -129,6 +134,7 @@ class Executor:
                                 receipt["provider_settlement_codes"] = item["provider_settlement_codes"]
                             receipts.append(receipt)
                     if work.get('orders'):
+                        stage = "final_balance"
                         try:
                             balance = await client.balance()
                         except LeyuError as exc:
@@ -146,6 +152,8 @@ class Executor:
             raise
         except Exception as exc:
             category = exc.category if isinstance(exc, LeyuError) else type(exc).__name__
+            if category == "account_transport_failure":
+                log.warning("account job transport failure stage=%s", stage)
             status = 'rejected' if category == 'app_login_rejected' else 'unknown' if getattr(manager, 'last_renewal_status', None) == 'unknown' else 'failed'
             result.update(category=category, provider_code=exc.code if isinstance(exc, LeyuError) else '', status=status)
         await self.finish(root + "/finish", result)

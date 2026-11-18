@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import gzip
 import json
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 import uuid
@@ -17,6 +18,7 @@ from services.executor.account_protocol import (
     AMOUNT_PATH, ORDERS_PATH, LATEST_MARKET_PATH, LIMITS_PATH, BET_PATH, normalize_order, order_page,
 )
 from services.executor.account_session import AccountScope, AccountSessionManager, RenewalHooks, VenueSession
+from services.executor.worker import Executor
 
 
 def scope(revision=1):
@@ -139,6 +141,29 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
 
     async def prepare(self):
         return await self.client.preflight(selection(), Decimal("2"), device_imei="user-device")
+
+    async def test_transport_failure_logs_operation_without_request_contents(self):
+        self.responses[AMOUNT_PATH] = httpx.ConnectTimeout('private timeout context')
+        with self.assertLogs('platform.executor.account_protocol', level='WARNING') as logs:
+            with self.assertRaisesRegex(LeyuError, '^account_transport_failure$'):
+                await self.client.balance()
+        self.assertEqual([
+            'WARNING:platform.executor.account_protocol:account transport failure operation=balance error_type=ConnectTimeout',
+        ], logs.output)
+
+    async def test_account_worker_identifies_initial_balance_transport_failure(self):
+        self.responses[AMOUNT_PATH] = httpx.ReadTimeout('private timeout context')
+        executor = Executor(None, 'https://isolated.invalid', client_factory=lambda *_: self.client)
+        with patch.object(executor, 'manager', return_value=SimpleNamespace(scope=self.owner, venue_session=lambda: self.session)), \
+                patch.object(executor, 'finish', new_callable=AsyncMock) as finish, \
+                self.assertLogs('platform.executor', level='WARNING') as logs:
+            await executor.account_job({'job_id': 'job', 'attempt_id': 'attempt',
+                                        'config': {'leyu_request_id': 'private', 'leyu_api_base': 'https://isolated.invalid'}})
+        self.assertTrue(any(line.endswith('stage=initial_balance') for line in logs.output))
+        self.assertFalse(any('private' in line for line in logs.output))
+        finish.assert_awaited_once_with('/jobs/job/finish', {
+            'attempt_id': 'attempt', 'status': 'failed', 'category': 'account_transport_failure', 'provider_code': '',
+        })
 
     def permit(self, prepared, **changes):
         return SubmissionPermit(**{"scope": self.owner, "execution_id": str(uuid.uuid4()), "prepared_digest": prepared.digest, **changes})
