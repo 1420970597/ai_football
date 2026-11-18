@@ -18,3 +18,4 @@
 - `sh tests/browser/visual-check.sh` 退出 0，14 屏及双端账户模式通过，阈值沿用旧基线。Hallmark `sloplint --render --kept` 最终退出 0，比分和专家八宽度底线均无失败，11 条提示级发现。比分首屏已移除专家收益数字，该样本在专家视图继续显示。前后对照见 `.runtime/hallmark-sport/lint/.hallmark/compare.html`。
 - `bash android/build-candidate.sh` 退出 0，28 项 JVM 测试、Lint 和双构建，真机安装验收仍待执行。网页镜像 `sha256:0404cbf139fb97ee932ee03ca98a4c382d5fbeeb06c4c5f3308b70e0afbe1f79` 打包后在预览容器启动。通过宿主 IPv4 验证首页与公开赛事接口。当前监听 `0.0.0.0:3018`，旧预览容器停止并保留恢复路径。正式运行端口未切换。
 - 双端篮球比分、专家关联比赛和本人历史专项通过。实读预览的 `tests/browser/score-summary-anchor.mjs` 退出 0，桌面与手机各 50 场，盘口响应均为 200，可见行位移分别约 0.41px 与 0.09px，双方均保留焦点、列表顺序且写请求为 0。原脚本默认容器地址与范围不符合本轮环境，已用可配置预览地址和显式全部赛事复验。
+- 实现提交 `38b7365072ec8db004288923998c35b246cb5bca` 已推送至远端任务分支。`git push` 与 `git ls-remote` 均退出 0，并核对提交一致。镜像已部署，提交前仅清理许可证行尾空格，许可正文相同。
