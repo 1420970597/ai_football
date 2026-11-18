@@ -54,6 +54,7 @@ class Settings:
     review_config_url: str = "http://api:8080/internal/review/config"
     market_refresh_url: str = ""
     quote_policy_projection: bool = False
+    hermes_connection_token: str = ""
 
 
 def _secret_bytes(name: str, expected: int) -> bytes:
@@ -92,4 +93,5 @@ def load_settings(*, role: str = "api") -> Settings:
         review_config_url=_clean(os.environ.get("REVIEW_CONFIG_URL", "http://api:8080/internal/review/config")),
         market_refresh_url=_clean(os.environ.get("TELEGRAM_CONTROL_URL", "http://collector:8092")).rstrip("/") + "/leyu/refresh",
         quote_policy_projection=role == "mcp",
+        hermes_connection_token=_clean(os.environ.get("HERMES_CONNECTION_TOKEN", "")) if role == "api" else "",
     )

@@ -13,6 +13,7 @@ from .http_runtime import (_safe_exception_frames, request_context, unexpected_e
                            database_interface_error, register_error_handlers)
 from .health import HermesProbe, MCPProbe, StorageProbe
 from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, result_checks, results, reviews, telegram
+from .routes import hermes_connection
 from .security import decrypt_secret
 from .routes import account_history
 
@@ -72,6 +73,7 @@ app.include_router(accounts.executor_router)
 app.include_router(account_history.router)
 app.include_router(account_history.executor_router)
 app.include_router(internal.router)
+app.include_router(hermes_connection.router)
 app.include_router(reviews.router)
 app.include_router(renewal.router)
 app.include_router(results.router)

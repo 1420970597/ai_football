@@ -870,6 +870,22 @@
               </button>
             </section>
             <section id="admin-system" class="admin-panel" hidden>
+              <details class="settings-section" open>
+                <summary>LLM 连接</summary>
+                <form id="hermes-connection-form" class="compact-form">
+                  <p id="hermes-connection-state" class="form-note" role="status">等待读取连接配置</p>
+                  <fieldset id="hermes-connection-fields" class="compact-form" disabled>
+                    <label>服务地址<input name="base_url" type="url" maxlength="1024" required /></label>
+                    <label>默认模型<input name="model" maxlength="200" required /></label>
+                    <label>API 密钥<input name="api_key" type="password" maxlength="4096" autocomplete="new-password" /></label>
+                    <div class="form-actions">
+                      <button class="primary-button">验证并保存</button>
+                      <button type="button" class="small-button" id="clear-hermes-key">清除密钥</button>
+                    </div>
+                  </fieldset>
+                  <button type="button" class="small-button" id="refresh-hermes-connection">刷新连接状态</button>
+                </form>
+              </details>
               <form id="system-settings" class="compact-form settings-form">
                 <h2>Hermes 与业务设置</h2>
                 <label

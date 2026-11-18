@@ -19,6 +19,7 @@ let sources = [];
 let settings = {};
 let leyuVersion = null;
 let modelConfiguration = null;
+let hermesConnection = null;
 let qrAttempt = null;
 let tgTimer = null;
 let dialogsCursor = null;
@@ -60,6 +61,60 @@ export async function loadAdmin() {
     loadAdminPlans(),
     loadDiagnostics(),
   ]);
+}
+
+function renderHermesConnection(data) {
+  hermesConnection = data;
+  const form = $("#hermes-connection-form");
+  form.elements.base_url.value = data.base_url;
+  form.elements.model.value = data.model;
+  form.elements.api_key.value = "";
+  form.elements.api_key.placeholder = data.key_configured ? "已配置 · 留空保持现值" : "未配置";
+  $("#hermes-connection-fields").disabled = false;
+  $("#clear-hermes-key").hidden = !data.key_configured;
+  const state = { applied: "已生效", unconfigured: "密钥未配置" }[data.application_state] || "状态未知";
+  $("#hermes-connection-state").textContent =
+    `版本 ${data.revision} · ${state} · ${data.verified_at ? "连接已验证 " + stamp(data.verified_at) : "尚无连接验证记录"}`;
+}
+
+async function loadHermesConnection() {
+  try {
+    renderHermesConnection(await adminApi("/hermes-connection"));
+  } catch (error) {
+    $("#hermes-connection-fields").disabled = true;
+    $("#hermes-connection-state").textContent =
+      error.status === 403 ? "LLM 连接管理未启用或当前会话无权访问" : "无法读取 LLM 连接配置，请刷新重试";
+  }
+}
+
+function bindHermesConnection() {
+  const form = $("#hermes-connection-form");
+  const save = (clearKey) => submit(form, async () => {
+    const status = $("#hermes-connection-state");
+    status.textContent = clearKey ? "正在清除密钥" : "正在验证连接";
+    try {
+      const body = { revision: hermesConnection.revision,
+        base_url: clearKey ? hermesConnection.base_url : form.elements.base_url.value.trim(),
+        model: clearKey ? hermesConnection.model : form.elements.model.value.trim(),
+        api_key: clearKey ? "" : form.elements.api_key.value.trim(), clear_key: clearKey };
+      renderHermesConnection(await adminApi("/hermes-connection", { method: "PUT", body }));
+      toast(clearKey ? "LLM 密钥已清除" : "LLM 连接已生效");
+    } catch (error) {
+      status.textContent = error.message;
+      throw error;
+    } finally {
+      form.elements.api_key.value = "";
+    }
+  });
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    save(false);
+  };
+  $("#refresh-hermes-connection").onclick = () => submit(form, loadHermesConnection);
+  $("#clear-hermes-key").onclick = async () => {
+    if (await confirmAction("清除 LLM API 密钥？清除后，新审核将无法连接模型服务，直到保存新的密钥。"))
+      await save(true);
+  };
 }
 async function loadDiagnostics() {
   try {
@@ -664,6 +719,7 @@ function bind() {
         );
         if (button.dataset.adminTab === "telegram") loadTelegram();
         if (button.dataset.adminTab === "orders") loadAdminOrders();
+        if (button.dataset.adminTab === "system") loadHermesConnection();
         return;
       }
       if (button.dataset.chat) {
@@ -719,6 +775,7 @@ function bind() {
   );
   $("#refresh-admin").onclick = () => loadStatus();
   bindModelConfiguration();
+  bindHermesConnection();
   $("#source-select").onchange = () => selectSource();
   $("#source-form").onsubmit = (e) => {
     e.preventDefault();

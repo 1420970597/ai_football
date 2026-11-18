@@ -89,6 +89,7 @@ services:
       COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Set the collector service token}
       EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
       HERMES_API_KEY: ${HERMES_API_KEY:?Set the internal Hermes API token}
+      HERMES_CONNECTION_TOKEN: ${HERMES_CONNECTION_TOKEN:-}
       LIVE_ORDERS_ENABLED: ${LIVE_ORDERS_ENABLED:-false}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
@@ -276,6 +277,8 @@ services:
       HERMES_MODEL: ${HERMES_MODEL:-deepseek-v4.1-flash}
       HERMES_PROVIDER_BASE_URL: ${HERMES_PROVIDER_BASE_URL:?Set the existing model gateway endpoint}
       HERMES_PROVIDER_API_KEY: ${HERMES_PROVIDER_API_KEY:?Set the existing model gateway credential}
+      HERMES_CONNECTION_TOKEN: ${HERMES_CONNECTION_TOKEN:-}
+      HERMES_CONNECTION_STORAGE_KEY: ${HERMES_CONNECTION_STORAGE_KEY:-}
       MCP_SERVER_URL: http://hermes-mcp:8090/mcp
       EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
       HERMES_GATEWAY_NO_SUPERVISE: "1"
@@ -296,6 +299,8 @@ services:
     working_dir: /workspace
     command: ["python", "/workspace/runner.py", "gateway", "run", "--no-supervise"]
     depends_on:
+      api:
+        condition: service_healthy
       hermes-mcp:
         condition: service_started
     expose: ["8642"]
@@ -306,7 +311,11 @@ services:
       timeout: 4s
       retries: 8
       start_period: 60s
-    networks: [app-private, egress]
+    networks:
+      app-private: {}
+      egress: {}
+      hermes-admin-private:
+        aliases: [hermes-connection]
     security_opt: [no-new-privileges:true]
     cpus: ${HERMES_CPUS:-0.55}
     mem_limit: 2g
@@ -332,6 +341,7 @@ services:
       edge-private:
         ipv4_address: ${EDGE_WEB_IP:-10.79.253.2}
       egress: {}
+      hermes-admin-private: {}
     cpus: ${WEB_CPUS:-0.1}
     mem_limit: 128m
     logging: *logging
@@ -343,6 +353,8 @@ networks:
       config:
         - subnet: ${EDGE_SUBNET:-10.79.253.0/28}
   app-private:
+    internal: true
+  hermes-admin-private:
     internal: true
   storage-private:
     internal: true

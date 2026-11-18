@@ -45,8 +45,13 @@ def validate_edge(document: dict) -> list[str]:
         attached=service.get('networks',{})
         if ('edge-private' in attached)!=(name in {'web','api'}):
             errors.append(f'{name}边缘网络归属不符合仅Web/API契约')
-    if set(services['web'].get('networks',{}))-{'edge-private','egress'}:
+    if set(services['web'].get('networks',{}))-{'edge-private','egress','hermes-admin-private'}:
         errors.append('Web不得连接业务或存储网络')
+    if 'hermes-admin-private' in networks:
+        members = {name for name, service in services.items()
+                   if 'hermes-admin-private' in service.get('networks', {})}
+        if not networks['hermes-admin-private'].get('internal') or members != {'web', 'hermes'}:
+            errors.append('Hermes 管理网络必须为仅 Web 和 Hermes 接入的内部网络')
     trusted=services.get('api',{}).get('environment',{}).get('FORWARDED_ALLOW_IPS')
     if trusted!=str(address): errors.append('API只可信任边缘Web固定IP，禁止通配或整个业务子网')
     for name,network in networks.items():
