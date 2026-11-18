@@ -7,7 +7,7 @@ import gzip
 import json
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 import uuid
 
 import httpx
@@ -163,6 +163,34 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any('private' in line for line in logs.output))
         finish.assert_awaited_once_with('/jobs/job/finish', {
             'attempt_id': 'attempt', 'status': 'failed', 'category': 'account_transport_failure', 'provider_code': '',
+        })
+
+    async def test_account_worker_reuses_one_client_for_balance_and_history(self):
+        factory = Mock(return_value=self.client)
+        executor = Executor(None, 'https://isolated.invalid', client_factory=factory)
+        manager = SimpleNamespace(scope=self.owner, venue_session=lambda: self.session)
+        with patch.object(executor, 'manager', return_value=manager), \
+                patch.object(executor, 'finish', new_callable=AsyncMock) as finish:
+            await executor.account_job({'job_id': 'job', 'attempt_id': 'attempt',
+                                        'config': {'leyu_request_id': 'session', 'leyu_api_base': 'https://isolated.invalid'},
+                                        'orders': [{'id': 'order', 'provider_order_no': 'missing-order',
+                                                    'created_at': '2026-11-18T11:00:00Z'}]})
+        factory.assert_called_once_with(self.owner, self.session)
+        self.assertEqual([AMOUNT_PATH, ORDERS_PATH, ORDERS_PATH, AMOUNT_PATH],
+                         [request.url.path for request in self.requests])
+        self.assertTrue(self.client.http.is_closed)
+        self.assertEqual('success', finish.await_args.args[1]['status'])
+
+    async def test_account_worker_does_not_report_balance_when_client_close_fails(self):
+        executor = Executor(None, 'https://isolated.invalid', client_factory=lambda *_: self.client)
+        manager = SimpleNamespace(scope=self.owner, venue_session=lambda: self.session)
+        with patch.object(self.client, 'aclose', side_effect=RuntimeError), \
+                patch.object(executor, 'manager', return_value=manager), \
+                patch.object(executor, 'finish', new_callable=AsyncMock) as finish:
+            await executor.account_job({'job_id': 'job', 'attempt_id': 'attempt',
+                                        'config': {'leyu_request_id': 'session', 'leyu_api_base': 'https://isolated.invalid'}})
+        finish.assert_awaited_once_with('/jobs/job/finish', {
+            'attempt_id': 'attempt', 'status': 'failed', 'category': 'RuntimeError', 'provider_code': '',
         })
 
     def permit(self, prepared, **changes):

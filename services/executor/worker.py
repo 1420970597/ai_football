@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import logging
@@ -84,70 +85,70 @@ class Executor:
         manager = None
         stage = "session"
         try:
-            async with asyncio.timeout(270):
+            async with asyncio.timeout(270), AsyncExitStack() as clients:
                 manager = self.manager(work)
                 if not work["config"].get("leyu_request_id") or not work["config"].get("leyu_api_base"):
                     session = await manager.renew("authorized_bootstrap")
                 else:
                     session = manager.venue_session()
                 stage = "initial_balance"
+                client = await clients.enter_async_context(self.client_factory(manager.scope, session))
                 try:
-                    async with self.client_factory(manager.scope, session) as client:
-                        balance = await client.balance()
+                    balance = await client.balance()
                 except AuthExpired:
                     stage = "renewal"
+                    await clients.aclose()
                     session = await manager.renew("session_expired")
                     stage = "renewed_balance"
-                    async with self.client_factory(manager.scope, session) as client:
-                        balance = await client.balance()
+                    client = await clients.enter_async_context(self.client_factory(manager.scope, session))
+                    balance = await client.balance()
                 receipts = []
                 scanned = []
                 reconciliation_errors = []
                 stage = "order_history"
-                async with self.client_factory(manager.scope, session) as client:
-                    planned_orders = work.get("orders", [])[:2]
-                    lookups = {}
-                    if planned_orders:
-                        begin = min(datetime.fromisoformat(order['created_at'].replace('Z', '+00:00')) for order in planned_orders) - timedelta(minutes=5)
-                        try:
-                            lookups = await client.lookup_many([order['provider_order_no'] for order in planned_orders],
-                                                               begin=begin, end=datetime.now(timezone.utc) + timedelta(minutes=5), max_pages=2)
-                        except AuthExpired:
+                planned_orders = work.get("orders", [])[:2]
+                lookups = {}
+                if planned_orders:
+                    begin = min(datetime.fromisoformat(order['created_at'].replace('Z', '+00:00')) for order in planned_orders) - timedelta(minutes=5)
+                    try:
+                        lookups = await client.lookup_many([order['provider_order_no'] for order in planned_orders],
+                                                           begin=begin, end=datetime.now(timezone.utc) + timedelta(minutes=5), max_pages=2)
+                    except AuthExpired:
+                        raise
+                    except LeyuError as exc:
+                        # An order-history read failure does not invalidate a
+                        # separately verified balance or another order's receipt.
+                        # Keep this order unresolved; never release its exposure.
+                        reconciliation_errors.extend({"order_id": order['id'], "category": exc.category,
+                                                      "provider_code": exc.code} for order in planned_orders)
+                for order in planned_orders:
+                    if order['provider_order_no'] not in lookups:
+                        continue
+                    lookup = lookups[order['provider_order_no']]
+                    scanned.append(order['id'])
+                    if lookup["found"] and not lookup.get("ambiguous"):
+                        item = lookup["receipt"]
+                        receipt = {key: item.get(key) for key in (
+                            "order_no", "state", "net_profit", "pnl_basis", "fees",
+                            "price", "stake", "payout", "currency", "placed_at", "settled_at")}
+                        if "provider_settlement_codes" in item:
+                            receipt["provider_settlement_codes"] = item["provider_settlement_codes"]
+                        receipts.append(receipt)
+                if work.get('orders'):
+                    stage = "final_balance"
+                    try:
+                        balance = await client.balance()
+                    except LeyuError as exc:
+                        if not receipts:
                             raise
-                        except LeyuError as exc:
-                            # An order-history read failure does not invalidate a
-                            # separately verified balance or another order's receipt.
-                            # Keep this order unresolved; never release its exposure.
-                            reconciliation_errors.extend({"order_id": order['id'], "category": exc.category,
-                                                          "provider_code": exc.code} for order in planned_orders)
-                    for order in planned_orders:
-                        if order['provider_order_no'] not in lookups:
-                            continue
-                        lookup = lookups[order['provider_order_no']]
-                        scanned.append(order['id'])
-                        if lookup["found"] and not lookup.get("ambiguous"):
-                            item = lookup["receipt"]
-                            receipt = {key: item.get(key) for key in (
-                                "order_no", "state", "net_profit", "pnl_basis", "fees",
-                                "price", "stake", "payout", "currency", "placed_at", "settled_at")}
-                            if "provider_settlement_codes" in item:
-                                receipt["provider_settlement_codes"] = item["provider_settlement_codes"]
-                            receipts.append(receipt)
-                    if work.get('orders'):
-                        stage = "final_balance"
-                        try:
-                            balance = await client.balance()
-                        except LeyuError as exc:
-                            if not receipts:
-                                raise
-                            result.update(category="post_reconciliation_balance_failed", provider_code=exc.code,
-                                          receipts=receipts, scanned_orders=scanned)
-                            log.warning("final balance read failed after reconciliation category=%s", exc.category)
-                if not result["category"]:
-                    result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"],
-                                  receipts=receipts, scanned_orders=scanned)
-                    if reconciliation_errors:
-                        result.update(category="order_reconciliation_partial", reconciliation_errors=reconciliation_errors)
+                        result.update(category="post_reconciliation_balance_failed", provider_code=exc.code,
+                                      receipts=receipts, scanned_orders=scanned)
+                        log.warning("final balance read failed after reconciliation category=%s", exc.category)
+            if not result["category"]:
+                result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"],
+                              receipts=receipts, scanned_orders=scanned)
+                if reconciliation_errors:
+                    result.update(category="order_reconciliation_partial", reconciliation_errors=reconciliation_errors)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
