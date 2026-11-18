@@ -74,6 +74,7 @@ if [ -z "$ordinal" ] && ((${#candidates[@]})); then
         docker exec -i ai-football-v2-executor-1 python -c '
 from datetime import datetime, timedelta, timezone
 import json
+import re
 import sys
 import tarfile
 
@@ -149,6 +150,12 @@ else:
         counts = [r.get("local_settled") for r in (original, retry)
                   if matches_bounds(r, "begin", "end", start, end)]
         counts = [count for count in counts if type(count) is int and count >= 0]
+        digest = window.get("local_receipt_digest")
+        if settled > 0 and isinstance(digest, str) and re.fullmatch(r"v1:[0-9a-f]{64}", digest):
+            if not any(r.get("local_receipt_digest") == digest for r in (original, retry)
+                       if matches_bounds(r, "begin", "end", start, end)):
+                print(index, f"receipt-{digest[3:]}")
+            continue
         if counts and settled > max(counts):
             print(index, f"late-{settled}")
 ' "$1" "$now" "$latest_due")

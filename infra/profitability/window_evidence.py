@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
+import re
 
 
 def load_report(path):
@@ -30,21 +31,40 @@ def reconciliation(reports, window, begin, end):
                     if path.stem.rsplit('-', 1)[-1].isdigit()]
     paths = sorted(late_reports, key=lambda path: int(path.stem.rsplit('-', 1)[-1]), reverse=True)
     paths += [reports / f'{ordinal}.retry.json', reports / f'{ordinal}.json']
+    snapshot_digest = window.get('local_receipt_digest')
+    if valid_digest(snapshot_digest):
+        paths.insert(0, reports / f'{ordinal}.receipt-{snapshot_digest[3:]}.json')
+    fallback = None
     for path in paths:
         scan = load_report(path)
         if not isinstance(scan, list) or len(scan) != 1 or not matches_window(scan[0], 'begin', 'end', begin, end):
             continue
         report = scan[0]
         settled = window['settled']
-        return {
+        archived_digest = report.get('local_receipt_digest')
+        ledger_matches = snapshot_digest == archived_digest if valid_digest(snapshot_digest) and valid_digest(archived_digest) else None
+        count_matches = settled > 0 and report.get('complete_page') is True and (
+            report.get('local_settled') == report.get('upstream_settled') == report.get('matched') == settled
+            and report.get('upstream_only') == report.get('local_only') == 0
+        )
+        result = {
             'file': path.name, 'issues': report.get('issues'),
-            'order_list_matches_current_count': settled > 0 and report.get('complete_page') is True
-            and report.get('local_settled') == report.get('upstream_settled') == report.get('matched') == settled
-            and report.get('upstream_only') == report.get('local_only') == 0,
+            'order_list_matches_current_count': count_matches,
+            'local_receipt_digest_matches': ledger_matches,
             'settlement_window_attribution_complete': report.get('settlement_window_attribution_complete') is True,
             'order_receipt_fields_reconciled': report.get('order_receipt_fields_reconciled') is True,
+            'current_receipt_fields_reconciled': count_matches and ledger_matches is True
+            and report.get('order_receipt_fields_reconciled') is True,
         }
-    return None
+        if count_matches and ledger_matches is True:
+            return result
+        if fallback is None:
+            fallback = result
+    return fallback
+
+
+def valid_digest(value):
+    return isinstance(value, str) and re.fullmatch(r'v1:[0-9a-f]{64}', value) is not None
 
 
 def summarize(root, snapshot):

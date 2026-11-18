@@ -28,6 +28,11 @@ WITH bounds AS (
     SELECT o.id, o.account_id, o.provider_identity_hash, o.state, o.manual, o.stake, o.provider_stake, o.reserved_stake,
            o.settled_net, o.provider_payout, o.provider_currency, o.provider_fees, o.pnl_basis,
            o.settled_at, o.receipt_observed_at, o.provider_placed_at,
+           CASE WHEN o.state='settled' THEN encode(sha256(convert_to(jsonb_build_array(
+               o.account_id, o.provider_identity_hash, o.provider_order_no,
+               o.provider_stake, o.provider_payout, o.settled_net, o.provider_fees, o.provider_currency, o.pnl_basis,
+               extract(epoch FROM o.provider_placed_at), extract(epoch FROM o.settled_at),
+               extract(epoch FROM o.receipt_observed_at))::text,'UTF8')),'hex') END AS receipt_row_sha256,
            coalesce(o.provider_placed_at, o.submitted_at, o.created_at) AS placed_at,
            least(o.provider_placed_at, o.submitted_at, o.created_at) AS earliest_placement,
            coalesce(o.settled_at, o.receipt_observed_at) AS booked_at,
@@ -74,6 +79,9 @@ WITH bounds AS (
     FROM windows w CROSS JOIN bounds b
     CROSS JOIN LATERAL (
         SELECT count(*) AS settled, count(DISTINCT account_id) AS accounts,
+               CASE WHEN count(*)>0 THEN 'v1:' || encode(sha256(convert_to(
+                   string_agg(receipt_row_sha256,'' ORDER BY id::text COLLATE "C"),'UTF8')),'hex') END
+                   AS local_receipt_digest,
                count(DISTINCT provider_identity_hash) AS provider_accounts,
                count(DISTINCT provider_currency) AS currencies,
                min(account_id::text) AS streak_account,

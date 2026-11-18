@@ -51,6 +51,11 @@ async def read_window():
                        settled_net AS net_profit, provider_fees AS fees, provider_currency AS currency,
                        settled_at, coalesce(settled_at, receipt_observed_at) AS booked_at,
                        provider_placed_at AS placed_at,
+                       encode(sha256(convert_to(jsonb_build_array(
+                           o.account_id, o.provider_identity_hash, o.provider_order_no,
+                           o.provider_stake, o.provider_payout, o.settled_net, o.provider_fees, o.provider_currency, o.pnl_basis,
+                           extract(epoch FROM o.provider_placed_at), extract(epoch FROM o.settled_at),
+                           extract(epoch FROM o.receipt_observed_at))::text,'UTF8')),'hex') AS receipt_row_sha256,
                        CASE WHEN settled_at IS NULL THEN (
                            SELECT min(e.observed_at) FROM v2_order_receipt_evidence e
                            WHERE e.order_id = o.id AND e.payload->>'state' = 'settled'
@@ -60,6 +65,7 @@ async def read_window():
                 WHERE account_id=$1 AND provider_identity_hash=$2 AND state='settled'
                   AND coalesce(settled_at,receipt_observed_at)>=$3
                   AND coalesce(settled_at,receipt_observed_at)<$4
+                ORDER BY o.id::text COLLATE "C"
             """, account["id"], account["provider_identity_hash"], begin, end)
             session = decode_document(settings.encryption_key, account["encrypted_session"])
             base = session["leyu_api_base"]

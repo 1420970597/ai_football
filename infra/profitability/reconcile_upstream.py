@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from hashlib import sha256
 import json
 import sys
 
@@ -97,6 +98,9 @@ def reconcile_window(page, local, begin, end):
     complete_page = (not page['has_more'] and not page['malformed_records'] and
                      page['total'] == len(orders) == len(page['items']) and not page.get('scan_issue'))
     matched_complete_page = complete_page and bool(orders) and not (missing or extra)
+    row_digests = [row.get('receipt_row_sha256') for row in expected.values()]
+    digest = ('v1:' + sha256(''.join(row_digests).encode('ascii')).hexdigest()
+              if row_digests and all(row_digests) else None)
     return {
         'begin': begin.isoformat(), 'end': end.isoformat(), 'complete_page': complete_page,
         'settlement_window_attribution_complete': matched_complete_page
@@ -106,6 +110,7 @@ def reconcile_window(page, local, begin, end):
         'bounded_without_upstream_time': bounded_without_upstream_time,
         'order_receipt_fields_reconciled': matched_complete_page and not (counts.keys() - {'placed_before_window'}),
         'local_settled': len(expected), 'upstream_settled': len(upstream),
+        'local_receipt_digest': digest,
         'matched': len(expected.keys() & upstream.keys()), 'local_only': len(missing),
         'upstream_only': len(extra), 'issues': dict(counts),
     }

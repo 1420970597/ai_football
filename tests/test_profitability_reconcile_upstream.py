@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from infra.profitability.reconcile_upstream import collect, reconcile_window
+from infra.profitability.window_evidence import reconciliation
 from services.collector.leyu_protocol import LeyuError
 
 
@@ -67,6 +72,37 @@ class ReconcileUpstreamTests(unittest.TestCase):
         output = reconcile_window(self.page, [self.local], START, END)
         self.assertTrue(output['order_receipt_fields_reconciled'])
         self.assertEqual({'placed_before_window': 1}, output['issues'])
+
+    def test_digest_is_bound_to_current_local_fields_and_closed_window(self):
+        local = dict(self.local, receipt_row_sha256='a' * 64)
+        other = dict(local, order_no='next', booked_at=END.isoformat(), receipt_row_sha256='b' * 64)
+        report = reconcile_window(self.page, [local, other], START, END)
+        self.assertEqual('v1:' + sha256(b'a' * 64).hexdigest(), report['local_receipt_digest'])
+        self.assertIsNone(reconcile_window(self.page, [self.local], START, END)['local_receipt_digest'])
+
+    def test_count_agreement_does_not_verify_a_changed_ledger(self):
+        previous = 'v1:' + 'a' * 64
+        current = 'v1:' + 'b' * 64
+        report = reconcile_window(self.page, [self.local], START, END)
+        report['order_receipt_fields_reconciled'] = True
+        window = {'ordinal': 0, 'settled': 1, 'local_receipt_digest': current}
+        with TemporaryDirectory() as temporary:
+            reports = Path(temporary)
+            primary = reports / '0.json'
+            primary.write_text(json.dumps([report]))
+            legacy = reconciliation(reports, window, START, END)
+            self.assertTrue(legacy['order_list_matches_current_count'])
+            self.assertIsNone(legacy['local_receipt_digest_matches'])
+            self.assertFalse(legacy['current_receipt_fields_reconciled'])
+            primary.write_text(json.dumps([report | {'local_receipt_digest': previous}]))
+            stale = reconciliation(reports, window, START, END)
+            self.assertFalse(stale['local_receipt_digest_matches'])
+            self.assertFalse(stale['current_receipt_fields_reconciled'])
+            matching = reports / f'0.receipt-{current[3:]}.json'
+            matching.write_text(json.dumps([report | {'local_receipt_digest': current}]))
+            verified = reconciliation(reports, window, START, END)
+            self.assertEqual(matching.name, verified['file'])
+            self.assertTrue(verified['current_receipt_fields_reconciled'])
 
     def test_placement_timestamp_gap_or_disagreement_prevents_receipt_reconciliation(self):
         self.upstream.update(currency='CNY', fees='0')

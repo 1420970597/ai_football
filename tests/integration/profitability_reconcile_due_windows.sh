@@ -141,8 +141,8 @@ bash ./reconcile_due_windows.sh "$anchor" "$state_path"
 cp "$state_path/0.json" original_late
 calls_before=$(wc -l < calls)
 snapshot() {
-    printf '{"anchor":"%s","observed_at":"%s","windows":[{"ordinal":0,"since":"%s","until":"%s","closed":true,"settled":%s,"accounts":%s,"provider_accounts":1}]}\n' \
-        "$1" "$2" "$anchor" "$3" "$4" "${5:-1}" > watch/state/latest.json
+    printf '{"anchor":"%s","observed_at":"%s","windows":[{"ordinal":0,"since":"%s","until":"%s","closed":true,"settled":%s,"accounts":%s,"provider_accounts":1,"local_receipt_digest":"%s"}]}\n' \
+        "$1" "$2" "$anchor" "$3" "$4" "${5:-1}" "${6:-}" > watch/state/latest.json
 }
 boundary=2026-11-18T14:14:09.845374Z
 fresh=2026-11-18T14:19:58Z
@@ -195,6 +195,25 @@ bash ./reconcile_due_windows.sh "$anchor" "$state_path"
 test "$(wc -l < calls)" = "$((calls_before + 3))"
 cmp "$state_path/0.json" unmatched_original
 cmp "$state_path/0.retry.json" unmatched_retry
+
+# A changed digest can require a recheck without changing the order count.
+state_path="$test_dir/watch/changed-receipts"
+old_digest=$(printf '%064d' 1)
+new_digest=$(printf '%064d' 2)
+calls_before=$(wc -l < calls)
+export test_report="[{\"complete_page\":true,\"local_only\":0,\"upstream_only\":0,\"local_settled\":51,\"begin\":\"$anchor\",\"end\":\"$boundary\",\"local_receipt_digest\":\"v1:$old_digest\"}]"
+snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$old_digest"
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.json" original_receipts
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 1))"
+snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$new_digest"
+export test_report="${test_report/$old_digest/$new_digest}"
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test -s "$state_path/0.receipt-$new_digest.json"
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 2))"
+cmp "$state_path/0.json" original_receipts
 
 mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
 cp "$root/infra/profitability/restore_reconciliation_timer.sh" infra/profitability/
