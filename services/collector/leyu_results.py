@@ -122,8 +122,11 @@ class ResultCollector:
         except Exception as exc:
             retry = {}
             if isinstance(exc,RateLimited):
-                delay = max(60,exc.retry_after_seconds or 0)
-                self.runtime.request_budget.defer_requests(delay)
+                if exc.category == 'shared_upstream_cooldown':
+                    delay = max(1, exc.retry_after_seconds or 1)
+                else:
+                    delay = max(60, exc.retry_after_seconds or 0)
+                    self.runtime.request_budget.defer_requests(delay)
                 retry['retry_after_seconds'] = delay
             reason = exc.category if isinstance(exc,LeyuError) else 'result_transport_failure' if isinstance(exc,httpx.HTTPError) else 'result_check_failed'
             response = await self.api.post(self.url+'/finish',json={**{k:target[k] for k in ('fixture_id','lease_id')},'reason':reason,**retry})

@@ -380,6 +380,7 @@ class CollectorService:
             self.resync.clear()
             rate_limited = False
             source_failure = False
+            observed_gate = False
             retry_after = None
             stage = "source"
             problem = False
@@ -442,6 +443,7 @@ class CollectorService:
                 problem = True
                 source_failure = stage == "source"
                 rate_limited = isinstance(exc, RateLimited)
+                observed_gate = rate_limited and exc.category == "shared_upstream_cooldown"
                 retry_after = exc.retry_after_seconds if rate_limited else None
                 update = {"state": "unavailable", "last_error": category(exc),
                           "last_error_code": exc.code if isinstance(exc, LeyuError) else "",
@@ -460,10 +462,13 @@ class CollectorService:
             finally:
                 self.status["leyu"].update(poll_in_progress=False,
                     current_poll_completed_at=datetime.now(timezone.utc).isoformat())
-            rate_limit_streak = rate_limit_streak + 1 if rate_limited else 0
-            delay = collection_retry_delay(self.interval, failures, rate_limit_streak=rate_limit_streak, retry_after=retry_after)
-            if rate_limited or source_failure:
-                self.leyu_refresh.defer_requests(delay)
+            if observed_gate:
+                delay = max(1, retry_after or 1)
+            else:
+                rate_limit_streak = rate_limit_streak + 1 if rate_limited else 0
+                delay = collection_retry_delay(self.interval, failures, rate_limit_streak=rate_limit_streak, retry_after=retry_after)
+                if rate_limited or source_failure:
+                    self.leyu_refresh.defer_requests(delay)
             self._poll_alert.observe(1 if problem else 0)
             self.status["leyu"].update(last_poll_at=poll_at.isoformat(),
                 last_poll_elapsed_ms=round((time.monotonic() - last_start) * 1000, 1),

@@ -314,6 +314,16 @@ class RefreshControllerTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.refresh_match.assert_awaited_once()
         self.upload.assert_not_called()
 
+    async def test_cooldown_established_during_refresh_keeps_its_deadline(self):
+        async def enter_cooldown(_):
+            self.runtime.request_budget.defer_requests(12)
+            self.runtime.request_budget.require_available()
+        self.runtime.refresh_match.side_effect = enter_cooldown
+        result = await self.controller.refresh(self.body)
+        self.assertEqual('upstream_rate_limited', result['reason'])
+        self.assertEqual(12, self.runtime.request_budget.cooldown_remaining())
+        self.upload.assert_not_called()
+
     async def test_timeout_cancels_work_without_upload_or_retry(self):
         cancelled=asyncio.Event()
         async def fetch(mid):
@@ -477,6 +487,20 @@ class WorkerSharedBudgetTests(unittest.IsolatedAsyncioTestCase):
         await self.run_once()
         self.assertGreater(self.service.runtime.request_budget.cooldown_remaining(),1)
         self.service.runtime.collect.assert_awaited_once()
+
+    async def test_poll_observing_a_new_shared_cooldown_keeps_its_deadline(self):
+        budget = self.service.runtime.request_budget
+        budget.clock = lambda: 100.0
+
+        async def enter_cooldown(**_):
+            budget.defer_requests(12)
+            budget.require_available()
+
+        self.service.runtime.collect = AsyncMock(side_effect=enter_cooldown)
+        waits = await self.run_once()
+        self.assertEqual(12, budget.cooldown_remaining())
+        self.assertEqual((12, None), waits[-1])
+        self.assertEqual(0, self.service.status['leyu']['rate_limit_streak'])
 
     async def test_current_poll_status_is_visible_during_new_poll_and_completion(self):
         started,release=asyncio.Event(),asyncio.Event()

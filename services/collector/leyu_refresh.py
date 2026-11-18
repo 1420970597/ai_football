@@ -168,7 +168,8 @@ class LeyuRefreshController:
                         "current_observation": observation}
         except RateLimited as exc:
             outcome = 'upstream_rate_limited'
-            self.defer_requests(max(60, exc.retry_after_seconds or 0))
+            if exc.category != 'shared_upstream_cooldown':
+                self.defer_requests(max(60, exc.retry_after_seconds or 0))
             return self._result(identity, mid, "upstream_rate_limited", retry=self.cooldown_remaining())
         except TimeoutError:
             if stage == "ingestion" and known_observed:

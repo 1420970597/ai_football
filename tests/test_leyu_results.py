@@ -80,9 +80,11 @@ class NativeResultTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_shared_cooldown_skips_source_and_delivers_bounded_retry(self):
         runtime = self.runtime()
+        deferred = []
         def cooling():
-            raise RateLimited('shared_upstream_cooldown', retry_after_seconds=87)
+            raise RateLimited('shared_upstream_cooldown', retry_after_seconds=12)
         runtime.request_budget.require_available = cooling
+        runtime.request_budget.defer_requests = deferred.append
         seen = []
         def handle(request):
             seen.append((request.url.path, json.loads(request.content)))
@@ -94,7 +96,8 @@ class NativeResultTests(unittest.IsolatedAsyncioTestCase):
             fetch.assert_not_awaited()
         self.assertEqual('shared_upstream_cooldown', outcome['reason'])
         self.assertEqual('/internal/collector/results/finish', seen[0][0])
-        self.assertEqual(87, seen[0][1]['retry_after_seconds'])
+        self.assertEqual(12, seen[0][1]['retry_after_seconds'])
+        self.assertEqual([], deferred)
 
     def runtime(self):
         return SimpleNamespace(version=1,config={},load=AsyncMock(),request_budget=SimpleNamespace(
