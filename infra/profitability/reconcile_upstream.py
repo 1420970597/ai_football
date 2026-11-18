@@ -12,6 +12,10 @@ from services.executor.account_protocol import AccountProtocolClient
 from services.executor.account_session import AccountScope, VenueSession
 
 
+PAGE_LIMIT = 3
+REQUEST_INTERVAL = 1.2
+
+
 def instant(value):
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
@@ -62,7 +66,7 @@ def reconcile_window(page, local, begin, end):
     missing = expected.keys() - upstream.keys()
     extra = upstream.keys() - expected.keys()
     complete_page = (not page['has_more'] and not page['malformed_records'] and
-                     page['total'] == len(orders) == len(page['items']))
+                     page['total'] == len(orders) == len(page['items']) and not page.get('scan_issue'))
     return {
         'begin': begin.isoformat(), 'end': end.isoformat(), 'complete_page': complete_page,
         'local_settled': len(expected), 'upstream_settled': len(upstream),
@@ -71,31 +75,71 @@ def reconcile_window(page, local, begin, end):
     }
 
 
-async def collect(client, start, local):
+async def scan_window(client, begin, end):
+    result = {'items': [], 'total': None, 'malformed_records': 0, 'has_more': True,
+              'pages_read': 0, 'scan_issue': None}
+    seen = set()
+    for number in range(1, PAGE_LIMIT + 1):
+        if number > 1:
+            await asyncio.sleep(REQUEST_INTERVAL)
+        try:
+            page = await client.orders('settled', page=number, begin=begin, end=end)
+        except LeyuError as exc:
+            result['scan_issue'] = exc.category
+            break
+        result['pages_read'] += 1
+        if number == 1:
+            result['total'] = page['total']
+        if page['total'] != result['total']:
+            result['scan_issue'] = 'upstream_total_changed'
+            break
+        result['has_more'] = page['has_more']
+        result['malformed_records'] += page['malformed_records']
+        for item in page['items']:
+            identity = item['identifier_kind'], item['order_no']
+            if identity in seen:
+                result['scan_issue'] = 'duplicate_upstream_identity'
+                continue
+            seen.add(identity)
+            result['items'].append(item)
+        if result['scan_issue'] or page['malformed_records'] or not page['has_more']:
+            break
+        if not page['items']:
+            result['scan_issue'] = 'empty_page_with_more'
+            break
+    if result['has_more'] and result['pages_read'] == PAGE_LIMIT and result['scan_issue'] is None:
+        result['scan_issue'] = 'upstream_page_limit'
+    return result
+
+
+async def collect(client, start, local, window_count=4):
     windows = []
-    for ordinal in range(4):
+    for ordinal in range(window_count):
         begin = start + timedelta(hours=ordinal * 12)
         end = begin + timedelta(hours=12)
-        try:
-            page = await client.orders('settled', begin=begin, end=end)
-        except LeyuError as exc:
-            windows.append({'begin': begin.isoformat(), 'end': end.isoformat(), 'error_category': exc.category})
+        scan = await scan_window(client, begin, end)
+        result = reconcile_window(scan, local, begin, end)
+        result.update(pages_read=scan['pages_read'], scan_issue=scan['scan_issue'])
+        windows.append(result)
+        if scan['pages_read'] == 0:
             break
-        windows.append(reconcile_window(page, local, begin, end))
-        if ordinal < 3:
-            await asyncio.sleep(1.2)
+        if ordinal + 1 < window_count:
+            await asyncio.sleep(REQUEST_INTERVAL)
     return windows
 
 
 async def main():
     payload = json.load(sys.stdin)
     start = instant(payload['start'])
-    if start + timedelta(hours=48) > datetime.now(timezone.utc):
+    window_count = payload.get('windows', 4)
+    if type(window_count) is not int or not 1 <= window_count <= 4:
+        raise ValueError('one to four windows required')
+    if start + timedelta(hours=window_count * 12) > datetime.now(timezone.utc):
         raise ValueError('only complete windows can be sampled')
     scope = AccountScope(**payload['scope'])
     session = VenueSession(scope, payload['base_url'], payload['request_id'], payload['origin'])
-    async with asyncio.timeout(55), AccountProtocolClient(scope, session) as client:
-        return await collect(client, start, payload['local'])
+    async with asyncio.timeout(41 * window_count), AccountProtocolClient(scope, session) as client:
+        return await collect(client, start, payload['local'], window_count)
 
 
 if __name__ == '__main__':

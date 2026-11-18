@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
 import unittest
+from unittest.mock import AsyncMock, patch
 
-from infra.profitability.reconcile_upstream import reconcile_window
+from infra.profitability.reconcile_upstream import collect, reconcile_window
+from services.collector.leyu_protocol import LeyuError
 
 
 START = datetime(2026, 11, 18, 2, tzinfo=timezone.utc)
@@ -46,3 +48,46 @@ class ReconcileUpstreamTests(unittest.TestCase):
         self.page['items'].append(self.upstream)
         with self.assertRaises(ValueError):
             reconcile_window(self.page, [self.local], START, END)
+
+
+class ReconcilePaginationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        first = {'order_no': 'first', 'identifier_kind': 'order', 'state': 'settled',
+                 'placed_at': START.isoformat(), 'settled_at': START.isoformat(),
+                 'stake': '5', 'payout': '7.44', 'net_profit': '2.44', 'currency': None, 'fees': None}
+        second = dict(first, order_no='second')
+        self.local = [dict(order, booked_at=START.isoformat()) for order in (first, second)]
+        self.page1 = {'total': 2, 'has_more': True, 'malformed_records': 0, 'items': [first]}
+        self.page2 = dict(self.page1, has_more=False, items=[second])
+        self.client = AsyncMock()
+        self.enterContext(patch('infra.profitability.reconcile_upstream.REQUEST_INTERVAL', 0))
+
+    async def test_closed_single_window_can_reconcile_multiple_pages(self):
+        self.client.orders.side_effect = [self.page1, self.page2]
+        result, = await collect(self.client, START, self.local, window_count=1)
+        self.assertTrue(result['complete_page'])
+        self.assertEqual((2, 2), (result['pages_read'], result['matched']))
+        self.assertEqual([1, 2], [call.kwargs['page'] for call in self.client.orders.await_args_list])
+        self.assertTrue(all(call.kwargs['begin'] == START and call.kwargs['end'] == END
+                            for call in self.client.orders.await_args_list))
+
+    async def test_failed_or_unstable_pagination_preserves_partial_counts(self):
+        for later, issue in (
+            (LeyuError('upstream_rejected'), 'upstream_rejected'),
+            (dict(self.page2, total=3), 'upstream_total_changed'),
+            (dict(self.page2, items=self.page1['items']), 'duplicate_upstream_identity'),
+        ):
+            with self.subTest(issue=issue):
+                self.client.orders.reset_mock()
+                self.client.orders.side_effect = [self.page1, later]
+                result, = await collect(self.client, START, self.local, window_count=1)
+                self.assertFalse(result['complete_page'])
+                self.assertEqual((1, 1, issue), (result['matched'], result['local_only'], result['scan_issue']))
+
+    async def test_page_budget_reports_partial_scan(self):
+        self.client.orders.side_effect = [self.page1, dict(self.page2, has_more=True)]
+        with patch('infra.profitability.reconcile_upstream.PAGE_LIMIT', 2):
+            result, = await collect(self.client, START, self.local, window_count=1)
+        self.assertEqual(2, result['matched'])
+        self.assertFalse(result['complete_page'])
+        self.assertEqual('upstream_page_limit', result['scan_issue'])
