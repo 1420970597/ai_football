@@ -1,11 +1,13 @@
 import os
 import unittest
-from app.team_matching import team_name_matches
+from app.team_matching import team_name_matches, with_verified_aliases
 from app.competition_names import normalize_competition_name
 import test_reviews as support
 
 
 CASES = (
+    ('广岛三箭里贾纳(女)', '广岛三箭(女)', '野岛斯特拉神奈川相模原(女)',
+     '野岛斯特拉神奈川相模原(女)', '日本女子职业联赛', '日本女子职业联赛'),
     ('中岸水手女足', '中央海岸水手学院(女)', '珀斯光荣女足', '珀斯光荣(女)', '澳女联', '澳大利亚女子甲级联赛'),
     ('福岛联队', '福岛联队', '相模原', 'SC相模原', '日本J3联赛', '日本J3联赛'),
     ('新泻天鹅', '新潟天鹅', '特格瓦嘉洛宫崎', '特格瓦嘉洛宫崎', '日本J2联赛', '日本J2联赛'),
@@ -16,6 +18,15 @@ CASES = (
 
 
 class LiveSourceNameTests(unittest.TestCase):
+    def test_hiroshima_alias_requires_the_womens_league_and_full_squad_label(self):
+        source = '广岛三箭里贾纳(女)'
+        native = '广岛三箭(女)'
+        league = '日本女子职业联赛'
+        self.assertTrue(team_name_matches(source, native, sport='football', competition=league))
+        self.assertFalse(team_name_matches(source, '广岛三箭', sport='football', competition=league))
+        for competition in (None, '日本职业联赛', '日本女子联赛杯'):
+            self.assertFalse(team_name_matches(source, native, sport='football', competition=competition))
+
     def test_verified_australian_championship_abbreviation_is_sport_scoped(self):
         self.assertEqual(normalize_competition_name('澳锦标', 'football'),
             normalize_competition_name('澳大利亚锦标赛', 'football'))
@@ -35,7 +46,13 @@ class LiveSourceNameTests(unittest.TestCase):
                         self.assertFalse(team_name_matches(source, native + suffix, sport='football', competition=canonical))
                     if source != native:
                         self.assertFalse(team_name_matches(source, native, sport='basketball', competition=canonical))
-                        self.assertFalse(team_name_matches(source, native, sport='football', competition=canonical + '青年'))
+                        other_competition = canonical + '青年'
+                        self.assertNotIn('verified_alias_sources', with_verified_aliases({
+                            'sport': 'football', 'competition_name': other_competition, 'home_team': native,
+                        }))
+                        # The Perth pair also matches via the general women's suffix normalization.
+                        self.assertEqual(source == '珀斯光荣女足', team_name_matches(
+                            source, native, sport='football', competition=other_competition))
 
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires isolated database')

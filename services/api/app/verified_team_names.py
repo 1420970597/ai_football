@@ -5,8 +5,13 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-15.1'
+REGISTRY_VERSION = '2026-11-18.1'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport': 'football', 'competition': '日本女子职业联赛',
+        'names': ('广岛三箭里贾纳(女)', '广岛三箭(女)'),
+        'reference': 'weleague:2026-27-league-1023+leyu:49550:20261118',
+    },
     {
         'sport':'football','competition':'日本职业联赛杯',
         'names':('柏太阳神','柏雷素尔','柏雷素爾','Kashiwa Reysol'),
