@@ -3,7 +3,7 @@ from decimal import Decimal
 import json
 import unittest
 
-from replay_opposite import observed_returns, summarize
+from replay_opposite import observed_returns, summarize, summarize_calibration
 
 
 def team_total():
@@ -55,3 +55,33 @@ class OppositeReplayTests(unittest.TestCase):
             'period': 'full_time', 'comparable_fixtures': 1, 'comparable': 2, 'follow_units': Decimal('1.00'),
             'opposite_units': Decimal('-1.00'), 'paired_units': Decimal(0), 'effective_stake': Decimal('1.00'),
         }])
+
+    def test_calibration_uses_equal_fixture_weights_and_half_stakes(self):
+        row = dict(team_total(), confidence=Decimal('0.5'))
+        row['evidence']['market_snapshot']['options'][1]['price'] = '2.00'
+        row['evidence'] = json.dumps(row['evidence'])
+        lost = dict(row, fixture_id='leyu:2', outcome='loss', effective_stake=Decimal(1))
+        push = dict(row, outcome='push', effective_stake=Decimal(0))
+        inconsistent = dict(row, outcome='loss', effective_stake=Decimal('0.5'))
+        result = summarize_calibration([row, row, row, lost, push, inconsistent], row['created_at'])
+        group = next(group for group in result['groups'] if group['phase'] == 'all')
+        self.assertEqual(group['scored'], 4)
+        self.assertEqual(group['settled_fixtures'], 2)
+        self.assertEqual(group['observed_win_share'], Decimal('0.5'))
+        self.assertEqual(group['market_brier'], Decimal('0.25'))
+        self.assertEqual(group['no_active_stake'], 1)
+        self.assertEqual(group['settlement_stake_inconsistent'], 1)
+        self.assertEqual(result['review_confidence_distribution'][0]['winning_stake'], Decimal('1.5'))
+
+    def test_three_way_complete_market_uses_one_third_neutral_chance(self):
+        row = dict(team_total(), market_kind='winner', market_id='1', selection='draw',
+                   recommendation_price=Decimal(4), effective_stake=Decimal(1),
+                   outcome='win', confidence=Decimal('0.5'))
+        prices = {'home': '2', 'draw': '4', 'away': '4'}
+        row['evidence'] = json.dumps({'market_snapshot': {'options': [
+            {'selection': side, 'selection_id': side, 'price': price} for side, price in prices.items()
+        ]}})
+        group = summarize_calibration([row], row['created_at'])['groups'][0]
+        self.assertEqual(group['market_win_share'], Decimal('0.25'))
+        self.assertEqual(group['market_brier'], Decimal('0.5625'))
+        self.assertAlmostEqual(group['neutral_brier'], Decimal(4) / 9)
