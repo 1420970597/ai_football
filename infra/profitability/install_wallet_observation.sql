@@ -7,8 +7,9 @@ AS $function$
     WITH scope AS (
         SELECT min(account_id::text)::uuid AS account_id
         FROM public.v2_bet_orders
-        WHERE account_id IS NOT NULL AND provider_identity_hash IS NOT NULL
+        WHERE account_id IS NOT NULL
         HAVING count(DISTINCT account_id) = 1 AND count(DISTINCT provider_identity_hash) = 1
+           AND count(*) FILTER (WHERE provider_identity_hash IS NULL) = 0
     )
     SELECT account.balance_observed_at, account.available_balance
     FROM scope
