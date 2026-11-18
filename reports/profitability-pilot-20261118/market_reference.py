@@ -124,11 +124,20 @@ def price_from_verified_references(document):
     if not isinstance(references, dict) or len(references) < 2:
         raise ValueError('two independent reference sources are required')
     reference_mode = document.get('reference_mode', 'same_line')
-    if reference_mode not in {'same_line', 'adjacent_half_lines'}:
+    if reference_mode not in {'same_line', 'adjacent_half_lines', 'three_way_books'}:
         raise ValueError('unknown reference mode')
+    source_contract = contract
     required_lines = (line,)
     if reference_mode == 'adjacent_half_lines':
         required_lines, offset = adjacent_lines(contract['kind'], line)
+    elif reference_mode == 'three_way_books':
+        if (contract['sport'], contract['period'], contract['score_basis'], contract.get('settlement_scope')) != (
+                'football', 'full_time', 'full_period', 'regulation') or (contract['kind'], line) not in {
+                ('winner', None), ('handicap', Decimal(0))}:
+            raise ValueError('three-way books require regulation winner or draw-no-bet')
+        source_contract = dict(contract, kind='winner', line=None)
+        source_contract.pop('line_basis', None)
+    if reference_mode != 'same_line':
         max_skew = document['max_quote_skew_seconds']
         if type(max_skew) is not int or not 0 <= max_skew <= max_age:
             raise ValueError('max_quote_skew_seconds must be within the maximum quote age')
@@ -157,28 +166,45 @@ def price_from_verified_references(document):
         venues.add(venue)
         origins.add(origin)
 
-        samples = quote['adjacent_quotes'] if len(required_lines) == 2 else [quote]
-        if not isinstance(samples, list) or len(samples) != len(required_lines):
-            raise ValueError('each source must include both adjacent half lines')
+        if reference_mode == 'three_way_books':
+            outcomes = quote['outcome_quotes']
+            if not isinstance(outcomes, dict) or outcomes.keys() != set(MARKET_SIDES['winner']):
+                raise ValueError('each source must include home, draw and away books')
+            samples = outcomes.items()
+        else:
+            quotes = quote['adjacent_quotes'] if len(required_lines) == 2 else [quote]
+            if not isinstance(quotes, list) or len(quotes) != len(required_lines):
+                raise ValueError('each source must include both adjacent half lines')
+            samples = ((None, sample) for sample in quotes)
         verified = {}
-        for sample in samples:
+        for outcome, sample in samples:
             reference = sample['contract']
-            if any(reference.get(key) != contract.get(key) for key in keys):
+            if any(reference.get(key) != source_contract.get(key) for key in keys):
                 raise ValueError('reference contract differs from the offered contract')
             ref_line = market_terms(reference)[1]
-            if ref_line not in required_lines or ref_line in verified:
-                raise ValueError('reference contract differs from the required lines')
             if sample['status'] != 'active':
                 raise ValueError('reference quote is not active')
-            quoted_times.append(quote_time(sample['quoted_at'], sample['received_at'], oldest, cutoff))
+            if outcome is None:
+                if ref_line not in required_lines or ref_line in verified:
+                    raise ValueError('reference contract differs from the required lines')
+                quoted_times.append(quote_time(sample['quoted_at'], sample['received_at'], oldest, cutoff))
+                verified[ref_line] = sample
+            else:
+                books = sample['order_book']
+                if books.keys() != {'yes', 'no'} or reference.get('selection') != outcome:
+                    raise ValueError('reference outcome does not match its binary books')
+                for book in books.values():
+                    quoted_times.append(quote_time(book['quoted_at'], book['received_at'], oldest, cutoff))
+                verified[outcome] = book_probability(sample, ('yes', 'no'))
             if state is not None:
                 reference_state, confirmed = live_state(sample['event_state'], contract['period'], cutoff)
                 if reference_state != state:
                     raise ValueError('reference live state differs from the offered state')
                 latest_confirmation = max(latest_confirmation, confirmed)
-            verified[ref_line] = sample
         if len(required_lines) == 2:
             book_ranges[source] = tuple(book_probability(verified[required], sides) for required in required_lines)
+        elif reference_mode == 'three_way_books':
+            book_ranges[source] = verified
 
     if state is not None and min(quoted_times) < latest_confirmation:
         raise ValueError('quote predates the latest confirmed live state')
@@ -189,9 +215,12 @@ def price_from_verified_references(document):
             raise ValueError('the live total already exceeds the line')
         if reference_mode == 'adjacent_half_lines' and score > min(required_lines):
             raise ValueError('the live total already exceeds an adjacent reference line')
-    if reference_mode == 'adjacent_half_lines':
+    if reference_mode != 'same_line':
         if max(quoted_times) - min(quoted_times) > timedelta(seconds=max_skew):
             raise ValueError('quote timestamps exceed the allowed skew')
+    if reference_mode == 'three_way_books':
+        return price_three_way_books(document, book_ranges, sides)
+    if reference_mode == 'adjacent_half_lines':
         return price_adjacent_market(document, book_ranges, sides, offset)
     return price_reference_market(document, sides, contract['selection'], line)
 
@@ -229,6 +258,37 @@ def price_adjacent_market(document, book_ranges, sides, offset):
     worst_net = min(scenario['net_at_offered_odds'] for scenario in scenarios.values())
     return {'reference_mode': 'adjacent_half_lines', 'minimum_odds': minimum,
             'worst_net_at_offered_odds': worst_net, 'passes_price_test': minimum is not None and worst_net >= margin,
+            'active_stake_lower_bound': min(scenario['active_stake_lower_bound'] for scenario in scenarios.values()),
+            'scenarios': scenarios}
+
+
+def price_three_way_books(document, book_ranges, sides):
+    selection = document['contract']['selection']
+    cost, margin, offer = pricing_terms(document, sides, selection)
+    draw_no_bet = document['contract']['kind'] == 'handicap'
+    scenarios = {}
+    for source, ranges in book_ranges.items():
+        if not sum(low for low, _ in ranges.values()) <= 1 <= sum(high for _, high in ranges.values()):
+            raise ValueError('three-way books cannot represent a complete outcome distribution')
+        win = max(ranges[selection][0], 1 - sum(high for side, (_, high) in ranges.items() if side != selection))
+        loss = 1 - win
+        active_floor = Decimal(1)
+        if draw_no_bet:
+            opposite, = (side for side in sides if side != selection)
+            # With win fixed at its minimum, maximize the opponent win subject to the draw bound.
+            loss = min(ranges[opposite][1], 1 - win - ranges['draw'][0])
+            active_floor = max(1 - ranges['draw'][1], ranges[selection][0] + ranges[opposite][0])
+        scenarios[source] = {
+            'expected_win_fraction': win,
+            'expected_loss_fraction': loss,
+            'net_at_offered_odds': win * (offer - 1) - loss - cost,
+            'minimum_odds': 1 + (loss + cost + margin) / win,
+            'active_stake_lower_bound': active_floor,
+        }
+    worst_net = min(scenario['net_at_offered_odds'] for scenario in scenarios.values())
+    return {'reference_mode': 'three_way_books',
+            'minimum_odds': max(scenario['minimum_odds'] for scenario in scenarios.values()),
+            'worst_net_at_offered_odds': worst_net, 'passes_price_test': worst_net >= margin,
             'active_stake_lower_bound': min(scenario['active_stake_lower_bound'] for scenario in scenarios.values()),
             'scenarios': scenarios}
 
