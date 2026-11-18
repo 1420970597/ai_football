@@ -85,3 +85,16 @@ class OppositeReplayTests(unittest.TestCase):
         self.assertEqual(group['market_win_share'], Decimal('0.25'))
         self.assertEqual(group['market_brier'], Decimal('0.5625'))
         self.assertAlmostEqual(group['neutral_brier'], Decimal(4) / 9)
+
+    def test_price_decomposition_uses_winning_stake_and_equal_fixture_weights(self):
+        won = dict(team_total(), confidence=Decimal('0.5'), recommendation_price=Decimal('1.80'))
+        for option in won['evidence']['market_snapshot']['options']:
+            option['price'] = '1.80'
+        won['evidence'] = json.dumps(won['evidence'])
+        lost = dict(won, fixture_id='leyu:2', outcome='loss', effective_stake=Decimal(1))
+        void = dict(won, fixture_id='leyu:3', outcome='void', effective_stake=Decimal(0))
+        group = summarize_calibration([won, won, won, lost, void], won['created_at'])['groups'][0]
+        self.assertEqual(group['settled_fixtures'], 2)
+        self.assertEqual(group['quoted_net_per_effective_unit'], Decimal('-0.1'))
+        self.assertAlmostEqual(group['no_vig_net_per_effective_unit'], Decimal(0))
+        self.assertAlmostEqual(group['quote_margin_drag_per_effective_unit'], Decimal('0.1'))

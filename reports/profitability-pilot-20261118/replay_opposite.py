@@ -14,6 +14,13 @@ from app.expert_statistics import QUOTE_VALID_SQL, SETTLEMENT_VALID_SQL
 from app.team_totals import team_total_terms
 
 
+CALIBRATION_METRICS = (
+    'observed_win_share', 'market_win_share', 'market_brier', 'neutral_brier',
+    'quoted_net_per_effective_unit', 'no_vig_net_per_effective_unit',
+    'quote_margin_drag_per_effective_unit',
+)
+
+
 def observed_returns(row):
     status, prices = verified_prices(row, allow_three_way=False)
     if prices is None:
@@ -117,7 +124,11 @@ def summarize_calibration(rows, split):
             else:
                 status = 'scored'
                 won = int(outcome in {'win', 'half_win'})
-                fair = (1 / prices[row['selection']]) / sum(1 / price for price in prices.values())
+                quoted_price = prices[row['selection']]
+                implied_sum = sum(1 / price for price in prices.values())
+                fair = (1 / quoted_price) / implied_sum
+                quoted_net = (won * quoted_price - 1) * effective
+                margin_drag = won * quoted_price * (implied_sum - 1) * effective
                 neutral = Decimal(1) / len(prices)
                 confidence = confidence_groups[(window, row['phase'], row['confidence'])]
                 confidence['scored'] += 1
@@ -130,6 +141,9 @@ def summarize_calibration(rows, split):
                     value['market_win_share'] += fair * effective
                     value['market_brier'] += (fair - won)**2 * effective
                     value['neutral_brier'] += (neutral - won)**2 * effective
+                    value['quoted_net_per_effective_unit'] += quoted_net
+                    value['no_vig_net_per_effective_unit'] += quoted_net + margin_drag
+                    value['quote_margin_drag_per_effective_unit'] += margin_drag
         for key in keys:
             groups[key][status] += 1
 
@@ -139,7 +153,7 @@ def summarize_calibration(rows, split):
         by_fixture = fixtures[key].values()
         metrics = {}
         if by_fixture:
-            for metric in ('observed_win_share', 'market_win_share', 'market_brier', 'neutral_brier'):
+            for metric in CALIBRATION_METRICS:
                 metrics[metric] = sum(v[metric] / v['active_stake'] for v in by_fixture) / len(by_fixture)
         summaries.append({'window': window, 'phase': phase, 'sport': sport, 'market_kind': kind, 'period': period,
                           'settled_fixtures': len(by_fixture), **counts, **metrics})
