@@ -754,6 +754,9 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         await self.healthy()
         signal,expert,_,quote=await self.signal()
         await self.enable([expert])
+        fixture_received_at = await self.pool.fetchval(
+            "UPDATE v2_fixtures SET source_updated_at=NULL,source_time_quality='unknown' "
+            "WHERE id=(SELECT fixture_id FROM v2_expert_signals WHERE id=$1) RETURNING received_at", signal)
         await self.pool.execute("UPDATE v2_current_quotes SET price=1.50,status='closed',source_updated_at=now()-interval '10 minutes' WHERE id=$1",quote)
         reserved=(await self.worker_api.post('/internal/executor/dispatch')).json()
         self.assertEqual(1,reserved['reserved'])
@@ -790,6 +793,11 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         evidence=await self.pool.fetch("SELECT evidence FROM v2_quote_evidence WHERE evidence_kind='order_attempt' AND reference_id=$1 ORDER BY evidence->>'stage'",order['id'])
         self.assertEqual(['2.35','2.35'],[item['evidence']['price'] for item in evidence])
         self.assertTrue(all(item['evidence']['odds_change_policy']=='accept_current_provider_quote' for item in evidence))
+        for item in evidence:
+            self.assertEqual({'home': None, 'away': None}, item['evidence']['score_baseline'])
+            self.assertEqual({'received_at': fixture_received_at.astimezone(timezone.utc).isoformat(),
+                              'source_updated_at': None, 'source_time_quality': 'unknown'},
+                             item['evidence']['fixture_projection'])
         self.assertEqual(1,sum(request.url.path==BET_PATH for request in calls))
 
     async def test_unknown_mock_submission_not_requeued_or_released(self):
@@ -966,9 +974,19 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(409, rejected.status_code, rejected.text)
         self.assertIn('推荐比分缺失或已经变化', rejected.json()['detail'])
         self.assertEqual('pending', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
-        await self.pool.execute('UPDATE v2_fixtures SET home_score=1 WHERE id=$1', fixture)
+        projection = await self.pool.fetchrow(
+            "UPDATE v2_fixtures SET home_score=1,source_updated_at=now()-interval '1 second',"
+            "received_at=now(),source_time_quality='known' WHERE id=$1 RETURNING source_updated_at,received_at", fixture)
         authorized = await self.worker_api.post(url, json=body)
         self.assertEqual(200, authorized.status_code, authorized.text)
+        stages = await self.pool.fetch(
+            "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence_kind='order_attempt'", order['id'])
+        self.assertEqual({'preflight_validated', 'submission_authorized'}, {row['evidence']['stage'] for row in stages})
+        for row in stages:
+            self.assertEqual({'home': 1, 'away': 0}, row['evidence']['score_baseline'])
+            self.assertEqual({'received_at': projection['received_at'].astimezone(timezone.utc).isoformat(),
+                              'source_updated_at': projection['source_updated_at'].astimezone(timezone.utc).isoformat(),
+                              'source_time_quality': 'known'}, row['evidence']['fixture_projection'])
         self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
 
     async def test_exact_official_receipt_releases_only_matching_exposure(self):

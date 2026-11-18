@@ -55,7 +55,9 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None):
     row = await conn.fetchrow(
         "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,m.posted_at AS message_posted_at,"
         "e.enabled AS expert_enabled,src.enabled AS source_enabled,se.enabled AS trusted,f.phase AS current_phase,"
-        "f.sport,f.home_score,f.away_score,q.id AS quote_id,q.price AS current_price,q.source_updated_at,"
+        "f.sport,f.home_score,f.away_score,f.received_at AS fixture_received_at,"
+        "f.source_updated_at AS fixture_source_updated_at,f.source_time_quality AS fixture_source_time_quality,"
+        "q.id AS quote_id,q.price AS current_price,q.source_updated_at,"
         "q.status,q.play_id,q.market_instance_id,q.selection_id,q.market_kind AS current_kind,q.score_basis AS current_basis "
         "FROM v2_expert_signals s JOIN v2_expert_messages m ON m.id=s.message_id "
         "JOIN v2_experts e ON e.id=s.expert_id JOIN v2_expert_sources src ON src.id=m.source_id "

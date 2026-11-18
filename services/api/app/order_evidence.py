@@ -51,6 +51,15 @@ def stage_document(order, signal, attempt_id, prepared_digest, stage):
         'score_benchmark': order['quote_snapshot']['score_benchmark'],
         'score_baseline': {'home': signal['home_score'], 'away': signal['away_score']},
     }
+    fixture_received_at = signal.get('fixture_received_at')
+    if fixture_received_at is not None:
+        fixture_source_time = signal.get('fixture_source_updated_at')
+        document['fixture_projection'] = {
+            'received_at': fixture_received_at.astimezone(timezone.utc).isoformat(),
+            'source_updated_at': (fixture_source_time.astimezone(timezone.utc).isoformat()
+                                  if fixture_source_time is not None else None),
+            'source_time_quality': signal['fixture_source_time_quality'],
+        }
     if stage == 'submission_authorized':
         document['preflight_evidence_id'] = str(stage_identity(order['id'], attempt_id, 'preflight_validated'))
     encoded = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
