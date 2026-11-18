@@ -37,16 +37,26 @@ async def evidence(conn, begin, end, same_intent_sql):
             WHERE (SELECT count(*) FROM bindings)=1
         ), reasons AS (
             SELECT f.sport,s.phase,s.market_kind,s.period, CASE
-                WHEN EXISTS (
-                    SELECT 1 FROM v2_bet_orders o JOIN v2_expert_signals previous ON previous.id=o.signal_id
-                    WHERE (o.user_id,o.account_id,o.provider_identity_hash)=(a.user_id,a.id,a.provider_identity_hash)
-                      AND o.created_at<s.created_at AND """ + same_intent_sql('previous', 's') + """
-                ) THEN 'prior_same_intent_order'
+                WHEN prior_order.created_at<s.created_at THEN 'prior_same_intent_order'
+                WHEN prior_order.created_at IS NOT NULL THEN 'same_intent_reserved_within_source_window'
                 WHEN a.no_later_policy_event AND a.previous_scope=a.auto_sport_scope
                     AND a.previous_scope IN ('football','basketball') AND a.previous_scope<>f.sport
                     THEN 'outside_audited_sport_scope'
                 ELSE 'unconfirmed' END AS evidence
-            FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id CROSS JOIN scoped a
+            FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id
+            LEFT JOIN v2_expert_messages m ON m.id=s.message_id CROSS JOIN scoped a
+            LEFT JOIN LATERAL (
+                SELECT o.created_at
+                FROM v2_bet_orders o JOIN v2_expert_signals previous ON previous.id=o.signal_id
+                WHERE (o.user_id,o.account_id,o.provider_identity_hash)=(a.user_id,a.id,a.provider_identity_hash)
+                  AND """ + same_intent_sql('previous', 's') + """
+                  AND (o.created_at<s.created_at OR (
+                       previous.created_at<s.created_at AND o.provider_order_no IS NOT NULL
+                       AND o.created_at<m.posted_at + interval '5 minutes'
+                       AND o.created_at<s.created_at + interval '5 minutes'
+                       AND m.posted_at<=s.created_at))
+                ORDER BY o.created_at,o.id LIMIT 1
+            ) prior_order ON true
             WHERE s.created_at >= $1 AND s.created_at < $2
               AND NOT EXISTS (
                   SELECT 1 FROM v2_bet_orders o WHERE o.signal_id=s.id AND NOT o.manual
