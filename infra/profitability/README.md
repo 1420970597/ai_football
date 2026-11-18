@@ -26,6 +26,10 @@ Run `fixture_exposure.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC sta
 
 Inspect coverage, tied timestamps and unresolved outcomes before interpreting the figures. The aggregate requires a single account binding and rejects mixed known currencies or incomplete fill evidence. Missing fee or currency fields are counted separately from receipt net. The counterfactual reuses existing fills and misses rejected or unsubmitted opportunities, rescheduled orders, and changes to remaining account budget. Treat the output as a concentration diagnostic.
 
+# Source and author holdout
+
+Run `source_holdout.sql` with the same four UTC parameters as the fixture exposure replay. It covers filled automatic orders across all markets. A source or a source and author pair qualifies for a replay exclusion if its earlier fills span at least 20 settled fixtures and three UTC placement dates and have a negative sum of net receipts per unit staked. Only settled receipts observed before the split inform that exclusion. The later cohort reports realized receipt net, settled stake, and equal-stake return by phase and in aggregate. A zero exclusion count means the training sample did not trigger the rule. The fills represent the existing policy's accepted orders, so the replay omits opportunities that the original policy did not submit or fill.
+
 # Private wallet observations
 
 Install `install_wallet_observation.sql` as a database administrator after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the binding is unique and healthy. The monitor role receives function execution only, without account-table column access.
