@@ -5,6 +5,9 @@ WITH RECURSIVE bounds AS (
            :'end'::timestamptz AS end_at, :'observed'::timestamptz AS observed_at
 ), fills AS MATERIALIZED (
     SELECT o.id, o.account_id, o.provider_identity_hash, s.fixture_id, s.phase, o.manual,
+           CASE WHEN num_nulls(s.market_id, s.market_kind, s.phase, s.period, s.score_basis, s.selection)=0
+                THEN jsonb_build_array(s.market_id, s.market_kind, s.phase, s.period, s.score_basis, s.selection)
+           END AS same_side_key,
            o.provider_placed_at AS placed_at, o.provider_stake AS stake,
            first_receipt.observed_at AS closed_at, confirmation.observed_at AS accepted_at,
            CASE WHEN pg_input_is_valid(latest.payload->>'net_profit', 'numeric')
@@ -46,31 +49,37 @@ WITH RECURSIVE bounds AS (
            count(DISTINCT currency) AS known_currencies
     FROM fills CROSS JOIN bounds
 ), sequence AS MATERIALIZED (
-    SELECT f.*, row_number() OVER (PARTITION BY fixture_id ORDER BY placed_at, accepted_at, id) AS step,
-           count(*) OVER (PARTITION BY fixture_id, placed_at, accepted_at) AS tied
+    SELECT f.*, scope, risk_group,
+           row_number() OVER (PARTITION BY fixture_id, scope, risk_group ORDER BY placed_at, accepted_at, id) AS step,
+           count(*) OVER (PARTITION BY fixture_id, scope, risk_group, placed_at, accepted_at) AS tied
     FROM fills f CROSS JOIN coverage c
+    CROSS JOIN LATERAL (VALUES ('fixture', 'null'::jsonb), ('same_side', same_side_key)) AS groups(scope, risk_group)
     WHERE c.invalid_fills = 0 AND c.account_bindings = 1 AND c.known_currencies <= 1
-), policies (cap) AS (
-    VALUES (0), (1), (2)
+), policies (scope, cap) AS (
+    VALUES ('fixture', 0), ('fixture', 1), ('fixture', 2), ('same_side', 1)
 ), replay AS (
-    SELECT f.fixture_id, p.cap, 0::bigint AS step, ARRAY[]::timestamptz[] AS open_until, true AS retained
-    FROM (SELECT DISTINCT fixture_id FROM sequence) f CROSS JOIN policies p
+    SELECT f.fixture_id, f.scope, f.risk_group, p.cap, 0::bigint AS step,
+           ARRAY[]::timestamptz[] AS open_until, true AS retained
+    FROM (SELECT DISTINCT fixture_id, scope, risk_group FROM sequence) f JOIN policies p USING (scope)
     UNION ALL
-    SELECT r.fixture_id, r.cap, s.step,
+    SELECT r.fixture_id, r.scope, r.risk_group, r.cap, s.step,
            CASE WHEN decision.retained THEN array_append(active.deadlines, coalesce(s.closed_at, 'infinity'))
                 ELSE active.deadlines END,
            decision.retained
-    FROM replay r JOIN sequence s ON s.fixture_id = r.fixture_id AND s.step = r.step + 1
+    FROM replay r JOIN sequence s ON (s.fixture_id,s.scope,s.step) = (r.fixture_id,r.scope,r.step + 1)
+        AND s.risk_group IS NOT DISTINCT FROM r.risk_group
     CROSS JOIN bounds b
     CROSS JOIN LATERAL (
         SELECT ARRAY(SELECT x FROM unnest(r.open_until) AS x WHERE x >= s.placed_at) AS deadlines
     ) active
     CROSS JOIN LATERAL (
-        SELECT r.cap = 0 OR s.manual OR s.placed_at < b.begin_at OR cardinality(active.deadlines) < r.cap AS retained
+        SELECT r.cap = 0 OR r.risk_group IS NULL OR s.manual OR s.placed_at < b.begin_at
+            OR cardinality(active.deadlines) < r.cap AS retained
     ) decision
 ), comparison AS (
     SELECT CASE WHEN s.placed_at < b.split_at THEN 'early' ELSE 'late' END AS period,
-           r.cap, count(*) AS opportunities,
+           r.scope, r.cap, count(*) AS opportunities,
+           count(*) FILTER (WHERE s.same_side_key IS NULL) AS fills_without_side_key,
            count(*) FILTER (WHERE s.tied > 1) AS ambiguous_sequence,
            count(*) FILTER (WHERE NOT r.retained) AS removed,
            count(DISTINCT s.fixture_id) FILTER (WHERE NOT r.retained) AS fixtures_with_removals,
@@ -80,15 +89,16 @@ WITH RECURSIVE bounds AS (
            sum(s.stake) FILTER (WHERE r.retained AND s.net IS NOT NULL) AS retained_settled_stake,
            sum(s.net) FILTER (WHERE r.retained) AS retained_receipt_net,
            sum(s.net) FILTER (WHERE NOT r.retained) AS removed_receipt_net
-    FROM replay r JOIN sequence s USING (fixture_id, step) CROSS JOIN bounds b
+    FROM replay r JOIN sequence s USING (fixture_id, scope, step) CROSS JOIN bounds b
     WHERE s.placed_at >= b.begin_at
-    GROUP BY 1, 2
+      AND s.risk_group IS NOT DISTINCT FROM r.risk_group
+    GROUP BY 1, 2, 3
 ), fixture_receipts AS (
     SELECT CASE WHEN s.placed_at < b.split_at THEN 'early' ELSE 'late' END AS period,
            CASE WHEN grouping(s.phase) = 1 THEN 'all' ELSE coalesce(s.phase, 'unknown') END AS phase,
            s.fixture_id, count(*) AS fills, count(s.net) AS fills_with_net, sum(s.net) AS net
     FROM sequence s CROSS JOIN bounds b
-    WHERE s.placed_at >= b.begin_at
+    WHERE s.placed_at >= b.begin_at AND s.scope = 'fixture'
     GROUP BY 1, s.fixture_id, GROUPING SETS ((), (s.phase))
 ), fixture_sensitivity AS (
     SELECT period, phase, count(*) AS fixtures, count(net) AS fixtures_with_net,
@@ -102,7 +112,10 @@ WITH RECURSIVE bounds AS (
     GROUP BY period, phase
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
-    'comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY period, cap) FROM comparison p), '[]'::jsonb),
+    'comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - ARRAY['scope','fills_without_side_key'] ORDER BY period, cap)
+        FROM comparison p WHERE scope='fixture'), '[]'::jsonb),
+    'same_side_comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - 'scope' ORDER BY period, cap)
+        FROM comparison p WHERE scope='same_side'), '[]'::jsonb),
     'fixture_sensitivity', coalesce((SELECT jsonb_agg(to_jsonb(f) ORDER BY period, phase)
         FROM fixture_sensitivity f), '[]'::jsonb))
 FROM bounds b CROSS JOIN coverage c;
