@@ -780,6 +780,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path==BET_PATH:
                 body=json.loads(request.content)['seriesOrders'][0]['orderDetailList'][0]
                 self.assertEqual(('option-current','2.35','235000'),(body['playOptionsId'],body['oddFinally'],body['odds']))
+                self.assertEqual('', body['scoreBenchmark'])
                 return httpx.Response(200,json={'code':0,'data':{'orderDetailRespList':[{'orderNo':'LIVE-PRICE','orderStatusCode':1}]}})
             raise AssertionError(request.url.path)
         executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',live_orders_enabled=True,
@@ -799,6 +800,25 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                               'source_updated_at': None, 'source_time_quality': 'unknown'},
                              item['evidence']['fixture_projection'])
         self.assertEqual(1,sum(request.url.path==BET_PATH for request in calls))
+
+    async def test_live_total_reserves_current_fixture_score(self):
+        await self.healthy()
+        fixture = 'leyu:234567'
+        signal, expert, _, _ = await self.signal(fixture=fixture)
+        await self.enable([expert])
+        await self.pool.execute('UPDATE v2_expert_signals SET score_baseline=$2 WHERE id=$1', signal, {'home': 1, 'away': 0})
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=2,away_score=0 WHERE id=$1', fixture)
+
+        order = await self.reserve(signal)
+        self.assertEqual('2:0', order['quote_snapshot']['score_benchmark'])
+        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+        self.assertEqual('order', work['kind'])
+        await self.executor().order_job(work)
+
+        submission, = [request for request in self.native_requests if request.url.path == BET_PATH]
+        detail = json.loads(submission.content)['seriesOrders'][0]['orderDetailList'][0]
+        self.assertEqual('2:0', detail['scoreBenchmark'])
+        self.assertEqual('accepted', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
 
     async def test_unknown_mock_submission_not_requeued_or_released(self):
         await self.healthy()

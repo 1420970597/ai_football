@@ -188,10 +188,9 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
         raise OrderEligibilityError(409, "当日或开放敞口限额不足", "daily_limit")
     if sums["exposure"] + stake > policy["open_exposure_limit"]:
         raise OrderEligibilityError(409, "当日或开放敞口限额不足", "open_exposure_limit")
-    baseline = signal["score_baseline"] or {}
     score = ""
-    if signal["current_phase"] == "live" and baseline.get("home_score") is not None and baseline.get("away_score") is not None:
-        score = f"{baseline['home_score']}:{baseline['away_score']}"
+    if signal["current_phase"] == "live" and signal["home_score"] is not None and signal["away_score"] is not None:
+        score = f"{signal['home_score']}:{signal['away_score']}"
     score = remaining_period_benchmark(signal) or score
     snapshot = {"match_id": signal["fixture_id"].split(":", 1)[-1], "market_instance_id": signal["market_instance_id"],
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
