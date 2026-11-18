@@ -6,6 +6,7 @@ import test_reviews as support
 
 
 CASES = (
+    ('欧帕尔利奥U20', '铁路工人PR U20', '帕尔梅拉斯青年队', '帕尔梅拉斯U20', '巴青杯', '巴西杯U20'),
     ('广岛三箭里贾纳(女)', '广岛三箭(女)', '野岛斯特拉神奈川相模原(女)',
      '野岛斯特拉神奈川相模原(女)', '日本女子职业联赛', '日本女子职业联赛'),
     ('中岸水手女足', '中央海岸水手学院(女)', '珀斯光荣女足', '珀斯光荣(女)', '澳女联', '澳大利亚女子甲级联赛'),
@@ -18,6 +19,15 @@ CASES = (
 
 
 class LiveSourceNameTests(unittest.TestCase):
+    def test_brazil_under_20_cup_scope_preserves_sport_and_age(self):
+        self.assertEqual(normalize_competition_name('巴青杯', 'football'),
+                         normalize_competition_name('巴西杯U20', 'football'))
+        self.assertNotEqual(normalize_competition_name('巴青杯', 'basketball'),
+                            normalize_competition_name('巴西杯U20', 'basketball'))
+        for native in ('帕尔梅拉斯', '帕尔梅拉斯U17', '帕尔梅拉斯U23'):
+            self.assertFalse(team_name_matches('帕尔梅拉斯青年队', native,
+                                              sport='football', competition='巴西杯U20'))
+
     def test_hiroshima_alias_requires_the_womens_league_and_full_squad_label(self):
         source = '广岛三箭里贾纳(女)'
         native = '广岛三箭(女)'
@@ -62,6 +72,25 @@ class LiveSourceSearchTests(unittest.IsolatedAsyncioTestCase):
     context = support.ReviewTests.context
     post = support.ReviewTests.post
     fixture = support.ReviewTests.fixture
+
+    async def test_finished_brazil_cup_image_identifies_fixture_with_no_realtime_eligibility(self):
+        team_a, home, team_b, away, league, canonical = CASES[0]
+        await self.pool.execute(
+            "UPDATE v2_expert_messages SET raw_text='参考截图',media_objects=$2 WHERE id=$1",
+            self.message, [{'mime_type': 'image/png'}])
+        fixture = await self.fixture(1, home_team=home, away_team=away,
+                                     competition_name=canonical, phase='finished', markets=[])
+        response = await self.post('search_matches', sport='football', team_query=team_a,
+                                   team_a=team_a, team_b=team_b, competition_query=league)
+        self.assertEqual(200, response.status_code, response.text)
+        resolution = response.json()['resolution']
+        self.assertTrue(resolution['resolved'], resolution)
+        candidate = resolution['fixture']
+        self.assertEqual(fixture, candidate['id'])
+        self.assertFalse(candidate['realtime_eligible'])
+        self.assertEqual('finished', candidate['eligibility_reason'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
 
     async def test_each_original_pair_resolves_on_first_complete_search(self):
         for i, (a, home, b, away, league, canonical) in enumerate(CASES, 1):

@@ -5,8 +5,18 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-18.1'
+REGISTRY_VERSION = '2026-11-18.2'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport': 'football', 'competition': '巴西杯U20',
+        'names': ('欧帕尔利奥U20', '铁路工人PR U20'),
+        'reference': 'palmeiras:operario-copa-sub20+leyu:77176:20261118',
+    },
+    {
+        'sport': 'football', 'competition': '巴西杯U20',
+        'names': ('帕尔梅拉斯青年队', '帕尔梅拉斯U20'),
+        'reference': 'palmeiras:operario-copa-sub20+leyu:24871:20261118',
+    },
     {
         'sport': 'football', 'competition': '日本女子职业联赛',
         'names': ('广岛三箭里贾纳(女)', '广岛三箭(女)'),
