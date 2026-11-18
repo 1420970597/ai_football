@@ -73,6 +73,26 @@ class LiveSourceSearchTests(unittest.IsolatedAsyncioTestCase):
     post = support.ReviewTests.post
     fixture = support.ReviewTests.fixture
 
+    async def test_soccer_uses_the_football_scope_for_search_and_pagination(self):
+        league = '巴西甲级联赛'
+        home = 'Alpha'
+        away = 'Beta'
+        first = await self.fixture(1, home_team=home, away_team=away, competition_name=league)
+        second = await self.fixture(2, home_team=home, away_team='Gamma', competition_name=league)
+        await self.fixture(3, home_team=home, away_team=away, competition_name=league, sport='basketball')
+        params = {'team_query': home, 'competition_query': '巴西甲', 'team_a': home, 'team_b': away}
+        page = await self.post('search_matches', sport=' Soccer ', page_size=1, **params)
+        self.assertEqual(200, page.status_code, page.text)
+        body = page.json()
+        self.assertEqual([first], [item['id'] for item in body['items']])
+        self.assertFalse(body['search_complete'])
+        tail = await self.post('search_matches', sport='football', cursor=body['next_cursor'], **params)
+        self.assertEqual(200, tail.status_code, tail.text)
+        body = tail.json()
+        self.assertEqual([second], [item['id'] for item in body['items']])
+        self.assertTrue(body['search_complete'])
+        self.assertEqual(first, body['resolution']['fixture']['id'])
+
     async def test_finished_brazil_cup_image_identifies_fixture_with_no_realtime_eligibility(self):
         team_a, home, team_b, away, league, canonical = CASES[0]
         await self.pool.execute(

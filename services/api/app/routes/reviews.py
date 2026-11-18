@@ -62,7 +62,10 @@ class SearchInput(AttemptInput):
     @field_validator('sport', mode='before')
     @classmethod
     def normalize_sport(cls, value):
-        return value.strip().lower() if isinstance(value, str) else value
+        if not isinstance(value, str):
+            return value
+        sport = value.strip().lower()
+        return 'football' if sport == 'soccer' else sport
 
     @model_validator(mode="after")
     def valid_window(self):
