@@ -592,6 +592,30 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             await self.reserve(s2)
         self.assertEqual(Decimal('2'),await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
 
+    async def test_dispatch_logs_aggregated_reservation_rejections(self):
+        await self.healthy()
+        first, expert1, _, _ = await self.signal()
+        _, expert2, _, missing_quote = await self.signal()
+        _, expert3, _, _ = await self.signal()
+        await self.enable([expert1, expert2, expert3], daily='2', exposure='2', tz='UTC')
+        await self.pool.execute('DELETE FROM v2_current_quotes WHERE id=$1', missing_quote)
+        endpoint = '/internal/executor/dispatch'
+
+        with self.assertLogs(accounts.log, level='INFO') as logged:
+            response = await self.worker_api.post(endpoint)
+        self.assertEqual((200, {'reserved': 1}), (response.status_code, response.json()))
+        self.assertEqual(['auto_reservation_rejections candidates=3 reasons={"daily_limit": 1, "market_or_signal_unavailable": 1}'],
+                         [record.getMessage() for record in logged.records])
+        self.assertEqual(first, await self.pool.fetchval('SELECT signal_id FROM v2_bet_orders'))
+
+        await self.pool.execute('UPDATE v2_user_bet_settings SET daily_limit=4 WHERE user_id=$1', self.user['id'])
+        with self.assertLogs(accounts.log, level='INFO') as logged:
+            response = await self.worker_api.post(endpoint)
+        self.assertEqual((200, {'reserved': 0}), (response.status_code, response.json()))
+        self.assertEqual(['auto_reservation_rejections candidates=2 reasons={"market_or_signal_unavailable": 1, "open_exposure_limit": 1}'],
+                         [record.getMessage() for record in logged.records])
+        self.assertEqual(Decimal('2'), await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
+
     async def test_many_distinct_recommendations_never_exceed_limits_and_stop_is_available(self):
         await self.healthy()
         signals, experts = [], []

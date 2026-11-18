@@ -1,11 +1,13 @@
 """本人账户、异步校验、订单许可与独立执行器受限接口。"""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import hmac
 import json
+import logging
 import re
 import uuid
 from urllib.parse import urlsplit
@@ -26,6 +28,7 @@ from ..expert_profitability import PROFITABILITY_DEFINITION, profitability_rows,
 
 router = APIRouter(prefix="/api/v1/accounts")
 executor_router = APIRouter(prefix="/internal/executor")
+log = logging.getLogger(__name__)
 
 
 class Input(BaseModel):
@@ -477,13 +480,18 @@ async def dispatch(request: Request):
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
                 "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "
                 "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=b.user_id AND o.signal_id=s.id AND o.account_id IS NOT NULL) ORDER BY s.created_at LIMIT 30", profitable_ids)
+            reservation_rejections: Counter[str] = Counter()
             for pair in pairs:
                 try:
                     async with conn.transaction():
                         await orders.reserve_signal(conn, pair["user_id"], pair["signal_id"], settings)
                         count += 1
-                except HTTPException:
-                    continue
+                except HTTPException as exc:
+                    reason = exc.reason if isinstance(exc, orders.OrderEligibilityError) else f"http_{exc.status_code}"
+                    reservation_rejections[reason] += 1
+            if reservation_rejections:
+                log.info("auto_reservation_rejections candidates=%d reasons=%s", len(pairs),
+                         json.dumps(reservation_rejections, sort_keys=True))
         async with conn.transaction():
             rows = await conn.fetch("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state='healthy' AND a.renewal_state='ready' "
                 "AND (a.renewal_retry_after IS NULL OR a.renewal_retry_after<=now()) "

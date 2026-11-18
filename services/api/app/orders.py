@@ -15,6 +15,12 @@ from .security import decrypt_secret
 from .expert_profitability import require_expert_permission
 
 
+class OrderEligibilityError(HTTPException):
+    def __init__(self, status_code: int, detail: str, reason: str):
+        super().__init__(status_code, detail)
+        self.reason = reason
+
+
 def live_enabled(settings) -> bool:
     value = getattr(settings, "live_orders_enabled", False)
     return isinstance(value, bool) and value
@@ -60,7 +66,7 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None):
         "AND q.selection=s.selection WHERE s.id=$1 FOR SHARE OF s", signal_id,
     )
     if not row:
-        raise HTTPException(409, "推荐及原生盘口不可用")
+        raise OrderEligibilityError(409, "推荐及原生盘口不可用", "market_or_signal_unavailable")
     now = datetime.now(timezone.utc)
     if (row["outcome"] != "pending" or row["current_phase"] not in {"scheduled", "live"}
             or row["phase"] != row["current_phase"]
@@ -71,11 +77,11 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None):
             or row["created_at"] < now - timedelta(minutes=5)
             or row["message_posted_at"] < now - timedelta(minutes=5)
             or row["message_posted_at"] > now + timedelta(seconds=5)):
-        raise HTTPException(409, "推荐、来源或当前比赛盘口不满足实盘条件")
+        raise OrderEligibilityError(409, "推荐、来源或当前比赛盘口不满足实盘条件", "signal_ineligible")
     latest = await conn.fetchval("SELECT max(revision) FROM v2_expert_messages WHERE source_id=$1 AND platform_message_id=$2",
                                  row["source_id"], row["platform_message_id"])
     if latest != row["message_revision"]:
-        raise HTTPException(409, "推荐原文已经修订")
+        raise OrderEligibilityError(409, "推荐原文已经修订", "message_revised")
     return row
 
 
@@ -87,11 +93,11 @@ async def account_policy(conn, user_id, settings):
             or (datetime.now(timezone.utc)-account['last_verified_at']).total_seconds()>120
             or not policy or not policy["auto_enabled"] or policy["emergency_stopped"]
             or policy["consent_account_id"] != account["id"] or policy["consent_binding_revision"] != account["binding_revision"]):
-        raise HTTPException(409, "账户或本人自动投注许可已失效")
+        raise OrderEligibilityError(409, "账户或本人自动投注许可已失效", "account_or_consent_unavailable")
     if not live_enabled(settings) or not await global_enabled(conn, settings):
-        raise HTTPException(403, "实际交易尚未被开放")
+        raise OrderEligibilityError(403, "实际交易尚未被开放", "live_trading_disabled")
     if not await has_entitlement(user_id, "automatic_betting", connection=conn):
-        raise HTTPException(403, "自动投注会员权益已失效")
+        raise OrderEligibilityError(403, "自动投注会员权益已失效", "entitlement_unavailable")
     return account, policy
 
 
@@ -147,7 +153,7 @@ def remaining_period_benchmark(signal):
     baseline = signal["score_baseline"] or {}
     home, away = signal["home_score"], signal["away_score"]
     if home is None or away is None or (baseline.get("home"), baseline.get("away")) != (home, away):
-        raise HTTPException(409, "滚球剩余时间盘口的推荐比分缺失或已经变化")
+        raise OrderEligibilityError(409, "滚球剩余时间盘口的推荐比分缺失或已经变化", "score_benchmark_changed")
     return f"{home}:{away}"
 
 
@@ -168,10 +174,12 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
         await require_expert_permission(conn, policy, signal['expert_id'])
         stake = policy["stake_per_order"]
         if stake <= 0 or stake > policy["max_per_order"]:
-            raise HTTPException(409, "单笔限额不足")
+            raise OrderEligibilityError(409, "单笔限额不足", "stake_limit")
     sums = await exposure_totals(conn, user_id, policy["daily_timezone"])
-    if sums["daily"] + stake > policy["daily_limit"] or sums["exposure"] + stake > policy["open_exposure_limit"]:
-        raise HTTPException(409, "当日或开放敞口限额不足")
+    if sums["daily"] + stake > policy["daily_limit"]:
+        raise OrderEligibilityError(409, "当日或开放敞口限额不足", "daily_limit")
+    if sums["exposure"] + stake > policy["open_exposure_limit"]:
+        raise OrderEligibilityError(409, "当日或开放敞口限额不足", "open_exposure_limit")
     baseline = signal["score_baseline"] or {}
     score = ""
     if signal["current_phase"] == "live" and baseline.get("home_score") is not None and baseline.get("away_score") is not None:
