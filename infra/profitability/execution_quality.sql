@@ -19,7 +19,8 @@ WITH bounds AS (
            f.sport, s.phase, s.market_kind, s.period, s.id AS signal_id, s.score_basis, b.manual,
            b.provider_stake, b.provider_price,
            b.settled_net, b.provider_placed_at, s.created_at AS signal_at,
-           s.recommendation_price, s.outcome, p.price AS preflight_price, p.id AS preflight_id,
+           s.recommendation_price, s.outcome, s.settlement_reason AS signal_settlement_reason,
+           p.price AS preflight_price, p.id AS preflight_id,
            p.fixture_id = s.fixture_id AND p.market_id = s.market_id AND p.period = s.period
                AND p.selection = s.selection AND p.line IS NOT DISTINCT FROM s.line
                AND p.evidence->>'phase' = s.phase AND p.evidence->>'market_kind' = s.market_kind AS native_terms_match,
@@ -181,16 +182,16 @@ WITH bounds AS (
     FROM priced
     GROUP BY GROUPING SETS ((cohort), (cohort,sport,phase,market_kind,manual))
 ), exclusions AS (
-    SELECT cohort, sport, phase, market_kind, period, price_bridge_exclusion AS reason,
+    SELECT cohort, sport, phase, market_kind, period, price_bridge_exclusion AS reason, signal_settlement_reason,
            count(*) AS orders, count(settled_net) AS with_receipt_net, sum(settled_net) AS provider_net
     FROM priced
     WHERE price_bridge_exclusion IS NOT NULL
-    GROUP BY 1,2,3,4,5,6
+    GROUP BY 1,2,3,4,5,6,7
 )
 SELECT jsonb_build_object('anchor',anchor,'observed_at',observed_at,'analysis_end',analysis_end,
     'receipt_as_of',receipt_as_of,'cohorts',coalesce((
     SELECT jsonb_agg(to_jsonb(s) ORDER BY cohort, all_markets DESC, sport, phase, market_kind, manual) FROM summary s
 ), '[]'::jsonb), 'price_bridge_exclusions', coalesce((
-    SELECT jsonb_agg(to_jsonb(e) ORDER BY cohort, reason, sport, phase, market_kind, period) FROM exclusions e
+    SELECT jsonb_agg(to_jsonb(e) ORDER BY cohort, reason, sport, phase, market_kind, period, signal_settlement_reason) FROM exclusions e
 ), '[]'::jsonb)) FROM bounds;
 ROLLBACK;

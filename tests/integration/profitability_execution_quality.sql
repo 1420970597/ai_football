@@ -114,6 +114,10 @@ SELECT id, id, fixture_id, market_id, period, selection, line, 2.10,
        'order_attempt', created_at + interval '5 seconds'
 FROM v2_expert_signals WHERE id BETWEEN 14 AND 19;
 
+ALTER TABLE v2_expert_signals ADD COLUMN settlement_reason text;
+UPDATE v2_expert_signals SET settlement_reason='result_not_confirmed' WHERE id=15;
+UPDATE v2_expert_signals SET settlement_reason='asian_line:score_basis_outcome_equivalent' WHERE id=16;
+
 INSERT INTO v2_quote_evidence
 SELECT id+100, id, fixture_id, market_id, period, selection, line, 2.10,
        jsonb_build_object('stage','submission_authorized','attempt_id',id::text,'signal_id',id::text,
