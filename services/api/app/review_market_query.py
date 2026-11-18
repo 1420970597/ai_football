@@ -12,7 +12,11 @@ _TOTAL = re.compile(r'(?:(?P<before>[大小])\s*)?(?P<a>\d{1,5}(?:\.\d{1,3})?)'
 def market_filters(body):
     filters = {key: getattr(body, key) for key in
                ('market_kind', 'period', 'line', 'selection', 'market_query')}
-    match = _TOTAL.fullmatch(filters['market_query'] or '')
+    query = filters['market_query'] or ''
+    if (query.startswith('半') and filters['market_kind'] == 'total' and filters['period'] == 'first_half'
+            and getattr(body, 'source_periods', None) == ['first_half']):
+        query = query.removeprefix('半').lstrip()
+    match = _TOTAL.fullmatch(query)
     if match is None or bool(match['before']) == bool(match['after']):
         return filters
     line = Decimal(match['a'])

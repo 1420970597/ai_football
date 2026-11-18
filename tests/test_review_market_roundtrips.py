@@ -80,6 +80,21 @@ class MarketSnapshotRoundTripTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((1, []), (total, quotes))
         self.assertEqual(1, len(calls))
 
+    async def test_explicit_first_half_shorthand_matches_only_the_native_option(self):
+        market = {'kind': 'total', 'line': '2.75', 'price': '1.95',
+                  'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+        await self.fixture(markets=[
+            market | {'market_id': '18', 'market_name': '上半场大小球', 'period': 'first_half', 'selection': 'over'},
+            market | {'market_id': '18', 'market_name': '上半场大小球', 'period': 'first_half', 'selection': 'under'},
+            market | {'market_id': '2', 'market_name': '全场大小球', 'period': 'full_time', 'selection': 'over'},
+        ])
+        await self.bind()
+        (_, total, quotes, _), _ = await self.snapshot(
+            market_kind='total', period='first_half', source_periods=['first_half'], market_query='半大2.5/3')
+        self.assertEqual(3, total)
+        self.assertEqual([('18', 'first_half', Decimal('2.75'), 'over')],
+                         [(q['market_id'], q['period'], q['line'], q['selection']) for q in quotes])
+
     async def test_current_encrypted_policy_updates_on_next_read_and_ignores_other_keys(self):
         await self.fixture()
         await self.bind()
