@@ -29,7 +29,7 @@ WITH bounds AS (
                AND s.score_baseline->>'away' = p.evidence->'score_baseline'->>'away'
                AND (s.score_baseline->>'home') || ':' || (s.score_baseline->>'away') = p.evidence->>'score_benchmark'
                AS remaining_baseline_matches,
-           rule.basis AS verified_rules_basis, rule.equivalent_period_total
+           rule.basis AS verified_rules_basis, rule.equivalent_period_total, rule.equivalent_remaining_handicap
     FROM v2_bet_orders b LEFT JOIN v2_expert_signals s ON s.id = b.signal_id
     LEFT JOIN v2_fixtures f ON f.id = s.fixture_id CROSS JOIN bounds a
     LEFT JOIN LATERAL (
@@ -43,10 +43,26 @@ WITH bounds AS (
         ORDER BY q.captured_at DESC, q.id DESC LIMIT 1
     ) p ON true
     LEFT JOIN LATERAL (
-        SELECT coalesce(calc.rule->>'score_basis', 'full_period') AS basis,
-               calc.rule->>'score_basis' IS NULL AS equivalent_period_total
+        SELECT coalesce(calc.rule->>'score_basis', calc.equivalent_basis) AS basis,
+               calc.rule->>'score_basis' IS NULL AND calc.equivalent_basis='full_period' AS equivalent_period_total,
+               calc.rule->>'score_basis' IS NULL AND calc.equivalent_basis='remaining_period' AS equivalent_remaining_handicap
         FROM v2_signal_settlements ss
-        CROSS JOIN LATERAL (SELECT ss.calculation->'score_rule' AS rule, ss.calculation->'signal' AS inputs) calc
+        CROSS JOIN LATERAL (
+            SELECT ss.calculation->'score_rule' AS rule, ss.calculation->'signal' AS inputs,
+                   CASE
+                       WHEN (s.market_kind,s.market_id,s.period) IN (('total','2','full_time'),('total','18','first_half'))
+                           AND ss.reason IN ('asian_line:zero_baseline_score_equivalent', 'asian_split:zero_baseline_score_equivalent',
+                                             'asian_line:score_basis_outcome_equivalent', 'asian_split:score_basis_outcome_equivalent')
+                           THEN 'full_period'
+                       WHEN (s.market_kind,s.market_id,s.period) = ('handicap','4','full_time')
+                           AND ss.calculation->'signal'->>'line_basis' = 'provider_home'
+                           AND ss.reason IN ('asian_line:zero_baseline_score_equivalent:provider_home_line',
+                                             'asian_split:zero_baseline_score_equivalent:provider_home_line',
+                                             'asian_line:provider_home_line:score_basis_outcome_equivalent',
+                                             'asian_split:provider_home_line:score_basis_outcome_equivalent')
+                           THEN 'remaining_period'
+                   END AS equivalent_basis
+        ) calc
         WHERE ss.signal_id = s.id AND ss.fixture_id = s.fixture_id AND ss.result_version = s.result_version
             AND ss.outcome = s.outcome AND ss.unit_net IS NOT DISTINCT FROM s.unit_net
             AND f.sport = 'football' AND s.fixture_id ~ '^leyu:[0-9]+$'
@@ -59,9 +75,8 @@ WITH bounds AS (
                 ('leyu-football-period-total-e330-20261106', 'full_period', 'total', '18', 'first_half'),
                 ('leyu-football-fulltime-live-handicap-e448-20261106', 'remaining_period', 'handicap', '4', 'full_time')))
               OR ((calc.rule IS NULL OR calc.rule = 'null'::jsonb)
-                AND (s.market_kind, s.market_id, s.period) IN (('total','2','full_time'), ('total','18','first_half'))
-                AND ss.reason IN ('asian_line:zero_baseline_score_equivalent', 'asian_split:zero_baseline_score_equivalent',
-                                  'asian_line:score_basis_outcome_equivalent', 'asian_split:score_basis_outcome_equivalent')
+                AND calc.equivalent_basis IS NOT NULL
+                AND (calc.equivalent_basis <> 'remaining_period' OR ss.effective_stake = s.effective_stake)
                 AND (calc.inputs->>'sport', calc.inputs->>'kind', calc.inputs->>'period', calc.inputs->>'phase',
                      calc.inputs->>'selection', calc.inputs->>'score_basis')
                     = (f.sport, s.market_kind, s.period, s.phase, s.selection, s.score_basis)
@@ -81,6 +96,9 @@ WITH bounds AS (
                       AND permit.evidence->>'prepared_digest' = p.evidence->>'prepared_digest'
                       AND (permit.fixture_id,permit.market_id,permit.period,permit.selection,permit.line)
                           IS NOT DISTINCT FROM (p.fixture_id,p.market_id,p.period,p.selection,p.line)
+                      AND (calc.equivalent_basis <> 'remaining_period' OR (
+                           permit.evidence->'score_baseline' = p.evidence->'score_baseline'
+                           AND permit.evidence->>'score_benchmark' = p.evidence->>'score_benchmark'))
                       AND permit.captured_at BETWEEN p.captured_at AND b.provider_placed_at
                 )
                 AND EXISTS (
@@ -93,7 +111,7 @@ WITH bounds AS (
                       AND (CASE WHEN pg_input_is_valid(receipt.payload->>'net_profit','numeric')
                                  THEN (receipt.payload->>'net_profit')::numeric END) = b.settled_net
                 )))
-        ORDER BY equivalent_period_total, ss.created_at DESC, ss.algorithm_version DESC LIMIT 1
+        ORDER BY (calc.rule->>'score_basis' IS NULL), ss.created_at DESC, ss.algorithm_version DESC LIMIT 1
     ) rule ON true
     WHERE b.state = 'settled'
         AND coalesce(b.settled_at,b.receipt_observed_at) >= a.anchor - interval '48 hours'
@@ -139,6 +157,7 @@ WITH bounds AS (
            count(*) FILTER (WHERE same_contract) AS comparable_recommendations,
            count(*) FILTER (WHERE same_contract AND verified_rules_basis IS NOT NULL) AS comparable_with_verified_live_rule,
            count(*) FILTER (WHERE price_bridge_available AND equivalent_period_total) AS reconstructed_equivalent_period_totals,
+           count(*) FILTER (WHERE price_bridge_available AND equivalent_remaining_handicap) AS reconstructed_equivalent_remaining_handicaps,
            count(*) FILTER (WHERE price_bridge_available) AS price_bridge_count,
            count(*) FILTER (WHERE same_contract AND provider_price < recommendation_price) AS worse_than_recommendation,
            count(*) FILTER (WHERE same_contract AND provider_price = recommendation_price) AS equal_to_recommendation,
