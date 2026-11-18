@@ -1,0 +1,37 @@
+name: ai-football-profitability
+services:
+  watch:
+    container_name: ai-football-v2-profitability-watch
+    image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+    entrypoint: [sh, /watch/watch.sh]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    cpus: 0.15
+    mem_limit: 96m
+    pids_limit: 32
+    logging: {driver: json-file, options: {max-size: 1m, max-file: '3'}}
+    healthcheck:
+      test: [CMD-SHELL, 'test -s /state/latest.json && test ! -e /state/last_failure && test "$$(($$(date +%s)-$$(stat -c %Y /state/last_success)))" -lt 660']
+      interval: 15s
+      timeout: 2s
+      retries: 3
+    environment:
+      PROFITABILITY_ANCHOR: ${PROFITABILITY_ANCHOR:?use the recorded fixed UTC anchor}
+      PGHOST: local-postgres
+      PGDATABASE: football_v2
+      PGUSER: v2_profitability_watch
+      PGPASSFILE: /run/pgpass
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /run/ca.crt
+    volumes:
+      - {type: bind, source: ., target: /watch, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ../../.runtime/profitability-watch/state, target: /state, bind: {create_host_path: false}}
+      - {type: bind, source: ../../.runtime/profitability-watch/pgpass, target: /run/pgpass, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ../../.runtime/nov11-local-db/ca.crt, target: /run/ca.crt, read_only: true, bind: {create_host_path: false}}
+    networks: [storage-private]
+networks:
+  storage-private:
+    external: true
+    name: ai-football-v2_storage-private
