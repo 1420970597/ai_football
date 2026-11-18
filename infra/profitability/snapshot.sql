@@ -32,6 +32,8 @@ WITH bounds AS (
     CROSS JOIN LATERAL (
         SELECT count(*) AS settled, count(DISTINCT account_id) AS accounts,
                count(DISTINCT provider_currency) AS currencies,
+               min(account_id::text) AS streak_account,
+               min(provider_currency) AS streak_currency,
                count(*) FILTER (WHERE provider_currency IS NULL) AS missing_currency,
                count(*) FILTER (WHERE provider_fees IS NULL) AS missing_fee_field,
                count(*) FILTER (WHERE provider_fees <> 0) AS nonzero_fee_basis_unverified,
@@ -63,6 +65,17 @@ WITH bounds AS (
              OR unknown_from_window > 0 THEN 'unverified'
         ELSE 'positive_receipts'
     END AS status FROM metrics
+), streaks AS (
+    SELECT name, coalesce(count(*) = 4 AND bool_and(status = 'positive_receipts')
+              AND count(DISTINCT streak_account) = 1 AND count(DISTINCT streak_currency) = 1, false) AS verified
+    FROM (
+        SELECT 'deadline' AS name, c.* FROM classified c WHERE ordinal < 4
+        UNION ALL
+        SELECT 'rolling', recent.* FROM (
+            SELECT * FROM classified WHERE closed ORDER BY ordinal DESC LIMIT 4
+        ) recent
+    ) streak_windows
+    GROUP BY name
 ), diagnostic AS (
     SELECT sport, phase, market_kind, period, selection, manual, count(*) AS settled, sum(provider_stake) AS principal,
            sum(settled_net) AS provider_net
@@ -73,15 +86,14 @@ WITH bounds AS (
 SELECT jsonb_build_object(
     'anchor', anchor, 'observed_at', observed_at, 'deadline', anchor + interval '48 hours',
     'deadline_state', CASE WHEN observed_at < anchor + interval '48 hours' THEN 'collecting'
-        WHEN (SELECT count(*) FROM classified WHERE ordinal < 4 AND status = 'positive_receipts') = 4
+        WHEN (SELECT verified FROM streaks WHERE name = 'deadline')
              AND NOT EXISTS(SELECT 1 FROM orders WHERE state = 'settled' AND booked_at IS NULL)
              AND NOT EXISTS(SELECT 1 FROM orders WHERE state = 'unknown' AND placed_at < anchor + interval '48 hours')
              THEN 'positive_receipts_all_four'
         ELSE 'target_not_verified' END,
-    'rolling_four_positive_receipts', coalesce((SELECT count(*) = 4 AND bool_and(status = 'positive_receipts')
-        FROM (SELECT status FROM classified WHERE closed ORDER BY ordinal DESC LIMIT 4) recent), false)
+    'rolling_four_positive_receipts', coalesce((SELECT verified FROM streaks WHERE name = 'rolling'), false)
         AND NOT EXISTS(SELECT 1 FROM orders WHERE (state = 'settled' AND booked_at IS NULL) OR state = 'unknown'),
-    'windows', (SELECT jsonb_agg(to_jsonb(c) ORDER BY ordinal) FROM classified c),
+    'windows', (SELECT jsonb_agg(to_jsonb(c) - 'streak_account' - 'streak_currency' ORDER BY ordinal) FROM classified c),
     'settled_without_time', (SELECT count(*) FROM orders WHERE state = 'settled' AND booked_at IS NULL),
     'pending_total', (SELECT count(*) FROM orders WHERE state IN ('submitting','unknown','accepted')),
     'unknown_total', (SELECT count(*) FROM orders WHERE state = 'unknown'),
