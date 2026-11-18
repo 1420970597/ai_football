@@ -44,6 +44,10 @@ class SubmissionRejected(LeyuError):
     pass
 
 
+class AccountConnectTimeout(LeyuError):
+    pass
+
+
 def number(value: Any, *, minimum: Decimal | None = None) -> Decimal:
     try:
         if isinstance(value, bool) or value is None:
@@ -294,16 +298,28 @@ class AccountProtocolClient:
         except (httpx.HTTPError, TimeoutError) as exc:
             log.warning("account transport failure operation=%s error_type=%s",
                         REQUEST_OPERATIONS.get(path, "unknown"), type(exc).__name__)
+            if isinstance(exc, httpx.ConnectTimeout):
+                raise AccountConnectTimeout("account_transport_failure") from None
             raise LeyuError("account_transport_failure") from None
 
-    async def balance(self) -> dict[str, Any]:
-        payload = await self._request(AMOUNT_PATH)
+    async def balance(self, *, retry_connect_timeout: bool = False) -> dict[str, Any]:
+        retried = False
+        try:
+            payload = await self._request(AMOUNT_PATH)
+        except AccountConnectTimeout:
+            if not retry_connect_timeout:
+                raise
+            await asyncio.sleep(0.2)
+            payload = await self._request(AMOUNT_PATH)
+            retried = True
         if not isinstance(payload, Mapping):
             raise LeyuError("account_balance_unavailable")
         candidates = [number(payload[key], minimum=Decimal("0")) for key in ("amount", "balance", "availableAmount", "availableBalance")
                       if payload.get(key) not in (None, "")]
         if not candidates or len(set(candidates)) != 1:
             raise LeyuError("account_balance_unavailable")
+        if retried:
+            log.info("account balance recovered after connect timeout")
         return {"available": str(candidates[0]), "currency": None, "observed_at": datetime.now(timezone.utc).isoformat()}
 
     async def orders(self, state: str, *, page: int = 1, size: int = 100, begin: datetime, end: datetime) -> dict[str, Any]:

@@ -150,6 +150,28 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([
             'WARNING:platform.executor.account_protocol:account transport failure operation=balance error_type=ConnectTimeout',
         ], logs.output)
+        self.assertEqual(1, len(self.requests))
+
+    async def test_balance_connection_retry_recovers_once(self):
+        def balance(_):
+            if len(self.requests) == 1:
+                raise httpx.ConnectTimeout('private timeout context')
+            return {'amount': '37.50'}
+
+        self.responses[AMOUNT_PATH] = balance
+        with self.assertLogs('platform.executor.account_protocol', level='INFO') as logs:
+            result = await self.client.balance(retry_connect_timeout=True)
+        self.assertEqual('37.50', result['available'])
+        self.assertEqual([AMOUNT_PATH, AMOUNT_PATH], [request.url.path for request in self.requests])
+        self.assertTrue(logs.output[-1].endswith('account balance recovered after connect timeout'))
+
+    async def test_balance_connection_retry_stops_on_second_failure(self):
+        self.responses[AMOUNT_PATH] = httpx.ConnectTimeout('private timeout context')
+        with self.assertLogs('platform.executor.account_protocol', level='WARNING') as logs:
+            with self.assertRaisesRegex(LeyuError, '^account_transport_failure$'):
+                await self.client.balance(retry_connect_timeout=True)
+        self.assertEqual(2, len(self.requests))
+        self.assertEqual(2, len(logs.output))
 
     async def test_account_worker_identifies_initial_balance_transport_failure(self):
         self.responses[AMOUNT_PATH] = httpx.ReadTimeout('private timeout context')
@@ -161,6 +183,7 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
                                         'config': {'leyu_request_id': 'private', 'leyu_api_base': 'https://isolated.invalid'}})
         self.assertTrue(any(line.endswith('stage=initial_balance') for line in logs.output))
         self.assertFalse(any('private' in line for line in logs.output))
+        self.assertEqual(1, len(self.requests))
         finish.assert_awaited_once_with('/jobs/job/finish', {
             'attempt_id': 'attempt', 'status': 'failed', 'category': 'account_transport_failure', 'provider_code': '',
         })

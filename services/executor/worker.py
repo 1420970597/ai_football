@@ -94,7 +94,7 @@ class Executor:
                 stage = "initial_balance"
                 client = await clients.enter_async_context(self.client_factory(manager.scope, session))
                 try:
-                    balance = await client.balance()
+                    balance = await client.balance(retry_connect_timeout=True)
                 except AuthExpired:
                     stage = "renewal"
                     await clients.aclose()
