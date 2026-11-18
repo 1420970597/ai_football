@@ -44,6 +44,9 @@ WITH bounds AS (
     CROSS JOIN LATERAL (
         SELECT coalesce(sum(provider_stake) FILTER (WHERE dated_placement), 0) AS placed_stake,
                coalesce(sum(provider_payout) FILTER (WHERE dated_settlement), 0) AS settled_payout,
+               CASE WHEN count(*) FILTER (WHERE dated_settlement AND provider_stake IS NULL) = 0
+                    THEN coalesce(sum(provider_stake) FILTER (WHERE dated_settlement), 0) END AS settled_principal,
+               count(*) FILTER (WHERE dated_settlement AND provider_stake IS NULL) AS missing_settled_principal,
                count(*) FILTER (WHERE dated_placement) AS placements,
                count(*) FILTER (WHERE dated_settlement) AS settlements,
                count(*) FILTER (WHERE (dated_placement AND provider_stake IS NULL)
@@ -86,6 +89,12 @@ WITH bounds AS (
            count(*) FILTER (WHERE cash_flow_difference <> 0) AS intervals_with_difference,
            sum(placements) AS placements, sum(settlements) AS settlements,
            sum(placed_stake) AS placed_stake, sum(settled_payout) AS settled_payout,
+           coalesce(sum(missing_settled_principal), 0) AS missing_settled_principal,
+           CASE WHEN bool_and(missing_settled_principal = 0) THEN sum(settled_principal) END AS settled_principal,
+           CASE WHEN bool_and(missing_settled_principal = 0 AND missing_amount = 0)
+                THEN sum(settled_payout - settled_principal) END AS settlement_net_from_payouts,
+           CASE WHEN bool_and(missing_settled_principal = 0 AND missing_amount = 0)
+                THEN sum(settled_principal - placed_stake) END AS net_principal_released,
            sum(observed_change) AS observed_change,
            sum(cash_flow_difference) AS cash_flow_difference,
            sum(abs(cash_flow_difference)) AS absolute_cash_flow_difference
