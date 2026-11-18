@@ -12,7 +12,14 @@ WITH bounds AS (
                AND p.selection = s.selection AND p.line IS NOT DISTINCT FROM s.line
                AND p.evidence->>'phase' = s.phase AND p.evidence->>'market_kind' = s.market_kind
                AND p.evidence->>'score_basis' = s.score_basis
-               AND (s.phase <> 'live' OR s.score_basis = 'full_period') AS same_contract
+               AND (s.phase <> 'live' OR s.score_basis = 'full_period'
+                    OR rule.basis = 'full_period'
+                    OR ((s.score_basis = 'remaining_period' OR rule.basis = 'remaining_period') AND s.period = 'full_time'
+                        AND s.score_baseline->>'home' = p.evidence->'score_baseline'->>'home'
+                        AND s.score_baseline->>'away' = p.evidence->'score_baseline'->>'away'
+                        AND (s.score_baseline->>'home') || ':' || (s.score_baseline->>'away') = p.evidence->>'score_benchmark'))
+               AS same_contract,
+           rule.basis AS verified_rules_basis
     FROM v2_bet_orders b LEFT JOIN v2_expert_signals s ON s.id = b.signal_id
     LEFT JOIN v2_fixtures f ON f.id = s.fixture_id CROSS JOIN bounds a
     LEFT JOIN LATERAL (
@@ -23,6 +30,23 @@ WITH bounds AS (
             AND q.evidence->>'attempt_id' = b.attempt_id::text
         ORDER BY q.captured_at DESC, q.id DESC LIMIT 1
     ) p ON true
+    LEFT JOIN LATERAL (
+        SELECT calc.rule->>'score_basis' AS basis
+        FROM v2_signal_settlements ss
+        CROSS JOIN LATERAL (SELECT ss.calculation->'score_rule' AS rule) calc
+        WHERE ss.signal_id = s.id AND ss.fixture_id = s.fixture_id AND ss.result_version = s.result_version
+            AND ss.outcome = s.outcome AND ss.unit_net IS NOT DISTINCT FROM s.unit_net
+            AND f.sport = 'football' AND s.fixture_id ~ '^leyu:[0-9]+$'
+            AND s.phase = 'live' AND s.score_basis = 'unknown'
+            AND calc.rule->>'provider' = 'leyu' AND calc.rule->>'market_id' = s.market_id
+            AND calc.rule->>'period' = s.period
+            AND ss.calculation->'effective_signal'->>'score_basis' = calc.rule->>'score_basis'
+            AND (calc.rule->>'reference', calc.rule->>'score_basis', s.market_kind, s.market_id, s.period) IN (
+                ('leyu-football-period-total-e330-20261106', 'full_period', 'total', '2', 'full_time'),
+                ('leyu-football-period-total-e330-20261106', 'full_period', 'total', '18', 'first_half'),
+                ('leyu-football-fulltime-live-handicap-e448-20261106', 'remaining_period', 'handicap', '4', 'full_time'))
+        ORDER BY ss.created_at DESC, ss.algorithm_version DESC LIMIT 1
+    ) rule ON true
     WHERE b.state = 'settled'
         AND coalesce(b.settled_at,b.receipt_observed_at) >= a.anchor - interval '48 hours'
         AND coalesce(b.settled_at,b.receipt_observed_at) < least(a.observed_at,a.anchor + interval '48 hours')
@@ -39,6 +63,7 @@ WITH bounds AS (
            count(*) FILTER (WHERE provider_price = preflight_price) AS equal_to_preflight,
            count(*) FILTER (WHERE provider_price > preflight_price) AS better_than_preflight,
            count(*) FILTER (WHERE same_contract) AS comparable_recommendations,
+           count(*) FILTER (WHERE same_contract AND verified_rules_basis IS NOT NULL) AS comparable_with_verified_live_rule,
            count(*) FILTER (WHERE price_bridge_available) AS price_bridge_count,
            count(*) FILTER (WHERE same_contract AND provider_price < recommendation_price) AS worse_than_recommendation,
            count(*) FILTER (WHERE same_contract AND provider_price = recommendation_price) AS equal_to_recommendation,
