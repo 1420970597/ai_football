@@ -11,6 +11,8 @@ cp "$root/infra/profitability/reconcile_due_windows.sh" .
 date() {
     if [[ "$*" == '-u +%s%6N' ]]; then
         printf '%s\n' "$test_now"
+    elif [[ "$*" == '-u +%Y-%m-%dT%H:%M:%SZ' && -n ${test_calendar_time:-} ]]; then
+        printf '%s\n' "$test_calendar_time"
     else
         command date "$@"
     fi
@@ -198,16 +200,19 @@ mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
 cp "$root/infra/profitability/restore_reconciliation_timer.sh" infra/profitability/
 
 systemctl() {
+    local name=${@: -1}
     case "$1" in
-        is-active) test -e timer_active || return 3 ;;
+        is-active) test -e "$name.active" || return 3 ;;
         show) printf '%s\n' "$timer_load_state" ;;
-        start) touch timer_active ;;
+        start) touch "$name.active" ;;
         *) return 2 ;;
     esac
 }
 systemd-run() {
+    printf '%s\n' "$@" > "${1#--unit=}.arguments"
     printf '%s\n' "$@" > timer_arguments
-    touch timer_active
+    printf '%s\n' "$1" >> units_registered
+    touch "${1#--unit=}.timer.active"
 }
 docker() {
     [[ "$*" == 'exec ai-football-v2-profitability-watch printenv PROFITABILITY_ANCHOR' ]] || return 2
@@ -216,16 +221,17 @@ docker() {
 export -f systemctl systemd-run docker
 
 restore() {
-    bash infra/profitability/restore_reconciliation_timer.sh
+    bash infra/profitability/restore_reconciliation_timer.sh "$@"
 }
 
+rolling_active=ai-football-profitability-reconcile-rolling.timer.active
 export timer_load_state=not-found
 export restore_anchor=invalid
 result=0
 restore || result=$?
 test "$result" = 2
 test ! -e timer_arguments
-test ! -e timer_active
+test ! -e "$rolling_active"
 
 export restore_anchor="$anchor"
 restore
@@ -241,9 +247,29 @@ export restore_anchor=invalid
 restore
 test ! -e timer_arguments
 
-rm timer_active
+rm "$rolling_active"
 export restore_anchor="$anchor" timer_load_state=loaded
 restore
-test -e timer_active
+test -e "$rolling_active"
 test ! -e timer_arguments
+
+mkdir -p .runtime/profitability-telegram-preview-20261118 .runtime/profitability-watch/preflight-cohorts-20261118T1600Z
+touch .runtime/profitability-telegram-preview-20261118/collect-active.sh
+export test_calendar_time=2026-11-18T19:05:00Z timer_load_state=not-found restore_anchor=invalid
+restore --with-pilot
+test -e ai-football-profitability-preflight-cohorts.timer.active
+test -e ai-football-profitability-telegram-preview.timer.active
+grep -Fqx -- '--on-calendar=*-*-* *:05:00 UTC' ai-football-profitability-preflight-cohorts.arguments
+grep -Fqx -- '2026-11-18T16:00:00Z' ai-football-profitability-preflight-cohorts.arguments
+grep -Fqx -- '--on-calendar=*-*-* *:00,30:00 UTC' ai-football-profitability-telegram-preview.arguments
+grep -Fqx -- "$test_dir/.runtime/profitability-telegram-preview-20261118/collect-active.sh" ai-football-profitability-telegram-preview.arguments
+cp units_registered pilot_registrations
+restore --with-pilot
+cmp units_registered pilot_registrations
+
+rm ai-football-profitability-preflight-cohorts.timer.active ai-football-profitability-telegram-preview.timer.active
+printf '%s\n' '{}' > .runtime/profitability-watch/preflight-cohorts-20261118T1600Z/final.json
+export test_calendar_time=2026-11-20T02:15:00Z
+restore --with-pilot
+cmp units_registered pilot_registrations
 printf '%s\n' 'Reconciliation timer recovery checks passed.'
