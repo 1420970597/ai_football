@@ -56,6 +56,8 @@ async def persist_signals(conn, *, job, attempt_id, entries):
                         'line': str(quote['line']) if quote['line'] is not None else None,
                         'price': str(quote['price']),
                         'quote_time': quote['source_updated_at'].isoformat() if quote['source_updated_at'] else None,
+                        'quote_received_at': quote['received_at'].isoformat() if quote.get('received_at') else None,
+                        'play_id': quote.get('play_id'), 'market_instance_id': quote.get('market_instance_id'),
                         'confidence': str(pick.confidence), 'evidence_text': pick.evidence_text,
                         'baseline': baseline, 'evidence': evidence})
     # Separate statement is essential: after a competing transaction commits,
@@ -68,7 +70,8 @@ async def persist_signals(conn, *, job, attempt_id, entries):
             SELECT * FROM jsonb_to_recordset($3::jsonb) AS i(position int,id uuid,
                 evidence_id uuid,fixture_id text,phase text,market_id text,market_name text,
                 period text,market_kind text,line numeric,selection text,price numeric,
-                quote_time timestamptz,confidence numeric,evidence_text text,
+                quote_time timestamptz,quote_received_at timestamptz,play_id text,market_instance_id text,
+                confidence numeric,evidence_text text,
                 baseline jsonb,score_basis text,evidence jsonb)),
         classified AS MATERIALIZED (
             SELECT i.*,canonical.id AS duplicate_of FROM incoming i
@@ -102,8 +105,32 @@ async def persist_signals(conn, *, job, attempt_id, entries):
         SELECT i.evidence_id,i.fixture_id,i.market_id,i.market_name,i.period,i.line,
             i.selection,i.price,'expert_signal',saved.id,i.quote_time,
             i.evidence || CASE WHEN i.duplicate_of IS NULL THEN '{}'::jsonb
-                ELSE jsonb_build_object('duplicate_of',i.duplicate_of) END,i.baseline
-        FROM classified i JOIN saved ON saved.id=i.id
+                ELSE jsonb_build_object('duplicate_of',i.duplicate_of) END
+                || CASE WHEN market.options IS NULL THEN '{}'::jsonb ELSE jsonb_build_object(
+                'market_snapshot', jsonb_build_object('market_instance_id', i.market_instance_id, 'play_id', i.play_id,
+                    'received_at', i.quote_received_at, 'options', market.options)) END, i.baseline
+        FROM classified i JOIN saved ON saved.id=i.id JOIN v2_fixtures f ON f.id=i.fixture_id
+        CROSS JOIN LATERAL (SELECT CASE
+            WHEN i.market_kind='winner' AND f.sport='football' THEN ARRAY['away','draw','home']
+            WHEN i.market_kind IN ('winner','handicap') THEN ARRAY['away','home']
+            WHEN i.market_kind IN ('total','team_total') THEN ARRAY['over','under']
+        END AS selections) expected
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(jsonb_build_object('selection', q.selection, 'selection_id', q.selection_id,
+                'price', q.price::text) ORDER BY q.selection) AS options
+            FROM v2_current_quotes q
+            WHERE q.fixture_id=i.fixture_id AND q.market_id=i.market_id AND q.period=i.period
+                AND q.market_kind=i.market_kind AND coalesce(q.line,0)=coalesce(i.line,0)
+                AND (i.market_kind='winner' OR q.line IS NOT DISTINCT FROM i.line)
+                AND q.score_basis=i.score_basis AND q.play_id=i.play_id AND q.market_instance_id=i.market_instance_id
+                AND nullif(i.play_id,'') IS NOT NULL AND nullif(i.market_instance_id,'') IS NOT NULL
+                AND q.source_time_quality='known' AND q.source_updated_at=i.quote_time AND q.received_at=i.quote_received_at
+                AND q.source_updated_at<=q.received_at AND q.received_at<=statement_timestamp()
+                AND q.status='active' AND q.price>1 AND nullif(q.selection_id,'') IS NOT NULL
+            HAVING array_agg(q.selection ORDER BY q.selection)=expected.selections
+                AND count(DISTINCT q.selection_id)=cardinality(expected.selections)
+                AND bool_or(q.id::text=i.evidence->>'quote_id' AND q.selection=i.selection AND q.price=i.price)
+        ) market ON true
         RETURNING reference_id AS id,evidence->>'duplicate_of' AS duplicate_of
         """, job['message_id'], job['expert_id'], payload)
     new_ids = {str(row['id']): row['duplicate_of'] for row in inserted}
