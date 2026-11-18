@@ -93,6 +93,18 @@ The `price_exclusions` rows count the first failed evidence check for each nonco
 
 Use `-v end=<exclusive UTC recommendation cutoff>` for a fixed cohort. The report takes order states at the actual observation time. Keep the time-stamped reports to compare how the same cohort settles. `automatic_preflight_outcomes` applies the same checks to automatic fills. Both reports count distinct fixtures with a usable settlement amount within each bucket. A fixture can occur in several buckets.
 
+`bash infra/profitability/collect_preflight_cohorts.sh <UTC start ending in Z> <private archive directory>` records two adjacent, fixed 24-hour recommendation cohorts. Use a dedicated directory for each experiment. It runs both queries in one read-only transaction that requires a single complete ledger account binding. Reports retain their observation timestamp and the comparison SQL checksum. The hourly job keeps observing through the first capture at or after 72 hours after the second cohort closes. That capture is additionally linked as `final.json`. It can still contain pending orders. Rerun the collector after an outage to record the actual observation timestamp. Existing snapshots stay in the archive.
+
+From the repository root on the production Docker host, register or restore the transient timer for the November 18 pilot when it is absent.
+
+```sh
+systemd-run --unit=ai-football-profitability-preflight-cohorts --collect \
+  --on-calendar='*-*-* *:05:00 UTC' --timer-property=AccuracySec=1s \
+  --property=Type=oneshot --property=TimeoutStartSec=75s \
+  /usr/bin/bash "$PWD/infra/profitability/collect_preflight_cohorts.sh" \
+  2026-11-18T16:00:00Z "$PWD/.runtime/profitability-watch/preflight-cohorts-20261118T1600Z"
+```
+
 # Recommendation opportunity coverage
 
 Run `opportunity_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC recommendation cutoff>` to count all saved recommendations alongside the recorded automatic order states for the unique ledger account binding. Counts use the recommendation as the unit, including withdrawn recommendations and those with no automatic order. Manual orders do not contribute to automatic order states. An absent order does not identify why execution did not occur, or whether the recommendation was eligible at the time.
