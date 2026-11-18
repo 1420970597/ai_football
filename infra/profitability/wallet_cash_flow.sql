@@ -57,10 +57,13 @@ WITH bounds AS (
                                    OR (dated_settlement AND provider_payout IS NULL)) AS missing_amount,
                count(*) FILTER (WHERE missing_placement OR missing_settlement) AS missing_time,
                count(*) FILTER (WHERE unknown_submission OR possible_late_settlement) AS unresolved,
-               count(*) FILTER (WHERE (dated_placement AND provider_placed_at = p.observed_at)
-                                   OR (dated_settlement AND settled_at = p.observed_at)) AS at_sample_time
+               count(*) FILTER (WHERE unknown_submission) AS unknown_submissions,
+               count(*) FILTER (WHERE possible_late_settlement) AS accepted_without_settlement,
+               count(*) FILTER (WHERE (has_native_order AND provider_placed_at IN (p.previous_at, p.observed_at))
+                                   OR (is_settled AND settled_at IN (p.previous_at, p.observed_at))) AS at_sample_time
         FROM (
             SELECT provider_stake, provider_payout, provider_placed_at, settled_at,
+                provider_order_no IS NOT NULL AS has_native_order, state = 'settled' AS is_settled,
                 CASE WHEN state = 'settled' AND settled_at > p.previous_at AND settled_at <= p.observed_at
                           AND pnl_basis = 'provider_reported_net'
                      THEN settled_net - (provider_payout - provider_stake) END AS net_difference,
@@ -93,6 +96,9 @@ WITH bounds AS (
     SELECT count(*) AS compared_intervals,
            count(*) FILTER (WHERE evidence = 'sampling_gap') AS sampling_gaps,
            count(*) FILTER (WHERE evidence = 'incomplete') AS incomplete_intervals,
+           count(*) FILTER (WHERE at_sample_time > 0) AS intervals_with_boundary_events,
+           count(*) FILTER (WHERE unknown_submissions > 0) AS intervals_with_unknown_submissions,
+           count(*) FILTER (WHERE accepted_without_settlement > 0) AS intervals_with_pending_receipts,
            count(*) FILTER (WHERE cash_flow_difference <> 0) AS intervals_with_difference,
            sum(placements) AS placements, sum(settlements) AS settlements,
            coalesce(sum(receipt_net_compared), 0) AS receipt_net_compared,

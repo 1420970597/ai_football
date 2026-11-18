@@ -26,5 +26,18 @@ UPDATE v2_bet_orders SET provider_stake = NULL WHERE provider_order_no = 'placed
 UPDATE v2_bet_orders SET settled_net = provider_payout - provider_stake, pnl_basis = 'gross_return_minus_stake';
 \ir ../../infra/profitability/wallet_cash_flow.sql
 
+TRUNCATE v2_bet_orders;
+INSERT INTO v2_bet_orders (account_id, provider_identity_hash, provider_order_no, state,
+    provider_stake, provider_payout, provider_placed_at, settled_at, created_at)
+VALUES (1, 'test-account', 'first-sample', 'settled', 5, 5, '2026-11-18T02:20:00Z', '2026-11-18T02:21:00Z', '2026-11-18T02:19:00Z'),
+       (1, 'test-account', 'shared-sample', 'settled', 7, 0, '2026-11-18T02:25:00Z', '2026-11-18T02:27:00Z', '2026-11-18T02:24:00Z');
+\ir ../../infra/profitability/wallet_cash_flow.sql
+
+INSERT INTO v2_bet_orders (account_id, provider_identity_hash, provider_order_no, state,
+    provider_stake, provider_placed_at, created_at)
+VALUES (1, 'test-account', 'known-pending', 'accepted', 5, '2026-11-18T02:22:00Z', '2026-11-18T02:21:00Z'),
+       (1, 'test-account', NULL, 'unknown', NULL, NULL, '2026-11-18T02:26:00Z');
+\ir ../../infra/profitability/wallet_cash_flow.sql
+
 \set wallet_samples W10=
 \ir ../../infra/profitability/wallet_cash_flow.sql
