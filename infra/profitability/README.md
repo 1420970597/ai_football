@@ -13,7 +13,9 @@ The check compares reported stake, payout, and profit with decimal arithmetic. `
 
 # Continuous snapshots
 
-The monitor stores the first observed snapshot after each window closes under `state/window-closes/<ordinal>.json`. It also saves the first snapshot at or after the original 48-hour deadline as `state/window-closes/initial-48h.json`. These files survive the routine five-minute checkpoint rotation. A timestamp gap can skip per-window files during downtime. The current snapshot continues to reflect late receipts, and the preserved deadline file records what the monitor first observed after the deadline.
+The monitor stores its first available observation of each closed window under `state/window-closes/<ordinal>.json`. The initial 48-hour file is linked from the fourth window's archive. These files survive the routine checkpoint rotation. After downtime the monitor also queries up to four windows beginning at the earliest unarchived ordinal per poll. The actual observation time remains in the snapshot, so a recovery sample taken after the boundary shows when the monitor obtained it. The current snapshot continues to reflect late receipts.
+
+Order snapshots and their health timestamp are written independently of optional wallet samples. A wallet query error is recorded in `state/last_wallet_failure` until the next successful wallet sample.
 
 For each settled order the monitor compares the projection to the latest stored settled receipt. The window includes aggregate counts of missing and inconsistent receipts. Four-window verification requires the same platform and provider account, one known currency, and verifiable costs. Apply `grants.sql` when updating the dedicated monitor role. Snapshot output contains neither order identifiers nor account identities.
 

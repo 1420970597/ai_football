@@ -1,4 +1,8 @@
 -- The anchor is fixed at deployment and supplied as a quoted psql variable.
+\if :{?archive_from}
+\else
+\set archive_from -1
+\endif
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 WITH bounds AS (
     SELECT :'anchor'::timestamptz AS anchor, now() AS observed_at
@@ -12,6 +16,13 @@ WITH bounds AS (
             greatest(anchor, date_bin(interval '12 hours', observed_at, anchor) - interval '48 hours'),
             greatest(anchor, date_bin(interval '12 hours', observed_at, anchor)), interval '12 hours'
         )
+        UNION
+        SELECT generate_series(
+            anchor + :archive_from * interval '12 hours',
+            least(anchor + (:archive_from + 3) * interval '12 hours',
+                  date_bin(interval '12 hours', observed_at, anchor) - interval '12 hours'),
+            interval '12 hours'
+        ) WHERE :archive_from >= 0
     ) checkpoints
 ), orders AS MATERIALIZED (
     SELECT o.id, o.account_id, o.provider_identity_hash, o.state, o.manual, o.stake, o.provider_stake, o.reserved_stake,
@@ -130,7 +141,8 @@ SELECT jsonb_build_object(
 ) AS snapshot FROM bounds
 \if :{?watch_mode}
 \gset
-SELECT coalesce(max((item->>'ordinal')::integer), -1)
+SELECT CASE WHEN :archive_from < 0 THEN coalesce(max((item->>'ordinal')::integer), -1)::text
+            ELSE coalesce(string_agg(item->>'ordinal', ' ' ORDER BY (item->>'ordinal')::integer), '') END
 FROM jsonb_array_elements(:'snapshot'::jsonb->'windows') AS windows(item)
 WHERE (item->>'closed')::boolean;
 SELECT :'snapshot'::jsonb;
