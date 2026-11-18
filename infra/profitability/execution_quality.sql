@@ -179,6 +179,16 @@ WITH bounds AS (
            sum(at_fill) AS diagnostic_net_at_fill,
            sum(at_preflight - at_recommendation) AS recommendation_to_preflight_delta,
            sum(at_fill - at_preflight) AS preflight_to_fill_delta,
+           count(*) FILTER (WHERE price_bridge_available AND preflight_price < recommendation_price)
+               AS recommendation_to_preflight_lower_odds,
+           count(*) FILTER (WHERE price_bridge_available AND provider_price < preflight_price)
+               AS preflight_to_fill_lower_odds,
+           sum(at_preflight - at_recommendation) FILTER (WHERE at_preflight < at_recommendation)
+               AS recommendation_to_preflight_adverse_delta,
+           sum(at_preflight - at_recommendation) FILTER (WHERE at_preflight > at_recommendation)
+               AS recommendation_to_preflight_favorable_delta,
+           sum(at_fill - at_preflight) FILTER (WHERE at_fill < at_preflight) AS preflight_to_fill_adverse_delta,
+           sum(at_fill - at_preflight) FILTER (WHERE at_fill > at_preflight) AS preflight_to_fill_favorable_delta,
            sum(settled_net - at_fill) AS settlement_residual,
            sum(settled_net) FILTER (WHERE price_bridge_available) AS matched_provider_net,
            sum(settled_net) FILTER (WHERE NOT price_bridge_available) AS unmatched_provider_net,
