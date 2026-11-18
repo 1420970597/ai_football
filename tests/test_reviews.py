@@ -1338,7 +1338,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         await self.fixture(5, competition_name='Other')
         await self.fixture(6, kickoff_at=(self.now + timedelta(days=9)).isoformat())
         first = await self.post('search_matches', team_query='Alpha', page_size=1,
-                                sport='football', competition_query='League',
+                                sport=' Soccer ', competition_query='League',
                                 from_utc=self.now.isoformat(), to_utc=(self.now + timedelta(days=1)).isoformat())
         self.assertEqual(200, first.status_code, first.text)
         result = first.json()
@@ -1350,7 +1350,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                       {'team_query': 'Beta'}, {'phase': 'scheduled'}):
             conflict = await self.post('search_matches', **{'team_query': 'Alpha', 'cursor': cursor, **extra})
             self.assertEqual(409, conflict.status_code, conflict.text)
-        second = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=cursor)
+        second = await self.post('search_matches', team_query='Alpha', sport='football', page_size=1, cursor=cursor)
         self.assertEqual(200, second.status_code, second.text)
         self.assertEqual(result['search_key'], second.json()['search_key'])
         replay = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=cursor)
