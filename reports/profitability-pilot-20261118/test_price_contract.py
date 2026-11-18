@@ -73,6 +73,8 @@ class VerifiedReferenceTests(unittest.TestCase):
                  'quoted_at': '2026-11-18T11:48:30Z', 'received_at': '2026-11-18T11:49:00Z'}
         self.data = {'contract': contract | {'selection': 'over'}, 'as_of': '2026-11-18T11:49:00Z',
                      'max_age_seconds': 30, 'offer_venue': 'venue-leyu', 'offer_feed_origin': 'feed-leyu',
+                     'offer_status': 'active', 'offer_quoted_at': '2026-11-18T11:48:30Z',
+                     'offer_received_at': '2026-11-18T11:49:00Z',
                      'offered_odds': '2.05', 'cost_per_unit': '0.01', 'required_net_edge': '0.02',
                      'references': {
                          'a': quote | {'venue': 'venue-a', 'feed_origin': 'feed-a', 'over': '1.8', 'under': '2.0'},
@@ -83,6 +85,82 @@ class VerifiedReferenceTests(unittest.TestCase):
         output = price_from_verified_references(self.data)
         self.assertEqual(output['minimum_odds'], Decimal('2.06'))
         self.assertFalse(output['passes_price_test'])
+
+    def test_new_scheduled_markets_require_fresh_offered_quote(self):
+        offer_keys = {'offer_status', 'offer_quoted_at', 'offer_received_at'}
+        data = {key: value for key, value in deepcopy(self.data).items() if key not in offer_keys}
+        self.assertEqual(price_from_verified_references(data)['minimum_odds'], Decimal('2.06'))
+        self.replace_contract(data, line='2.25')
+        with self.assertRaises(KeyError):
+            price_from_verified_references(data)
+        data.update(offer_status='active', offer_quoted_at='2026-11-18T11:48:29Z',
+                    offer_received_at='2026-11-18T11:49:00Z')
+        with self.assertRaisesRegex(ValueError, 'stale or unavailable'):
+            price_from_verified_references(data)
+
+    def replace_contract(self, document, **changes):
+        document['contract'].update(changes)
+        changes = {key: value for key, value in changes.items() if key != 'selection'}
+        for quote in document['references'].values():
+            quote['contract'].update(changes)
+        return document
+
+    def test_quarter_line_and_integer_line_use_different_action_bounds(self):
+        data = self.replace_contract(deepcopy(self.data), line='2.25')
+        data['offered_odds'] = '2.10'
+        result = price_from_verified_references(data)
+        self.assertEqual(result['minimum_odds'], Decimal('2.12'))
+        self.assertEqual(result['worst_net_at_offered_odds'], Decimal('0.015'))
+        self.assertFalse(result['passes_price_test'])
+        self.assertEqual(price_from_verified_references(data | {'offered_odds': '1.90'})['worst_net_at_offered_odds'],
+                         Decimal('-0.06'))
+
+        self.replace_contract(data, line='2')
+        gap = price_from_verified_references(data | {'offered_odds': '100'})
+        self.assertIsNone(gap['minimum_odds'])
+        self.assertFalse(gap['passes_price_test'])
+        integer = price_from_verified_references(data | {'active_stake_lower_bound': '0.75', 'offered_odds': '2.08'})
+        self.assertEqual(integer['minimum_odds'], Decimal('2.08'))
+        self.assertTrue(integer['passes_price_test'])
+        with self.assertRaisesRegex(ValueError, 'active stake lower bound'):
+            price_from_verified_references(data | {'active_stake_lower_bound': '1.01'})
+
+    def test_three_way_requires_draw_price(self):
+        data = self.replace_contract(deepcopy(self.data), kind='winner', line=None, selection='draw')
+        for quote in data['references'].values():
+            quote.update(home='2', draw='4', away='4')
+        data['offered_odds'] = '4.12'
+        result = price_from_verified_references(data)
+        self.assertEqual(result['minimum_odds'], Decimal('4.12'))
+        self.assertTrue(result['passes_price_test'])
+        data['references']['a'].pop('draw')
+        with self.assertRaises(KeyError):
+            price_from_verified_references(data)
+
+    def test_remaining_handicap_requires_same_home_line_and_score_basis(self):
+        data = self.replace_contract(self.live_request('second_half'), kind='handicap', line='-0.75',
+                                     line_basis='provider_home', score_basis='remaining_period', selection='away')
+        for quote in data['references'].values():
+            quote.update(home='1.9', away='1.9')
+        self.assertEqual(price_from_verified_references(data)['minimum_odds'], Decimal('2.12'))
+        data['references']['b']['contract']['line'] = '0.75'
+        with self.assertRaisesRegex(ValueError, 'contract differs'):
+            price_from_verified_references(data)
+
+    def test_team_total_checks_which_team_has_scored(self):
+        data = self.replace_contract(self.live_request(), kind='team_total', team_side='home', line='1.5')
+        self.assertEqual(price_from_verified_references(data)['minimum_odds'], Decimal('2.06'))
+        data['references']['a']['contract']['team_side'] = 'away'
+        with self.assertRaisesRegex(ValueError, 'contract differs'):
+            price_from_verified_references(data)
+
+    def test_basketball_requires_same_settlement_scope(self):
+        data = self.replace_contract(deepcopy(self.data), sport='basketball', line='208.5',
+                                     settlement_scope='including_overtime')
+        self.assertEqual(price_from_verified_references(data)['minimum_odds'], Decimal('2.06'))
+        data['references']['a']['contract']['settlement_scope'] = 'regulation'
+        with self.assertRaisesRegex(ValueError, 'contract differs'):
+            price_from_verified_references(data)
 
     def test_same_venue_and_same_origin_are_rejected(self):
         for changes in ({'venue': ' VENUE-A '}, {'feed_origin': 'feed-a'},
