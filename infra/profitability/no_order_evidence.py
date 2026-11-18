@@ -36,7 +36,8 @@ async def evidence(conn, begin, end, same_intent_sql):
             JOIN v2_user_bet_settings p ON p.user_id=a.user_id
             WHERE (SELECT count(*) FROM bindings)=1
         ), reasons AS (
-            SELECT f.sport,s.phase,s.market_kind,s.period, CASE
+            SELECT s.id,s.message_id,s.created_at,m.source_id,m.posted_at,
+                f.sport,s.phase,s.market_kind,s.period, CASE
                 WHEN prior_order.created_at<s.created_at THEN 'prior_same_intent_order'
                 WHEN prior_order.created_at IS NOT NULL THEN 'same_intent_reserved_within_source_window'
                 WHEN a.no_later_policy_event AND a.previous_scope=a.auto_sport_scope
@@ -81,13 +82,61 @@ async def evidence(conn, begin, end, same_intent_sql):
         ), order_summaries AS (
             SELECT evidence,order_evidence,count(*) AS recommendations
             FROM reasons GROUP BY evidence,order_evidence
+        ), expiry_timing AS (
+            SELECT r.message_id, CASE
+                WHEN received.received_at NOT BETWEEN r.posted_at AND r.created_at
+                    OR received.received_at IS NULL THEN 'receipt_timing_unverified'
+                WHEN received.received_at > r.posted_at+interval '5 minutes' THEN 'before_telegram_receipt'
+                WHEN NOT (received.received_at<=j.created_at AND j.created_at<=timing.first_claim_at
+                    AND timing.first_claim_at<=timing.final_claim_at AND timing.final_claim_at<=timing.request_at
+                    AND timing.request_at<=r.created_at) IS TRUE THEN 'review_timing_unverified'
+                WHEN j.created_at>r.posted_at+interval '5 minutes' THEN 'before_job_creation'
+                WHEN timing.first_claim_at>r.posted_at+interval '5 minutes' THEN 'before_first_claim'
+                WHEN timing.final_claim_at>r.posted_at+interval '5 minutes' THEN 'after_first_before_successful_claim'
+                WHEN timing.request_at>r.posted_at+interval '5 minutes' THEN 'before_successful_request'
+                ELSE 'during_successful_review' END AS stage,
+                EXISTS (SELECT 1 FROM v2_analysis_traces t WHERE t.job_id=j.id
+                    AND t.created_at>=timing.first_claim_at AND t.created_at<timing.final_claim_at
+                    AND t.trace_kind='review_failure' AND t.payload->>'failure_category'='provider_transient'
+                    AND t.payload->>'failure_stage'='model_review') AS prior_provider_failure
+            FROM reasons r
+            LEFT JOIN LATERAL (
+                SELECT received_at FROM v2_telegram_events e
+                WHERE e.source_id=r.source_id AND e.message_id=r.message_id AND e.event_kind IN ('message','edit')
+                ORDER BY e.received_at,e.id LIMIT 1
+            ) received ON true
+            LEFT JOIN LATERAL (
+                SELECT evidence->>'attempt_id' AS attempt_id,
+                       CASE WHEN pg_input_is_valid(evidence->>'job_id','uuid')
+                           THEN (evidence->>'job_id')::uuid END AS job_id
+                FROM v2_quote_evidence WHERE evidence_kind='expert_signal' AND reference_id=r.id
+                ORDER BY captured_at,id LIMIT 1
+            ) snapshot ON true
+            LEFT JOIN v2_analysis_jobs j ON j.id=snapshot.job_id AND j.message_id=r.message_id
+            LEFT JOIN LATERAL (
+                SELECT min(t.created_at) FILTER (WHERE t.trace_kind='attempt_claimed') AS first_claim_at,
+                       min(t.created_at) FILTER (WHERE t.trace_kind='attempt_claimed'
+                           AND t.payload->>'attempt_id'=snapshot.attempt_id) AS final_claim_at,
+                       min(t.created_at) FILTER (WHERE t.trace_kind='hermes_request'
+                           AND t.payload->>'attempt_id'=snapshot.attempt_id
+                           AND t.payload->>'message_id'=r.message_id::text) AS request_at
+                FROM v2_analysis_traces t WHERE t.job_id=j.id AND t.created_at<=r.created_at
+                  AND t.trace_kind IN ('attempt_claimed','hermes_request')
+            ) timing ON true
+            WHERE r.evidence='source_window_expired_on_recommendation'
+        ), expiry_summaries AS (
+            SELECT stage,count(*) AS recommendations,count(DISTINCT message_id) AS message_versions,
+                   count(*) FILTER (WHERE prior_provider_failure) AS with_prior_provider_failure
+            FROM expiry_timing GROUP BY stage
         )
         SELECT jsonb_build_object('begin',$1::timestamptz,'end',$2::timestamptz,'observed_at',now(),
             'unique_account_available',EXISTS(SELECT 1 FROM scoped),
             'reasons',coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY sport,phase,market_kind,period,evidence)
                                   FROM summaries r),'[]'::jsonb),
             'same_intent_order_evidence',coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY evidence,order_evidence)
-                                                   FROM order_summaries r),'[]'::jsonb))
+                                                   FROM order_summaries r),'[]'::jsonb),
+            'expired_source_stages',coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY stage)
+                                              FROM expiry_summaries r),'[]'::jsonb))
     """, begin, end)
     return json.loads(result)
 

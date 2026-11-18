@@ -139,6 +139,8 @@ For a completed period no longer than 48 hours, run `docker exec -i ai-football-
 
 `same_intent_order_evidence` counts the recommendations in those groups by their strongest order evidence at observation time. Native acceptance requires a nonempty native order number and an accepted or settled state. Pending, submitting and unknown states remain unresolved. Cancelled or rejected orders without a native receipt are reported separately. The exact original dispatch decision requires its own trace.
 
+`expired_source_stages` uses the same message version's Telegram event and the successful review attempt identified by the immutable recommendation quote. It reports the five-minute deadline crossing, and counts prior model-provider failures recorded between the first and successful claims. Missing or unordered traces remain unverified. Telegram edits use original posting time for the order deadline.
+
 # Private wallet observations
 
 Install `install_wallet_observation.sql` as a database administrator in a single transaction after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the active binding is healthy and its provider identity matches the order ledger. The monitor role receives function execution only, without account-table column access.
