@@ -61,6 +61,8 @@ The `attempt_summary` counts each producing attempt once and uses its latest fin
 
 The `market_refresh_summary` groups the same market tool calls by refresh outcome. The duration is the full market tool call. An unknown refresh flag means the trace did not record a boolean value. The collector's `Leyu precise refresh` log gives source-side and projection-write timings for the collector's own refreshes. It does not carry review attempt identifiers.
 
+Run `market_refresh_coverage.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC start> -v end=<UTC stop>` to audit retained live review tool calls, including jobs without recommendations or fills. It reports refresh outcomes, writes with an identical fixture and recorded filter within 10 or 30 seconds, and unmatched filters followed by a recommendation acceptance on the same attempt before the cutoff. A repeated filter alone does not establish matching native quotes, score state or permission to reuse them.
+
 # Historical option coverage
 
 Run `review_price_coverage.sql` as a read-only diagnostic over the last 72 hours of retained review evidence. It matches the selected option to the immutable recommendation, then requires the expected distinct options from the same review attempt, database read time, native market instance, line, phase and score context. It reports the stricter count with one shared upstream quote timestamp. The sum of inverse prices describes the provider's quote set at review time. It does not establish a fair price, execution price, or realizable return.
