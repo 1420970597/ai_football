@@ -60,6 +60,21 @@ class HistoryScanTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(complete)
         self.assertEqual(['one'], [i['order_no'] for i in items])
 
+    async def test_prior_placement_settled_in_window_does_not_hide_complete_history(self):
+        old = receipt('prior', placed_at=(NOW-timedelta(days=8)).isoformat(), settled_at=NOW.isoformat())
+        (items, complete, error), _ = await self.collect([page(), page([old, receipt()])])
+        self.assertTrue(complete)
+        self.assertEqual('', error)
+        self.assertEqual(['one'], [item['order_no'] for item in items])
+
+    async def test_prior_placement_with_outside_settlement_is_still_partial(self):
+        old = receipt('prior', placed_at=(NOW-timedelta(days=8)).isoformat(),
+                      settled_at=(NOW+timedelta(seconds=1)).isoformat())
+        (items, complete, error), _ = await self.collect([page(), page([old, receipt()])])
+        self.assertFalse(complete)
+        self.assertEqual('history_time_unverified', error)
+        self.assertEqual(['one'], [item['order_no'] for item in items])
+
     async def test_conflicting_duplicate_is_not_a_financial_fact(self):
         (items, complete, _), _ = await self.collect([
             page(), page([receipt()], True), page([receipt(net_profit='99')])])

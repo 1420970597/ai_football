@@ -10,6 +10,16 @@ FIELDS = frozenset({'order_no', 'identifier_kind', 'state', 'match_id', 'stake',
                     'settled_at', 'market_name', 'selection_name'})
 
 
+def aware_time(value):
+    if value is None:
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (ValueError, AttributeError):
+        return None
+    return stamp if stamp.tzinfo is not None else None
+
+
 async def scan(client, begin, end, *, max_pages=10):
     items, conflicts = {}, set()
     complete, error = True, ''
@@ -30,11 +40,12 @@ async def scan(client, begin, end, *, max_pages=10):
             for raw in result['items']:
                 key = (raw['identifier_kind'], raw['order_no'])
                 current.add(key)
-                try:
-                    placed = datetime.fromisoformat(raw['placed_at'].replace('Z', '+00:00'))
-                    if placed.tzinfo is None or not begin <= placed <= end:
-                        raise ValueError()
-                except (ValueError, TypeError, AttributeError):
+                placed = aware_time(raw['placed_at'])
+                if state == 'settled' and placed is not None and placed < begin:
+                    settled = aware_time(raw.get('settled_at'))
+                    if settled is not None and begin <= settled <= end:
+                        continue
+                if placed is None or not begin <= placed <= end:
                     complete, error = False, 'history_time_unverified'
                     continue
                 item = {key: raw.get(key) for key in FIELDS}
