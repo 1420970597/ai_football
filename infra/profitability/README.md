@@ -67,6 +67,8 @@ Run `source_holdout.sql` with the same four UTC parameters as the fixture exposu
 
 The two persistent-loss comparisons additionally require at least five distinct settled fixtures and negative equal-stake receipt net in each half of the training placement interval. The midpoint comes from the supplied training dates. These rows are retrospective comparisons of retained real fills.
 
+The fixture-loss comparisons start from the original source and source-author exclusions. They additionally require at least 20 distinct training fixtures with usable stake and net in the receipts available at the split. Each fixture contributes the mean of its order-level returns per unit staked. The resulting sum must be negative after removing the lowest-return fixture.
+
 # Cross-source recommendation replay
 
 Run `cross_source_replay.sql` with the same four UTC parameters as the source holdout. It compares existing automatic fills across all observed markets. A peer must have a different author and source, an exact match on recorded contract fields, and a recommendation and underlying message already available within the five minutes before the matching send authorization. Withdrawn or deleted picks are excluded as of that authorization. Live peers must have matching recorded scores at recommendation, and the filled order needs the same known full-match score in its permit. A missing permit or live score is reported separately from an eligible order with no peers.

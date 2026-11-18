@@ -8,6 +8,8 @@ WITH bounds AS (
            o.provider_stake AS stake, m.source_id, s.expert_id, s.fixture_id, s.phase,
            outcome.observed_at, outcome.payload->>'currency' AS currency,
            outcome.payload->>'fees' IS NOT NULL AS has_fee,
+           CASE WHEN pg_input_is_valid(outcome.payload->>'stake', 'numeric')
+                THEN (outcome.payload->>'stake')::numeric END AS receipt_stake,
            CASE WHEN pg_input_is_valid(outcome.payload->>'net_profit', 'numeric')
                 THEN (outcome.payload->>'net_profit')::numeric END AS net,
            o.provider_placed_at < b.split_at AS training
@@ -49,14 +51,29 @@ WITH bounds AS (
     HAVING count(DISTINCT fixture_id) >= 20
         AND count(DISTINCT (placed_at AT TIME ZONE 'UTC')::date) >= 3
         AND sum(net / nullif(stake, 0)) < 0
+), training_fixtures AS (
+    SELECT source_id, expert_id, fixture_id, avg(net / receipt_stake) AS fixture_return
+    FROM candidates
+    WHERE training AND receipt_stake > 0 AND receipt_stake < 'Infinity'::numeric
+      AND net > '-Infinity'::numeric AND net < 'Infinity'::numeric
+    GROUP BY source_id, fixture_id, GROUPING SETS ((), (expert_id))
+), training_fixture_losses AS (
+    SELECT source_id, expert_id
+    FROM training_fixtures
+    GROUP BY source_id, expert_id
+    HAVING count(*) >= 20 AND sum(fixture_return) - min(fixture_return) < 0
 ), holdout AS (
     SELECT c.*, source_loss.source_id IS NOT NULL AS exclude_source,
            author_loss.source_id IS NOT NULL AS exclude_source_author,
            source_loss.persistent_loss IS TRUE AS exclude_source_persistent_loss,
-           author_loss.persistent_loss IS TRUE AS exclude_source_author_persistent_loss
+           author_loss.persistent_loss IS TRUE AS exclude_source_author_persistent_loss,
+           source_loss.source_id IS NOT NULL AND source_fixture.source_id IS NOT NULL AS exclude_source_fixture_loss,
+           author_loss.source_id IS NOT NULL AND author_fixture.source_id IS NOT NULL AS exclude_source_author_fixture_loss
     FROM candidates c CROSS JOIN coverage e
     LEFT JOIN training source_loss ON source_loss.source_id = c.source_id AND source_loss.expert_id IS NULL
     LEFT JOIN training author_loss ON (author_loss.source_id, author_loss.expert_id) = (c.source_id, c.expert_id)
+    LEFT JOIN training_fixture_losses source_fixture ON source_fixture.source_id=c.source_id AND source_fixture.expert_id IS NULL
+    LEFT JOIN training_fixture_losses author_fixture ON (author_fixture.source_id,author_fixture.expert_id)=(c.source_id,c.expert_id)
     WHERE NOT c.training AND e.invalid_fills = 0 AND e.account_bindings = 1 AND e.known_currencies <= 1
 ), results AS (
     SELECT rule, CASE WHEN grouping(phase) = 1 THEN 'all' ELSE phase END AS phase,
@@ -70,7 +87,9 @@ WITH bounds AS (
     CROSS JOIN LATERAL (VALUES ('baseline', false), ('exclude_source', exclude_source),
                               ('exclude_source_author', exclude_source_author),
                               ('exclude_source_persistent_loss', exclude_source_persistent_loss),
-                              ('exclude_source_author_persistent_loss', exclude_source_author_persistent_loss)) AS rules(rule, removed)
+                              ('exclude_source_author_persistent_loss', exclude_source_author_persistent_loss),
+                              ('exclude_source_fixture_loss', exclude_source_fixture_loss),
+                              ('exclude_source_author_fixture_loss', exclude_source_author_fixture_loss)) AS rules(rule, removed)
     GROUP BY rule, GROUPING SETS ((), (phase))
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
