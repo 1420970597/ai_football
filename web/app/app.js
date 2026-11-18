@@ -192,6 +192,13 @@ function route(
     if (x.classList.contains("active")) x.setAttribute("aria-current", "page");
     else x.removeAttribute("aria-current");
   });
+  $$(".left-rail [data-page]").forEach((button) => {
+    const selected = button.dataset.page === page &&
+      (page !== "scores" || (button.dataset.phase || "all") === state.phase);
+    button.classList.toggle("rail-active", selected);
+    if (selected) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
   if (page === "scores") {
     renderDates();
     loadMatches();
@@ -230,7 +237,8 @@ function renderDates() {
             : date === shiftDay(today, 1)
               ? "明日"
               : date.slice(5).replace("-", "/");
-      return `<button data-date="${date}" aria-pressed="${offset === 0}" class="${offset === 0 ? "active" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
+      const shortDate = date.slice(5).replace("-", "/");
+      return `<button data-date="${date}" aria-pressed="${offset === 0}" class="${offset === 0 ? "active" : ""}">${label}${label === shortDate ? "" : `<small>${shortDate}</small>`}</button>`;
     })
     .join("");
   for (const button of $$(".score-tabs [data-phase],[data-sport]")) {
@@ -282,7 +290,7 @@ function scoreMarkup(match) {
   const score = hasScore
     ? esc(match.home_score) + " : " + esc(match.away_score ?? "－")
     : match.phase === "scheduled"
-      ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
+      ? '<span class="match-vs-icon">VS</span>'
       : "－";
   const half = match.sport === "basketball" &&
       match.half_home_score !== null && match.half_home_score !== undefined
@@ -856,7 +864,7 @@ function filterMarkets() {
 async function openMatch(id, { refresh = false, quoteId = null } = {}) {
   setDetail("match", id);
   const same = state.activeMatch === id,
-    scroll = $("#content-dialog").scrollTop;
+    scroll = $("#dialog-content").scrollTop;
   if (!same) state.matchFilters = { period: "all", scope: "all" };
   if (!same) {
     state.quotePrices = new Map();
@@ -954,7 +962,7 @@ async function openMatch(id, { refresh = false, quoteId = null } = {}) {
         row.scrollIntoView({ block: "center" });
       }
     }
-    if (refresh) $("#content-dialog").scrollTop = scroll;
+    if (refresh) $("#dialog-content").scrollTop = scroll;
   } catch (error) {
     if (sequence !== state.dialogSequence) return;
     if (refresh) toast(error.message + "，保留上次本场数据");

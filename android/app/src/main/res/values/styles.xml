@@ -1,8 +1,14 @@
 <resources>
+  <color name="score_ink">#171d27</color>
+  <color name="score_panel">#242d3b</color>
+  <color name="score_accent">#204fd6</color>
+  <color name="score_amber">#ffd476</color>
+  <color name="score_background">#f0f2f5</color>
+  <color name="score_muted">#505d6e</color>
   <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-    <item name="android:fontFamily">sans</item><item name="android:colorAccent">#0868c5</item>
-    <item name="android:navigationBarColor">#ffffff</item><item name="android:statusBarColor">#0868c5</item>
+    <item name="android:fontFamily">sans</item><item name="android:colorAccent">@color/score_accent</item>
+    <item name="android:navigationBarColor">@color/score_ink</item><item name="android:statusBarColor">@color/score_ink</item>
     <item name="android:windowLightStatusBar">false</item>
-    <item name="android:windowBackground">#f3f5f7</item>
+    <item name="android:windowBackground">@color/score_background</item>
   </style>
 </resources>

@@ -35,11 +35,11 @@ try{
     await context.addInitScript(({instant})=>{const NativeDate=Date;class FixedDate extends NativeDate{constructor(...args){super(...(args.length?args:[instant]));}static now(){return new NativeDate(instant).getTime();}}window.Date=FixedDate;},{instant});
     const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/api/v1/**',fixtureRoute);
-    const screens=[['scores','#scores'],['schedule','#scores?phase=scheduled'],['experts','#experts'],['membership','#membership'],['account-guest','#account'],['admin-guest','#admin'],['match-detail','#scores?match=visual-match-0']];
+    const screens=[['scores','#scores?scope=all'],['schedule','#scores?scope=all&phase=scheduled'],['experts','#experts'],['membership','#membership'],['account-guest','#account'],['admin-guest','#admin'],['match-detail','#scores?scope=all&match=visual-match-0']];
     for(const [name,route] of screens){
-      await page.goto('http://127.0.0.1:8080/'+route);await page.waitForLoadState('networkidle');
+      await page.goto('http://127.0.0.1:8080/?visual='+name+route);await page.waitForLoadState('networkidle');
       if(name==='scores'||name==='schedule')await page.locator('.match-row').first().waitFor({timeout:10000}).catch(async error=>{
-        console.log('fixture empty scores: '+await page.locator('#matches-state').textContent());throw error;
+        console.log('fixture empty on '+name+': '+await page.locator('#matches-state').textContent());throw error;
       });
       if(name==='experts')await page.locator('.expert-row').first().waitFor();
       if(name==='membership')await page.locator('.plan-card').first().waitFor();

@@ -6,28 +6,19 @@
       name="viewport"
       content="width=device-width,initial-scale=1,viewport-fit=cover"
     />
-    <meta name="theme-color" content="#0868c5" />
+    <meta name="theme-color" content="#171d27" />
     <meta name="color-scheme" content="light" />
+    <meta name="description" content="查看足球与篮球比分、赛程、专家推荐和审核记录。" />
     <title>球讯比分 · 专家与赛事</title>
     <link rel="stylesheet" href="/assets/app.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">跳至主要内容</a>
-    <div class="utility-bar" role="region" aria-label="平台快捷入口">
-      <div class="site-width">
-        <span>球讯比分 · 赛事与专家记录</span>
-        <div>
-          <span id="header-clock"></span
-          ><button data-page="admin">管理入口</button
-          ><button data-page="membership">会员中心</button>
-        </div>
-      </div>
-    </div>
     <header class="site-header">
       <div class="site-width header-inner">
         <a class="brand" href="#scores" aria-label="球讯首页"
           ><span class="brand-symbol" aria-hidden="true">Q</span
-          ><span>球讯比分<small>QIUXUN SCORE</small></span></a
+          ><span>球讯比分</span></a
         >
         <nav class="main-nav" aria-label="主导航">
           <button class="active" data-page="scores" data-sport-label>足球比分</button
@@ -36,14 +27,21 @@
           ><button data-page="experts">专家推荐</button
           ><button data-page="membership">会员服务</button>
         </nav>
-        <button id="account-entry" class="header-login">登录 / 注册</button>
+        <div class="header-actions">
+          <div class="utility-bar" role="region" aria-label="平台快捷入口">
+            <span id="header-clock"></span>
+            <button data-page="admin">管理入口</button>
+            <button data-page="membership">会员中心</button>
+          </div>
+          <button id="account-entry" class="header-login">登录 / 注册</button>
+        </div>
       </div>
     </header>
     <main id="main" class="site-width main-layout" tabindex="-1">
       <aside class="left-rail" aria-label="赛事与专家服务导航">
         <h2>赛事中心</h2>
         <button class="rail-active" data-page="scores" data-sport-label>
-          足球比分 <span id="fixture-count">—</span></button
+          足球比分 <span id="fixture-count"></span></button
         ><button data-page="scores" data-phase="live">滚球赛事</button
         ><button data-page="scores" data-phase="scheduled">近日赛程</button
         ><button data-page="scores" data-phase="finished">完场赛果</button>
@@ -63,10 +61,10 @@
           class="view active"
           aria-labelledby="score-title"
         >
+          <div class="score-console">
           <div class="section-title">
             <h1 id="score-title">足球即时比分</h1>
-            <span id="last-updated">等待更新</span
-            ><button
+            <button
               id="refresh-matches"
               class="small-button"
               aria-label="刷新赛事"
@@ -74,11 +72,17 @@
               ↻ 刷新
             </button>
           </div>
+          <div class="score-console-bar">
           <div class="sports-bar" role="group" aria-label="体育项目">
             <button class="active" data-sport="football">足球</button
             ><button data-sport="basketball">篮球</button
-            ><span id="sport-context">足球比分与盘口</span>
+            >
           </div>
+          <span id="sport-context" class="sr-only">足球比分与盘口</span>
+          <span id="last-updated">等待更新</span>
+          </div>
+          </div>
+          <div class="score-controls">
           <div class="section-tabs homepage-match-tabs" role="group" aria-label="首页比赛范围">
             <button class="active" data-match-scope="recommended" aria-pressed="true">专家关联比赛</button>
             <button data-match-scope="all" aria-pressed="false">全部赛事</button>
@@ -96,7 +100,7 @@
             <label class="date-select"
               ><span class="sr-only">选择比赛日期</span
               ><input id="date-picker" type="date" /></label
-            ><button id="date-next" aria-label="后一日">›</button>
+            ><button id="date-next" aria-label="后一日"></button>
           </div>
           <div class="filter-row">
             <label
@@ -124,11 +128,13 @@
               ☆ 关注
             </button>
           </div>
+          </div>
           <div id="matches-notice" class="notice" role="status" hidden></div>
           <section id="account-history-summary" class="account-history-summary" aria-live="polite" aria-label="本人近七日实盘记录">登录后查看本人近 7 日账户记录。</section>
           <section id="manual-bet-panel" class="manual-bet-panel" aria-label="一键实盘下注设置" hidden>
+            <details>
+            <summary>一键实盘下注金额</summary>
             <form id="manual-bet-form">
-              <strong>一键实盘下注金额</strong>
               <div class="form-grid">
                 <label>每单金额<input name="stake_per_order" type="number" min="0.01" step="0.01" required /></label>
                 <label>每日限额<input name="daily_limit" type="number" min="0.01" step="0.01" required /></label>
@@ -137,6 +143,7 @@
               <button class="primary-button" type="submit">保存下注金额</button>
               <small id="manual-bet-status" class="muted">保存后可在下方专家关联比赛点“实盘买入”。下单按当前盘口重新核验，账户未校验或实盘未开放时不可下单。</small>
             </form>
+            </details>
           </section>
           <div class="score-table">
             <div class="score-table-head" aria-hidden="true">
@@ -159,6 +166,7 @@
             <h1 id="experts-title">专家推荐</h1>
             <button id="refresh-experts" class="small-button">↻ 刷新</button>
           </div>
+          <div class="expert-toolbar">
           <div class="section-tabs" role="group" aria-label="专家内容">
             <button
               class="active"
@@ -173,6 +181,7 @@
           <div class="section-tabs expert-sport-tabs" role="group" aria-label="专家推荐运动类型">
             <button class="active" data-expert-sport="football" aria-pressed="true">足球专家推荐</button>
             <button data-expert-sport="basketball" aria-pressed="false">篮球专家推荐</button>
+          </div>
           </div>
           <div class="stat-help">
             一单位收益使用推荐时系统赔率；准确率和收益不等同于实盘盈利。<button
@@ -253,37 +262,41 @@
           aria-labelledby="membership-title"
         >
           <div class="member-hero">
-            <span class="member-tag">球讯会员</span>
-            <h1 id="membership-title">让每一条推荐，都有据可查</h1>
-            <p>专家完整原文 · 系统盘口绑定 · 结算与审核轨迹</p>
+            <div>
+              <h1 id="membership-title">球讯会员</h1>
+              <p>查看完整专家原文、系统盘口、结算与审核轨迹。</p>
+            </div>
             <div id="membership-current">登录后查看我的权益</div>
           </div>
+          <div class="membership-layout">
+          <section class="membership-offers" aria-labelledby="membership-offers-title">
           <div class="section-title">
-            <h2>选择会员方案</h2>
+            <h2 id="membership-offers-title">选择会员方案</h2>
             <span>按实际套餐权益生效</span>
           </div>
           <div id="plans-list" class="plans-grid"></div>
-          <div class="section-title"><h2>权益说明</h2></div>
+          <p class="payment-note">
+            在线支付未配置，当前无法在线购买。已有会员权益按授权记录显示；开通与续期请联系管理员。
+          </p>
+          </section>
+          <section class="membership-benefits" aria-labelledby="membership-benefits-title">
+          <div class="section-title"><h2 id="membership-benefits-title">权益说明</h2></div>
           <div class="benefit-grid">
             <article>
-              <span>▤</span>
               <h3>完整专家记录</h3>
               <p>文字、图片、模型输出与工具证据可回查。</p>
             </article>
             <article>
-              <span>◎</span>
               <h3>精确赛事与盘口</h3>
               <p>赛前与滚球分别绑定系统赛事及报价。</p>
             </article>
             <article>
-              <span>↗</span>
               <h3>透明收益统计</h3>
               <p>分清待结算、走盘、一单位收益与实盘收益。</p>
             </article>
           </div>
-          <p class="payment-note">
-            在线支付未配置，当前无法在线购买。已有会员权益按授权记录显示；开通与续期请联系管理员。
-          </p>
+          </section>
+          </div>
         </section>
         <section id="view-account" class="view" aria-labelledby="account-title">
           <div class="section-title">
@@ -302,7 +315,7 @@
               独立管理入口</button
             ><span class="form-note">管理功能需要单独登录管理身份。</span>
           </div>
-          <div id="account-content" hidden>
+          <div id="account-content" class="account-settings" hidden>
             <details class="settings-section" open>
               <summary>我的资料</summary>
               <form id="profile-form" class="compact-form">
@@ -441,11 +454,11 @@
                     aria-describedby="betting-timezone-note"
                   >
                     <option value="Asia/Shanghai">
-                      北京时间 · Asia/Shanghai
+                      北京时间（Asia/Shanghai）
                     </option>
-                    <option value="UTC">协调世界时 · UTC</option>
+                    <option value="UTC">协调世界时（UTC）</option>
                     <option value="Europe/Berlin">
-                      柏林时间 · Europe/Berlin
+                      柏林时间（Europe/Berlin）
                     </option>
                   </select></label
                 >
@@ -517,7 +530,7 @@
             </button>
           </div>
           <div id="admin-identity"></div>
-          <div id="admin-content" hidden>
+          <div id="admin-content" class="admin-workspace" hidden>
             <div class="admin-tabs" role="group" aria-label="管理分区">
               <button
                 data-admin-tab="overview"
@@ -688,7 +701,7 @@
                 <summary>Telegram 应用配置</summary>
                 <form id="telegram-settings" class="compact-form settings-form">
                   <label
-                    >API ID<input
+                    >Telegram 应用编号<input
                       name="telegram_api_id"
                       inputmode="numeric" /></label
                   ><label
@@ -897,13 +910,12 @@
       </div>
       <aside class="right-rail" aria-label="赛事与专家服务说明">
         <section class="side-panel">
-          <h2>专家榜 <button data-page="experts">更多 ›</button></h2>
+          <h2>专家榜 <button data-page="experts">查看全部</button></h2>
           <div id="top-experts"></div>
         </section>
         <section class="side-member">
-          <span>球讯会员</span>
-          <h2>原文、盘口、收益<br />一处完整回查</h2>
-          <button data-page="membership">查看会员权益 ›</button>
+          <h2>球讯会员</h2>
+          <button data-page="membership">查看会员权益</button>
         </section>
         <section class="side-panel">
           <h2>数据状态</h2>
@@ -913,16 +925,16 @@
       </aside>
     </main>
     <footer class="site-footer site-width">
-      球讯 · 比分与专家推荐记录　<span>所有时间均为北京时间 UTC+8</span
+      球讯比分与专家推荐记录　<span>所有时间均为北京时间（UTC+8）</span
       ><button data-page="admin">管理中心</button>
     </footer>
     <nav class="mobile-bottom" aria-label="手机主导航">
-      <button data-page="scores" class="active"><span>▣</span>比分</button
+      <button data-page="scores" class="active"><span class="nav-icon nav-icon-scores" aria-hidden="true"></span>比分</button
       ><button data-page="scores" data-phase="scheduled">
-        <span>▦</span>赛程</button
-      ><button data-page="experts"><span>◎</span>专家</button
-      ><button data-page="membership"><span>♧</span>会员</button
-      ><button data-page="account"><span>♙</span>我的</button>
+        <span class="nav-icon nav-icon-schedule" aria-hidden="true"></span>赛程</button
+      ><button data-page="experts"><span class="nav-icon nav-icon-experts" aria-hidden="true"></span>专家</button
+      ><button data-page="membership"><span class="nav-icon nav-icon-member" aria-hidden="true"></span>会员</button
+      ><button data-page="account"><span class="nav-icon nav-icon-account" aria-hidden="true"></span>我的</button>
     </nav>
     <dialog id="auth-dialog" aria-labelledby="auth-title">
       <div class="dialog-header">
