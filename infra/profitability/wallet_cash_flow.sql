@@ -37,18 +37,40 @@ WITH bounds AS (
            count(*) FILTER (WHERE provider_identity_hash IS NULL) AS missing_identity
     FROM v2_bet_orders
     WHERE account_id IS NOT NULL
+), undated_settlements AS MATERIALIZED (
+    SELECT o.id, first_receipt.observed_at
+    FROM v2_bet_orders o CROSS JOIN sample_span span
+    CROSS JOIN LATERAL (
+        SELECT e.payload, e.observed_at
+        FROM v2_order_receipt_evidence e
+        WHERE e.order_id = o.id AND e.payload->>'state' = 'settled'
+          AND e.payload->>'order_no' = o.provider_order_no
+        ORDER BY e.observed_at, e.id LIMIT 1
+    ) first_receipt
+    WHERE o.account_id IS NOT NULL AND o.state = 'settled' AND o.settled_at IS NULL
+      AND o.provider_placed_at > span.first_at AND o.provider_placed_at <= first_receipt.observed_at
+      AND first_receipt.observed_at < span.last_at
+      AND first_receipt.observed_at <= o.receipt_observed_at
+      AND first_receipt.payload->>'settled_at' IS NULL
+      AND CASE WHEN pg_input_is_valid(first_receipt.payload->>'placed_at', 'timestamptz')
+               THEN (first_receipt.payload->>'placed_at')::timestamptz END = o.provider_placed_at
+      AND CASE WHEN pg_input_is_valid(first_receipt.payload->>'stake', 'numeric')
+               THEN (first_receipt.payload->>'stake')::numeric END = o.provider_stake
+      AND CASE WHEN pg_input_is_valid(first_receipt.payload->>'payout', 'numeric')
+               THEN (first_receipt.payload->>'payout')::numeric END = o.provider_payout
 ), intervals AS (
     SELECT p.previous_at AS start_at, p.observed_at AS end_at,
            p.balance - p.previous_balance AS observed_change, details.*
     FROM points p CROSS JOIN coverage c
     CROSS JOIN LATERAL (
         SELECT coalesce(sum(provider_stake) FILTER (WHERE dated_placement), 0) AS placed_stake,
-               coalesce(sum(provider_payout) FILTER (WHERE dated_settlement), 0) AS settled_payout,
-               CASE WHEN count(*) FILTER (WHERE dated_settlement AND provider_stake IS NULL) = 0
-                    THEN coalesce(sum(provider_stake) FILTER (WHERE dated_settlement), 0) END AS settled_principal,
-               count(*) FILTER (WHERE dated_settlement AND provider_stake IS NULL) AS missing_settled_principal,
+               coalesce(sum(provider_payout) FILTER (WHERE dated_settlement OR bounded_settlement), 0) AS settled_payout,
+               CASE WHEN count(*) FILTER (WHERE (dated_settlement OR bounded_settlement) AND provider_stake IS NULL) = 0
+                    THEN coalesce(sum(provider_stake) FILTER (WHERE dated_settlement OR bounded_settlement), 0) END AS settled_principal,
+               count(*) FILTER (WHERE (dated_settlement OR bounded_settlement) AND provider_stake IS NULL) AS missing_settled_principal,
                count(*) FILTER (WHERE dated_placement) AS placements,
-               count(*) FILTER (WHERE dated_settlement) AS settlements,
+               count(*) FILTER (WHERE dated_settlement OR bounded_settlement) AS settlements,
+               count(*) FILTER (WHERE bounded_settlement) AS bounded_settlements,
                count(net_difference) AS receipt_net_compared,
                count(*) FILTER (WHERE net_difference <> 0) AS receipt_net_mismatches,
                sum(net_difference) AS receipt_net_difference,
@@ -70,6 +92,7 @@ WITH bounds AS (
                 provider_order_no IS NOT NULL
                     AND provider_placed_at > p.previous_at AND provider_placed_at <= p.observed_at AS dated_placement,
                 state = 'settled' AND settled_at > p.previous_at AND settled_at <= p.observed_at AS dated_settlement,
+                provider_placed_at > p.previous_at AND undated.observed_at < p.observed_at AS bounded_settlement,
                 provider_order_no IS NOT NULL AND provider_placed_at IS NULL
                     AND coalesce(submitted_at, created_at) <= p.observed_at
                     AND (settled_at > p.previous_at OR state <> 'settled'
@@ -80,7 +103,7 @@ WITH bounds AS (
                 state IN ('unknown', 'submitting') AND coalesce(submitted_at, created_at) <= p.observed_at AS unknown_submission,
                 state = 'accepted' AND coalesce(provider_placed_at, submitted_at, created_at) <= p.observed_at
                     AS possible_late_settlement
-            FROM v2_bet_orders o
+            FROM v2_bet_orders o LEFT JOIN undated_settlements undated ON undated.id = o.id
             WHERE account_id IS NOT NULL AND state IN ('accepted', 'settled', 'unknown', 'submitting')
         ) events
     ) details
@@ -101,6 +124,7 @@ WITH bounds AS (
            count(*) FILTER (WHERE accepted_without_settlement > 0) AS intervals_with_pending_receipts,
            count(*) FILTER (WHERE cash_flow_difference <> 0) AS intervals_with_difference,
            sum(placements) AS placements, sum(settlements) AS settlements,
+           coalesce(sum(bounded_settlements), 0) AS bounded_settlements,
            coalesce(sum(receipt_net_compared), 0) AS receipt_net_compared,
            coalesce(sum(receipt_net_mismatches), 0) AS receipt_net_mismatches,
            sum(receipt_net_difference) AS receipt_net_difference,
