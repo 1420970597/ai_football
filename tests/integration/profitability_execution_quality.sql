@@ -23,16 +23,22 @@ INSERT INTO v2_expert_signals
 SELECT n, 'leyu:123', 'live', CASE WHEN n IN (2,3) THEN 'handicap' ELSE 'total' END,
     CASE WHEN n IN (2,3) THEN '4' WHEN n=5 THEN 'other' ELSE '2' END,
     'full_time', 1.5, CASE WHEN n IN (2,3) THEN 'home' ELSE 'over' END,
-    'unknown', '{"home":1,"away":0}', :'anchor'::timestamptz, 2.00, 'win', 1.00, 2
-FROM generate_series(1,5) n;
+    'unknown', '{"home":1,"away":0}', :'anchor'::timestamptz, 2.00,
+    CASE WHEN n=2 THEN 'half_win' ELSE 'win' END, CASE WHEN n=2 THEN 0.50 ELSE 1.00 END, 2
+FROM generate_series(1,8) n;
 INSERT INTO v2_bet_orders
 SELECT id, id, id, created_at + interval '8 hours', created_at + interval '8 hours',
-    created_at + interval '10 seconds', 5, 2.10, 5.50, 'settled', false FROM v2_expert_signals;
+    created_at + interval '10 seconds', 5, 2.10,
+    CASE id WHEN 1 THEN 5.49 WHEN 2 THEN 0 WHEN 6 THEN NULL ELSE 5.50 END, 'settled', false
+FROM v2_expert_signals;
 INSERT INTO v2_quote_evidence
-SELECT id, id, fixture_id, market_id, period, selection, line, 2.10,
-    jsonb_build_object('stage','preflight_validated','attempt_id',id::text,'phase',phase,'market_kind',market_kind,
+SELECT id, id, fixture_id, market_id, period, selection, line,
+    CASE id WHEN 1 THEN 1.90 WHEN 2 THEN 2.25 ELSE 2.10 END,
+    jsonb_build_object('stage','preflight_validated','attempt_id',id::text,'signal_id',
+       CASE WHEN id=7 THEN 'wrong' ELSE id::text END,'phase',phase,'market_kind',market_kind,
        'score_basis',score_basis,'score_baseline',score_baseline,'score_benchmark',CASE WHEN id=3 THEN '2:0' ELSE '1:0' END),
-    'order_attempt', created_at + interval '5 seconds' FROM v2_expert_signals;
+    'order_attempt', created_at + CASE WHEN id=8 THEN interval '11 seconds' ELSE interval '5 seconds' END
+FROM v2_expert_signals;
 INSERT INTO v2_signal_settlements
 SELECT id, fixture_id, CASE WHEN id=4 THEN 1 ELSE result_version END, outcome, unit_net,
     jsonb_build_object('score_rule',jsonb_build_object('provider','leyu','period',period,'market_id',market_id,

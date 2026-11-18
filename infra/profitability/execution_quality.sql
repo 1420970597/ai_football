@@ -28,6 +28,8 @@ WITH bounds AS (
         WHERE q.reference_id = b.id AND q.evidence_kind = 'order_attempt'
             AND q.evidence->>'stage' = 'preflight_validated'
             AND q.evidence->>'attempt_id' = b.attempt_id::text
+            AND q.evidence->>'signal_id' = s.id::text
+            AND q.captured_at BETWEEN s.created_at AND b.provider_placed_at
         ORDER BY q.captured_at DESC, q.id DESC LIMIT 1
     ) p ON true
     LEFT JOIN LATERAL (
@@ -51,11 +53,21 @@ WITH bounds AS (
         AND coalesce(b.settled_at,b.receipt_observed_at) >= a.anchor - interval '48 hours'
         AND coalesce(b.settled_at,b.receipt_observed_at) < least(a.observed_at,a.anchor + interval '48 hours')
 ), comparable AS (
-    SELECT *, same_contract AND provider_stake IS NOT NULL AND provider_price > 1 AND recommendation_price > 1
-                  AND outcome IN ('win','half_win','loss','half_loss','push','void') AS price_bridge_available,
+    SELECT *, (same_contract AND provider_stake > 0 AND settled_net IS NOT NULL
+                  AND provider_price > 1 AND preflight_price > 1 AND recommendation_price > 1
+                  AND outcome IN ('win','half_win','loss','half_loss','push','void')) IS TRUE AS price_bridge_available,
         CASE outcome WHEN 'win' THEN 1 WHEN 'half_win' THEN 0.5 ELSE 0 END AS win_fraction,
         CASE outcome WHEN 'loss' THEN 1 WHEN 'half_loss' THEN 0.5 ELSE 0 END AS loss_fraction
     FROM settled
+), priced AS (
+    SELECT *,
+        CASE WHEN price_bridge_available THEN
+            round(provider_stake * (win_fraction * (recommendation_price - 1) - loss_fraction), 2) END AS at_recommendation,
+        CASE WHEN price_bridge_available THEN
+            round(provider_stake * (win_fraction * (preflight_price - 1) - loss_fraction), 2) END AS at_preflight,
+        CASE WHEN price_bridge_available THEN
+            round(provider_stake * (win_fraction * (provider_price - 1) - loss_fraction), 2) END AS at_fill
+    FROM comparable
 ), summary AS (
     SELECT cohort, sport, phase, market_kind, manual, grouping(sport,phase,market_kind,manual) = 15 AS all_markets,
            count(*) AS settled, count(provider_price) AS fill_prices, count(preflight_price) AS preflight_prices,
@@ -73,12 +85,18 @@ WITH bounds AS (
                FILTER (WHERE provider_placed_at >= signal_at))::numeric, 2) AS signal_to_fill_p90_seconds,
            sum(provider_stake) AS stake,
            sum(settled_net) AS provider_net,
-           sum(round(provider_stake * (win_fraction * (recommendation_price - 1) - loss_fraction),2))
-               FILTER (WHERE price_bridge_available) AS diagnostic_net_at_recommendation,
-           sum(round(provider_stake * (win_fraction * (provider_price - 1) - loss_fraction),2))
-               FILTER (WHERE price_bridge_available) AS diagnostic_net_at_fill,
-           sum(settled_net) FILTER (WHERE price_bridge_available) AS matched_provider_net
-    FROM comparable
+           sum(at_recommendation) AS diagnostic_net_at_recommendation,
+           sum(at_preflight) AS diagnostic_net_at_preflight,
+           sum(at_fill) AS diagnostic_net_at_fill,
+           sum(at_preflight - at_recommendation) AS recommendation_to_preflight_delta,
+           sum(at_fill - at_preflight) AS preflight_to_fill_delta,
+           sum(settled_net - at_fill) AS settlement_residual,
+           sum(settled_net) FILTER (WHERE price_bridge_available) AS matched_provider_net,
+           sum(settled_net) FILTER (WHERE NOT price_bridge_available) AS unmatched_provider_net,
+           count(*) FILTER (WHERE settled_net IS NULL) AS missing_receipt_net,
+           count(*) FILTER (WHERE abs(settled_net - at_fill) > 0.01) AS residuals_over_one_cent,
+           count(*) FILTER (WHERE settled_net = 0 AND abs(at_fill) > 0.01) AS zero_receipts_with_nonzero_reconstruction
+    FROM priced
     GROUP BY GROUPING SETS ((cohort), (cohort,sport,phase,market_kind,manual))
 )
 SELECT jsonb_build_object('anchor',anchor,'observed_at',observed_at,'cohorts',coalesce((
