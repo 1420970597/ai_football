@@ -21,6 +21,8 @@ For each settled order the monitor compares the projection to the latest stored 
 
 If an order has no native settlement time, the observed receipt timestamp still groups it for diagnostics. Every closed window overlapping the possible interval, from the earliest recorded placement bound to the observed receipt, remains unverified. An overlap count can include the same order in successive windows. Its receipt amount is counted only once in the diagnostic totals.
 
+The snapshot also marks closed windows unverified when an unresolved submission could predate the cutoff, or when an accepted order still lacks a settlement receipt and the latest fixture result available by that cutoff was confirmed or void. The accepted-order check concerns completeness of receipts. A fixture result does not establish a wallet movement or a settlement timestamp.
+
 # Execution price diagnostic
 
 Run `execution_quality.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v anchor=<UTC event boundary>` using authorized read access to the order, signal, settlement and quote records. It emits the preceding 48-hour baseline and up to the first 48 hours after the anchor. It keeps all settled orders in the totals. The price comparison uses the preflight record for the actual execution attempt. The recommendation comparison uses matching contract fields and accepts a live basis resolved in the matching settlement record under a verified Leyu rule. The verified remaining-period rule also requires agreement between the recommendation, preflight, and submitted score baseline. Reconstructed results are diagnostic and do not count toward the real profitability target.

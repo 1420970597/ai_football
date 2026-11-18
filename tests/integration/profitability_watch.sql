@@ -8,6 +8,7 @@ CREATE TABLE v2_bet_orders (
     created_at timestamptz, signal_id integer, provider_identity_hash text, provider_order_no text
 );
 CREATE TABLE v2_order_receipt_evidence (id integer PRIMARY KEY, order_id integer, payload jsonb, observed_at timestamptz);
+CREATE TABLE v2_fixture_results (fixture_id text, version integer, status text, received_at timestamptz);
 
 INSERT INTO v2_fixtures VALUES ('fixture-a', 'football'), ('fixture-b', 'basketball');
 INSERT INTO v2_expert_signals VALUES (1, 'fixture-a', 'live', 'total', 'full_time', 'over'),

@@ -11,3 +11,4 @@ GRANT SELECT (id, order_id, payload, observed_at) ON v2_order_receipt_evidence T
 GRANT SELECT (id, fixture_id, phase, market_kind, period, selection)
     ON v2_expert_signals TO v2_profitability_watch;
 GRANT SELECT (id, sport) ON v2_fixtures TO v2_profitability_watch;
+GRANT SELECT (fixture_id, version, status, received_at) ON v2_fixture_results TO v2_profitability_watch;

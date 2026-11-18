@@ -31,7 +31,7 @@ WITH bounds AS (
            coalesce(o.provider_placed_at, o.submitted_at, o.created_at) AS placed_at,
            least(o.provider_placed_at, o.submitted_at, o.created_at) AS earliest_placement,
            coalesce(o.settled_at, o.receipt_observed_at) AS booked_at,
-           f.sport, s.phase, s.market_kind, s.period, s.selection,
+           f.sport, s.fixture_id, s.phase, s.market_kind, s.period, s.selection,
            receipt.observed_at IS NOT NULL AS has_settled_evidence,
            o.provider_order_no IS NOT NULL AND receipt.payload->>'order_no' = o.provider_order_no
                AND receipt.observed_at = o.receipt_observed_at
@@ -61,7 +61,7 @@ WITH bounds AS (
        OR (o.state = 'settled' AND (coalesce(o.settled_at, o.receipt_observed_at) >= b.anchor - interval '48 hours'
            OR coalesce(o.settled_at, o.receipt_observed_at) IS NULL))
 ), metrics AS (
-    SELECT w.*, observed_at >= until AS closed, nets.*, pending.*, timing.*
+    SELECT w.*, observed_at >= until AS closed, nets.*, pending.*, timing.*, unresolved.*
     FROM windows w CROSS JOIN bounds b
     CROSS JOIN LATERAL (
         SELECT count(*) AS settled, count(DISTINCT account_id) AS accounts,
@@ -98,18 +98,31 @@ WITH bounds AS (
           AND o.earliest_placement < least(w.until, b.observed_at)
           AND (o.receipt_observed_at >= w.since OR o.receipt_observed_at IS NULL)
     ) timing
+    CROSS JOIN LATERAL (
+        SELECT count(*) FILTER (WHERE o.state IN ('submitting', 'unknown')) AS unresolved_submissions_before_end,
+               count(*) FILTER (WHERE o.state = 'accepted' AND result.status IN ('confirmed', 'void'))
+                   AS open_orders_with_terminal_result_before_end
+        FROM orders o
+        LEFT JOIN LATERAL (
+            SELECT r.status FROM v2_fixture_results r
+            WHERE r.fixture_id = o.fixture_id AND r.received_at < least(w.until, b.observed_at)
+            ORDER BY r.version DESC LIMIT 1
+        ) result ON o.state = 'accepted'
+        WHERE o.state IN ('submitting', 'unknown', 'accepted')
+          AND o.placed_at < least(w.until, b.observed_at)
+    ) unresolved
 ), classified AS (
     SELECT *, CASE
         WHEN since > (SELECT observed_at FROM bounds) THEN 'upcoming'
         WHEN NOT closed THEN 'open'
         WHEN undated_settlements_overlapping_window > 0 OR observed_time_only > 0 THEN 'unverified'
+        WHEN unresolved_submissions_before_end > 0 OR open_orders_with_terminal_result_before_end > 0 THEN 'unverified'
         WHEN settled = 0 THEN 'no_settlements'
         WHEN accounts <> 1 OR provider_accounts > 1 OR currencies > 1 THEN 'incomparable_accounts_or_currencies'
         WHEN provider_net <= 0 AND missing_receipt_fields = 0 THEN 'nonpositive_receipts'
         WHEN provider_net IS NULL OR missing_receipt_fields > 0 OR receipt_difference > 0
              OR missing_settled_evidence > 0 OR inconsistent_settled_evidence > 0
-             OR missing_currency > 0 OR missing_fee_field > 0 OR nonzero_fee_basis_unverified > 0
-             OR unknown_from_window > 0 THEN 'unverified'
+             OR missing_currency > 0 OR missing_fee_field > 0 OR nonzero_fee_basis_unverified > 0 THEN 'unverified'
         ELSE 'positive_receipts'
     END AS status FROM metrics
 ), streaks AS (
@@ -136,11 +149,10 @@ SELECT jsonb_build_object(
     'deadline_state', CASE WHEN observed_at < anchor + interval '48 hours' THEN 'collecting'
         WHEN (SELECT verified FROM streaks WHERE name = 'deadline')
              AND NOT EXISTS(SELECT 1 FROM orders WHERE state = 'settled' AND booked_at IS NULL)
-             AND NOT EXISTS(SELECT 1 FROM orders WHERE state = 'unknown' AND placed_at < anchor + interval '48 hours')
              THEN 'positive_receipts_all_four'
         ELSE 'target_not_verified' END,
     'rolling_four_positive_receipts', coalesce((SELECT verified FROM streaks WHERE name = 'rolling'), false)
-        AND NOT EXISTS(SELECT 1 FROM orders WHERE (state = 'settled' AND booked_at IS NULL) OR state = 'unknown'),
+        AND NOT EXISTS(SELECT 1 FROM orders WHERE state = 'settled' AND booked_at IS NULL),
     'windows', (SELECT jsonb_agg(to_jsonb(c) - ARRAY['streak_account', 'streak_provider_identity', 'streak_currency']
         ORDER BY ordinal) FROM classified c),
     'settled_without_time', (SELECT count(*) FROM orders WHERE state = 'settled' AND booked_at IS NULL),
