@@ -6,6 +6,8 @@ WITH bounds AS (
     SELECT s.id, s.phase, s.market_kind, s.market_id, s.period, f.sport, s.fixture_id,
            s.line, s.selection, s.score_basis, s.score_baseline,
            s.recommendation_price, s.quote_time, s.created_at, ev.evidence,
+           s.market_kind IN ('handicap','total','team_total')
+               AND abs(s.line)%1 IN (0,0.25,0.75) AS requires_adjacent_lines,
            CASE WHEN s.market_kind = 'winner' AND f.sport = 'football' THEN ARRAY['away','draw','home']
                 WHEN s.market_kind IN ('winner','handicap') THEN ARRAY['away','home']
                 ELSE ARRAY['over','under'] END AS expected_sides
@@ -30,7 +32,10 @@ WITH bounds AS (
             AND market.same_read_option_ids = cardinality(s.expected_sides) AS same_read_complete,
         market.same_source_sides = s.expected_sides
             AND market.same_source_option_ids = cardinality(s.expected_sides) AS same_source_complete,
-        market.same_source_implied_sum
+        market.same_source_implied_sum,
+        adjacent.lines_seen = 2 AS both_adjacent_lines_seen,
+        adjacent.unique_complete_lines = 2 AS both_adjacent_lines_complete,
+        adjacent.unique_same_time_lines = 2 AS both_adjacent_lines_at_quote_time
     FROM signals s
     LEFT JOIN v2_review_market_reads left_read
         ON left_read.job_id = CASE WHEN pg_input_is_valid(s.evidence->>'job_id','uuid') THEN (s.evidence->>'job_id')::uuid END
@@ -67,13 +72,53 @@ WITH bounds AS (
           AND q.quote_context - ARRAY['selection','selection_id','current_confirmation']
               = left_read.quote_context - ARRAY['selection','selection_id','current_confirmation']
     ) market ON left_read.quote_id IS NOT NULL
+    LEFT JOIN LATERAL (
+        SELECT count(*) AS lines_seen,
+               count(*) FILTER (WHERE by_line.complete_instances=1) AS unique_complete_lines,
+               count(*) FILTER (WHERE by_line.complete_instances=1 AND by_line.same_time_instances=1)
+                   AS unique_same_time_lines
+        FROM (
+            SELECT by_instance.line,
+                   count(*) FILTER (WHERE by_instance.sides=s.expected_sides AND by_instance.option_ids=2)
+                       AS complete_instances,
+                   count(*) FILTER (WHERE by_instance.same_time_sides=s.expected_sides
+                       AND by_instance.same_time_option_ids=2) AS same_time_instances
+            FROM (
+                SELECT parsed.line,q.quote_context->>'market_instance_id' AS instance_id,
+                       array_agg(parsed.side ORDER BY parsed.side) AS sides,
+                       count(DISTINCT q.quote_context->>'selection_id') AS option_ids,
+                       array_agg(parsed.side ORDER BY parsed.side) FILTER (WHERE q.source_updated_at=s.quote_time)
+                           AS same_time_sides,
+                       count(DISTINCT q.quote_context->>'selection_id') FILTER (WHERE q.source_updated_at=s.quote_time)
+                           AS same_time_option_ids
+                FROM v2_review_market_reads q CROSS JOIN LATERAL (
+                    SELECT CASE WHEN pg_input_is_valid(q.quote_context->>'line','numeric')
+                           THEN (q.quote_context->>'line')::numeric END AS line,
+                           q.quote_context->>'selection' AS side
+                ) parsed
+                WHERE s.requires_adjacent_lines AND q.job_id=left_read.job_id AND q.attempt_id=left_read.attempt_id
+                  AND q.created_at=left_read.created_at AND q.source_updated_at<=q.created_at
+                  AND q.price>1 AND q.price<'Infinity'::numeric
+                  AND parsed.line IN (floor(s.line+0.5)-0.5,floor(s.line+0.5)+0.5)
+                  AND parsed.side=ANY(s.expected_sides) AND nullif(q.quote_context->>'selection_id','') IS NOT NULL
+                  AND nullif(q.quote_context->>'market_instance_id','') IS NOT NULL
+                  AND q.quote_context - ARRAY['line','market_instance_id','selection','selection_id','current_confirmation']
+                      = left_read.quote_context - ARRAY['line','market_instance_id','selection','selection_id','current_confirmation']
+                GROUP BY parsed.line,instance_id
+            ) by_instance GROUP BY by_instance.line
+        ) by_line
+    ) adjacent ON left_read.quote_id IS NOT NULL AND s.requires_adjacent_lines
 ), summary AS (
     SELECT sport, phase, market_kind, period, grouping(sport,phase,market_kind,period) = 15 AS all_markets,
            count(*) AS recommendations, count(*) FILTER (WHERE evidence IS NOT NULL) AS saved_evidence,
            count(*) FILTER (WHERE selected_match) AS matching_read,
            count(*) FILTER (WHERE same_read_complete) AS complete_in_read,
            count(*) FILTER (WHERE same_source_complete) AS complete_at_same_source_time,
-           round(avg(same_source_implied_sum) FILTER (WHERE same_source_complete), 5) AS mean_implied_sum
+           round(avg(same_source_implied_sum) FILTER (WHERE same_source_complete), 5) AS mean_implied_sum,
+           count(*) FILTER (WHERE requires_adjacent_lines) AS adjacent_demand,
+           count(*) FILTER (WHERE both_adjacent_lines_seen) AS adjacent_lines_seen,
+           count(*) FILTER (WHERE both_adjacent_lines_complete) AS adjacent_complete_in_read,
+           count(*) FILTER (WHERE both_adjacent_lines_at_quote_time) AS adjacent_complete_at_quote_time
     FROM candidates
     GROUP BY GROUPING SETS ((), (sport,phase,market_kind,period))
 )
