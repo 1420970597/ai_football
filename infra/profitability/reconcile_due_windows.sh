@@ -20,6 +20,7 @@ if (( latest_due < 0 )); then
 fi
 
 install -d -m 700 -- "$state_dir"
+state_dir=$(cd -- "$state_dir" && pwd)
 exec 9>"$state_dir/.rolling.lock"
 flock -n 9 || exit 0
 
@@ -50,6 +51,11 @@ done
 
 ordinal=
 candidates=()
+snapshot_dir="$state_dir/../state"
+snapshot_member=()
+if [ -s "$snapshot_dir/latest.json" ]; then
+    snapshot_member=(-C "$snapshot_dir" latest.json)
+fi
 for ((index=0; index<=latest_due; index++)); do
     if [ ! -s "$state_dir/$index.json" ]; then
         ordinal=$index
@@ -57,34 +63,94 @@ for ((index=0; index<=latest_due; index++)); do
     fi
     if [ ! -s "$state_dir/$index.retry.json" ]; then
         candidates+=("$index.json")
+    elif ((${#snapshot_member[@]} && index>latest_due-5)); then
+        candidates+=("$index.json" "$index.retry.json")
     fi
 done
 
 suffix=.json
 if [ -z "$ordinal" ] && ((${#candidates[@]})); then
-    ordinal=$(tar -C "$state_dir" -cf - -- "${candidates[@]}" |
+    checks=$(tar -cf - "${snapshot_member[@]}" -C "$state_dir" -- "${candidates[@]}" |
         docker exec -i ai-football-v2-executor-1 python -c '
+from datetime import datetime, timedelta, timezone
 import json
 import sys
 import tarfile
 
+def window_report(data):
+    return data[0] if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) else {}
+
+def matched(report):
+    return report.get("complete_page") is True and report.get("local_only") == report.get("upstream_only") == 0
+
+def matches_bounds(item, start_key, end_key, start, end):
+    try:
+        return datetime.fromisoformat(item[start_key]) == start and datetime.fromisoformat(item[end_key]) == end
+    except (KeyError, TypeError, ValueError):
+        return False
+
+anchor = datetime.fromisoformat(sys.argv[1])
+seconds, micros = divmod(int(sys.argv[2]), 1_000_000)
+now = datetime.fromtimestamp(seconds, tz=timezone.utc) + timedelta(microseconds=micros)
+latest_due = int(sys.argv[3])
+reports = {}
+snapshot = None
 with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as archive:
-    first_unmatched = None
     for entry in archive:
-        if first_unmatched is not None:
-            continue
         try:
-            report = json.load(archive.extractfile(entry))
+            data = json.load(archive.extractfile(entry))
         except (ValueError, UnicodeError):
-            report = None
-        if not (isinstance(report, list) and len(report) == 1
-                and isinstance(report[0], dict) and report[0].get("complete_page") is True
-                and report[0].get("local_only") == report[0].get("upstream_only") == 0):
-            first_unmatched = entry.name.removesuffix(".json")
-    if first_unmatched is not None:
-        print(first_unmatched)
-')
-    suffix=.retry.json
+            data = None
+        if entry.name == "latest.json":
+            snapshot = data
+        else:
+            reports[entry.name] = window_report(data)
+
+for name, report in reports.items():
+    if name.endswith(".retry.json"):
+        continue
+    index = name.removesuffix(".json")
+    if not matched(report) and f"{index}.retry.json" not in reports:
+        print(index, "retry")
+        break
+else:
+    try:
+        observed = datetime.fromisoformat(snapshot["observed_at"])
+        valid = datetime.fromisoformat(snapshot["anchor"]) == anchor and (
+            now - timedelta(minutes=11) <= observed <= now
+        )
+        windows = snapshot["windows"] if valid else []
+    except (KeyError, TypeError, ValueError):
+        windows = []
+    for window in windows if isinstance(windows, list) else []:
+        if not isinstance(window, dict):
+            continue
+        index, settled = window.get("ordinal"), window.get("settled")
+        if type(index) is not int or type(settled) is not int or window.get("closed") is not True:
+            continue
+        if not max(0, latest_due - 4) <= index <= latest_due:
+            continue
+        start = anchor + timedelta(hours=index * 12)
+        end = start + timedelta(hours=12)
+        if not matches_bounds(window, "since", "until", start, end):
+            continue
+        if window.get("accounts") != 1 or window.get("provider_accounts") != 1:
+            continue
+        original = reports.get(f"{index}.json", {})
+        retry = reports.get(f"{index}.retry.json", {})
+        counts = [r.get("local_settled") for r in (original, retry)
+                  if matched(r) and matches_bounds(r, "begin", "end", start, end)]
+        counts = [count for count in counts if type(count) is int and count >= 0]
+        if counts and settled > max(counts):
+            print(index, f"late-{settled}")
+' "$1" "$now" "$latest_due")
+    while read -r index check; do
+        if [ -n "$index" ] && [ ! -s "$state_dir/$index.$check.json" ]; then
+            ordinal=$index
+            suffix=".$check.json"
+            break
+        fi
+    done <<< "$checks"
 fi
 
 if [ -n "$ordinal" ]; then

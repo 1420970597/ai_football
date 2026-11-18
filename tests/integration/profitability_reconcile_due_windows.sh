@@ -115,6 +115,49 @@ for direction in local_only upstream_only; do
 done
 printf '%s\n' 'Reconciliation scheduling checks passed.'
 
+# Recheck recent matched windows only when a fresh fixed-window snapshot gains receipts.
+mkdir -p watch/reconciliations watch/state
+state_path="$test_dir/watch/reconciliations"
+export test_now=$((base + window_us + delay_us))
+export test_report='[{"complete_page":true,"local_only":0,"upstream_only":0,"local_settled":51,"begin":"2026-11-18T02:14:09.845374Z","end":"2026-11-18T14:14:09.845374Z"}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.json" original_late
+calls_before=$(wc -l < calls)
+snapshot() {
+    printf '{"anchor":"%s","observed_at":"%s","windows":[{"ordinal":0,"since":"%s","until":"%s","closed":true,"settled":%s,"accounts":%s,"provider_accounts":1}]}\n' \
+        "$1" "$2" "$anchor" "$3" "$4" "${5:-1}" > watch/state/latest.json
+}
+boundary=2026-11-18T14:14:09.845374Z
+fresh=2026-11-18T14:19:58Z
+snapshot "$anchor" "$fresh" "$boundary" 51
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot 2026-11-18T02:14:00Z "$fresh" "$boundary" 52
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot "$anchor" 2026-11-18T14:00:00Z "$boundary" 52
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot "$anchor" "$fresh" 2026-11-18T14:14:00Z 52
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot "$anchor" "$fresh" "$boundary" 52 2
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$calls_before"
+snapshot "$anchor" "$fresh" "$boundary" 52
+export test_fail=1
+result=0
+bash ./reconcile_due_windows.sh "$anchor" "$state_path" || result=$?
+test "$result" = 41
+test ! -e "$state_path/0.late-52.json"
+export test_fail=0
+export test_report='[{"complete_page":true,"local_only":0,"upstream_only":0,"local_settled":52}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(stat -c %a "$state_path/0.late-52.json")" = 600
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 2))"
+snapshot "$anchor" "$fresh" "$boundary" 53
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test -s "$state_path/0.late-53.json"
+cmp "$state_path/0.json" original_late
+printf '%s\n' 'Late settlement reconciliation checks passed.'
+
 mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
 cp "$root/infra/profitability/restore_reconciliation_timer.sh" infra/profitability/
 
