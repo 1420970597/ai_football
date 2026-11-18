@@ -129,10 +129,19 @@ class Executor:
                                 receipt["provider_settlement_codes"] = item["provider_settlement_codes"]
                             receipts.append(receipt)
                     if work.get('orders'):
-                        balance = await client.balance()
-                result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"], receipts=receipts,scanned_orders=scanned)
-                if reconciliation_errors:
-                    result.update(category="order_reconciliation_partial", reconciliation_errors=reconciliation_errors)
+                        try:
+                            balance = await client.balance()
+                        except LeyuError as exc:
+                            if not receipts:
+                                raise
+                            result.update(category="post_reconciliation_balance_failed", provider_code=exc.code,
+                                          receipts=receipts, scanned_orders=scanned)
+                            log.warning("final balance read failed after reconciliation category=%s", exc.category)
+                if not result["category"]:
+                    result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"],
+                                  receipts=receipts, scanned_orders=scanned)
+                    if reconciliation_errors:
+                        result.update(category="order_reconciliation_partial", reconciliation_errors=reconciliation_errors)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

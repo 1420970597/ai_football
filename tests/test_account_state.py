@@ -1183,6 +1183,55 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('failed','account_http_rejected'),(job['state'],job['last_error']))
         self.assertEqual(order['reserved_stake'],await self.pool.fetchval('SELECT reserved_stake FROM v2_bet_orders WHERE id=$1',order['id']))
 
+    async def test_final_balance_failure_preserves_only_planned_settlement_receipts(self):
+        account = await self.healthy()
+        signal, expert, _, _ = await self.signal()
+        await self.enable([expert])
+        order = await self.reserve(signal)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='EXACT' WHERE id=$1", order['id'])
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work = (await self.worker_api.post('/internal/executor/claim')).json()
+        url = f"/internal/executor/jobs/{work['job_id']}/finish"
+        unexpected = await self.worker_api.post(url, json={
+            'attempt_id': work['attempt_id'], 'status': 'failed', 'category': 'post_reconciliation_balance_failed',
+            'receipts': [{'order_no': 'OUTSIDE-PLAN', 'state': 'settled', 'net_profit': '2'}],
+        })
+        self.assertEqual(422, unexpected.status_code, unexpected.text)
+        balance_calls = 0
+
+        def native(request):
+            if request.url.path == ORDERS_PATH:
+                rows = [{'orderNo': 'EXACT', 'betAmount': '2', 'backAmount': '4', 'profitAmount': '2'}]
+                records = rows if json.loads(request.content)['orderStatus'] == 1 else []
+                return httpx.Response(200, json={'code': 0, 'data': {'total': len(records), 'records': records}})
+            if request.url.path == AMOUNT_PATH:
+                nonlocal balance_calls
+                balance_calls += 1
+                if balance_calls == 2:
+                    return httpx.Response(503, json={'code': '503'})
+            self.assertNotEqual(BET_PATH, request.url.path)
+            return self.native(request)
+
+        executor = Executor(self.worker_api, 'https://platform.invalid/internal/executor',
+            client_factory=lambda scope, session, **kw: AccountProtocolClient(
+                scope, session, transport=httpx.MockTransport(native), **kw))
+        original_finish = executor.finish
+        executor.finish = AsyncMock(wraps=original_finish)
+        await executor.account_job(work)
+        self.assertEqual(2, balance_calls)
+        body = executor.finish.await_args.args[1]
+        stored = await self.pool.fetchrow('SELECT state,settled_net,reserved_stake FROM v2_bet_orders WHERE id=$1', order['id'])
+        self.assertEqual(('settled', Decimal('2'), Decimal('0')), tuple(stored.values()))
+        saved = await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1', account['id'])
+        for field in ('last_verified_at', 'balance_observed_at', 'available_balance', 'health_state'):
+            self.assertEqual(account[field], saved[field])
+        self.assertGreater(saved['renewal_retry_after'], datetime.now(timezone.utc))
+        job = await self.pool.fetchrow('SELECT state,last_error FROM v2_account_jobs WHERE id=$1', uuid.UUID(work['job_id']))
+        self.assertEqual(('failed', 'post_reconciliation_balance_failed'), tuple(job.values()))
+        replay = await self.worker_api.post(url, json=body)
+        self.assertEqual({'status': 'failed', 'idempotent': True}, replay.json())
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence WHERE order_id=$1', order['id']))
+
     async def test_receipt_rejects_invalid_official_fields(self):
         from pydantic import ValidationError
         for extra in ({'price':'NaN'},{'price':'1'},{'stake':'-1'},{'settled_at':'2026-10-20T10:00:00'},{'currency':'usd'},

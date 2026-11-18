@@ -591,6 +591,9 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
     service_auth(request)
     if bool(body.reconciliation_errors) != (body.category == 'order_reconciliation_partial') or (body.reconciliation_errors and body.status != 'success'):
         raise HTTPException(422,'部分查单回执必须同时具备成功余额校验与错误明细')
+    keep_receipts = body.category == 'post_reconciliation_balance_failed'
+    if keep_receipts and (body.status != 'failed' or not body.receipts or body.balance is not None or body.observed_at is not None):
+        raise HTTPException(422,'余额读取失败时只可保留已核验订单回执')
     finish_document = body.model_dump(mode='json')
     if not body.provider_code:
         finish_document.pop('provider_code')
@@ -616,11 +619,9 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
             if job['kind'] == 'history':
                 raise HTTPException(409, '只读历史任务必须通过专用历史回执完成')
-            if effective_status=='success':
-                document=jobs.decode_document(request.app.state.settings.encryption_key,account['encrypted_session']) if account['encrypted_session'] else {}
-                now=datetime.now(timezone.utc)
-                if body.balance is None or not body.observed_at or not -5<=(now-body.observed_at).total_seconds()<=60 or not document.get('leyu_request_id'):
-                    raise HTTPException(422,'无资金校验缺少有效余额、观测时间或本人会话')
+            if keep_receipts and (effective_status != 'failed' or job['kind'] not in {'refresh', 'reconcile'}):
+                raise HTTPException(422,'只有账户刷新或对账任务可保留部分回执')
+            if effective_status=='success' or keep_receipts:
                 planned=job['details'].get('orders',{})
                 failed_ids = {str(item.order_id) for item in body.reconciliation_errors}
                 if (any(str(identity) not in planned for identity in body.scanned_orders)
@@ -630,14 +631,14 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                         or failed_ids.intersection(str(identity) for identity in body.scanned_orders)
                         or any(receipt.order_no in {planned[identity] for identity in failed_ids} for receipt in body.receipts)):
                     raise HTTPException(422,'查单回执超出此本人任务的订单范围')
+            if effective_status=='success':
+                document=jobs.decode_document(request.app.state.settings.encryption_key,account['encrypted_session']) if account['encrypted_session'] else {}
+                now=datetime.now(timezone.utc)
+                if body.balance is None or not body.observed_at or not -5<=(now-body.observed_at).total_seconds()<=60 or not document.get('leyu_request_id'):
+                    raise HTTPException(422,'无资金校验缺少有效余额、观测时间或本人会话')
                 await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',renewal_state='ready',renewal_attempt=NULL,"
                                    "renewal_lease_until=NULL,renewal_retry_after=NULL,last_verified_at=now(),available_balance=$2,"
                                    "balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
-                await jobs.reconcile_receipts(conn,account,receipts)
-                # Timestamp failed reads too: preserve financial state/exposure,
-                # while the scheduler rotates accounts/orders and backs off.
-                attempted = body.scanned_orders + [item.order_id for item in body.reconciliation_errors]
-                await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',attempted,account['user_id'])
             elif effective_status in {'unknown','rejected'}:
                 await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,renewal_state=$3,renewal_attempt=NULL,"
                                    "renewal_lease_until=NULL,updated_at=now() WHERE id=$1",account['id'],
@@ -649,6 +650,11 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 await conn.execute(
                     "UPDATE v2_leyu_accounts SET renewal_retry_after=GREATEST(renewal_retry_after,"
                     "now()+interval '60 seconds'),updated_at=now() WHERE id=$1", account['id'])
+            if effective_status=='success' or keep_receipts:
+                await jobs.reconcile_receipts(conn,account,receipts)
+                # Timestamp attempted reads so the scheduler can rotate orders.
+                attempted = body.scanned_orders + [item.order_id for item in body.reconciliation_errors]
+                await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',attempted,account['user_id'])
             details = {'receipts':len(body.receipts),'finish_sha256':finish_sha256}
             if body.provider_code:
                 details['provider_code'] = body.provider_code
