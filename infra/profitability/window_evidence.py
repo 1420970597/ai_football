@@ -1,0 +1,96 @@
+"""Summarize local settlement, reconciliation and wallet evidence for fixed windows."""
+
+import argparse
+from datetime import datetime, timedelta
+from decimal import Decimal
+import json
+from pathlib import Path
+
+
+def load_report(path):
+    try:
+        with path.open() as source:
+            return json.load(source, parse_float=Decimal)
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def matches_window(report, start_key, end_key, begin, end):
+    if not isinstance(report, dict):
+        return False
+    try:
+        return datetime.fromisoformat(report[start_key]) == begin and datetime.fromisoformat(report[end_key]) == end
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def reconciliation(reports, window, begin, end):
+    ordinal = window['ordinal']
+    late_reports = [path for path in reports.glob(f'{ordinal}.late-*.json')
+                    if path.stem.rsplit('-', 1)[-1].isdigit()]
+    paths = sorted(late_reports, key=lambda path: int(path.stem.rsplit('-', 1)[-1]), reverse=True)
+    paths += [reports / f'{ordinal}.retry.json', reports / f'{ordinal}.json']
+    for path in paths:
+        scan = load_report(path)
+        if not isinstance(scan, list) or len(scan) != 1 or not matches_window(scan[0], 'begin', 'end', begin, end):
+            continue
+        report = scan[0]
+        settled = window['settled']
+        return {
+            'file': path.name, 'issues': report.get('issues'),
+            'order_list_matches_current_count': settled > 0 and report.get('complete_page') is True
+            and report.get('local_settled') == report.get('upstream_settled') == report.get('matched') == settled
+            and report.get('upstream_only') == report.get('local_only') == 0,
+            'settlement_window_attribution_complete': report.get('settlement_window_attribution_complete') is True,
+            'order_receipt_fields_reconciled': report.get('order_receipt_fields_reconciled') is True,
+        }
+    return None
+
+
+def summarize(root, snapshot):
+    anchor = datetime.fromisoformat(snapshot['anchor'])
+    observed = datetime.fromisoformat(snapshot['observed_at'])
+    if anchor.utcoffset() is None or observed.utcoffset() is None:
+        raise ValueError('snapshot timestamps must include timezones')
+    reports = root / 'reconciliations'
+    items = []
+    ordinals = set()
+    for window in snapshot['windows']:
+        ordinal = window['ordinal']
+        if type(ordinal) is not int or ordinal < 0 or ordinal in ordinals:
+            raise ValueError('invalid settlement window ordinal')
+        ordinals.add(ordinal)
+        begin = anchor + timedelta(hours=ordinal * 12)
+        end = begin + timedelta(hours=12)
+        closed = window['closed']
+        if (type(closed) is not bool or closed != (end <= observed)
+                or not matches_window(window, 'since', 'until', begin, end)):
+            raise ValueError('window does not match the fixed settlement schedule')
+        if not closed:
+            continue
+
+        scan = reconciliation(reports, window, begin, end)
+        wallet = load_report(reports / f'{ordinal}.wallet.json')
+        wallet_matches = matches_window(wallet, 'window_start', 'window_end', begin, end)
+        wallet_totals = wallet.get('comparison') if wallet_matches else None
+        items.append({
+            'ordinal': ordinal, 'begin': begin, 'end': end, 'provider_net': window['provider_net'],
+            'settled': window['settled'], 'window_status': window['status'],
+            'missing_fee_field': window['missing_fee_field'], 'missing_currency': window['missing_currency'],
+            'reconciliation': scan,
+            'wallet': {
+                **{key: wallet.get(key) for key in ('samples', 'unobserved_start_seconds', 'unobserved_end_seconds')},
+                **{key: wallet_totals.get(key) for key in ('sampling_gaps', 'incomplete_intervals', 'intervals_with_difference')},
+            } if isinstance(wallet_totals, dict) else None,
+        })
+    return {'anchor': anchor, 'observed_at': observed, 'windows': items}
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('monitor_dir', type=Path)
+    arguments = parser.parse_args()
+    snapshot = load_report(arguments.monitor_dir / 'state/latest.json')
+    if not isinstance(snapshot, dict):
+        parser.error('a readable current monitor snapshot is required')
+    print(json.dumps(summarize(arguments.monitor_dir, snapshot), default=str, ensure_ascii=False))
