@@ -14,6 +14,7 @@ WITH bounds AS (
     FROM fills
 ), observations AS (
     SELECT s.phase, tg.event_kind, tg.source_version_at, tg.received_at,
+           j.id AS job_id, snapshot.evidence->>'attempt_id' AS attempt_id,
            j.created_at AS job_at, request.request_at, s.created_at AS signal_at
     FROM (SELECT DISTINCT signal_id FROM fills) f JOIN v2_expert_signals s ON s.id=f.signal_id
     JOIN v2_expert_messages m ON m.id=s.message_id
@@ -59,9 +60,49 @@ WITH bounds AS (
     ) stages(stage, elapsed)
     WHERE ordered
     GROUP BY stage, GROUPING SETS ((), (phase))
+), attempts AS MATERIALIZED (
+    SELECT DISTINCT job_id, attempt_id FROM verified WHERE ordered
+), attempt_traces AS MATERIALIZED (
+    SELECT t.job_id, a.attempt_id, t.trace_kind, t.sequence_no, t.payload
+    FROM attempts a JOIN v2_analysis_traces t ON t.job_id=a.job_id AND t.payload->>'attempt_id'=a.attempt_id
+    WHERE t.trace_kind IN ('hermes_result','mcp_search_matches','mcp_resolve_match',
+                          'mcp_list_match_markets','mcp_record_expert_signals')
+), result_metrics AS (
+    SELECT DISTINCT ON (job_id,attempt_id) job_id, attempt_id,
+           CASE WHEN jsonb_typeof(payload->'provider_elapsed_ms')='number'
+                THEN (payload->>'provider_elapsed_ms')::numeric END AS provider_ms,
+           CASE WHEN jsonb_typeof(payload->'input_prepare_elapsed_ms')='number'
+                THEN (payload->>'input_prepare_elapsed_ms')::numeric END AS input_ms,
+           CASE WHEN jsonb_typeof(payload->'completion_rounds')='number'
+                THEN (payload->>'completion_rounds')::numeric END AS rounds
+    FROM attempt_traces WHERE trace_kind='hermes_result'
+    ORDER BY job_id,attempt_id,sequence_no DESC
+), attempt_summary AS (
+    SELECT (SELECT count(*) FROM attempts) AS attempts, count(*) AS result_traces,
+           count(*) FILTER (WHERE rounds>1) AS continued_attempts,
+           count(*) FILTER (WHERE provider_ms>=0) AS provider_timed_attempts,
+           round((percentile_cont(0.9) WITHIN GROUP (ORDER BY provider_ms)
+               FILTER (WHERE provider_ms>=0))::numeric / 1000,2) AS provider_p90_seconds,
+           count(*) FILTER (WHERE input_ms>=0) AS input_timed_attempts,
+           round((percentile_cont(0.9) WITHIN GROUP (ORDER BY input_ms)
+               FILTER (WHERE input_ms>=0))::numeric / 1000,2) AS input_p90_seconds
+    FROM result_metrics
+), tool_metrics AS (
+    SELECT trace_kind, payload->>'status' AS status,
+           CASE WHEN jsonb_typeof(payload->'elapsed_ms')='number'
+                THEN (payload->>'elapsed_ms')::numeric END AS elapsed_ms
+    FROM attempt_traces
+    WHERE trace_kind<>'hermes_result' AND payload->>'status' IN ('succeeded','failed')
+), tool_summary AS (
+    SELECT trace_kind, status, count(*) AS calls, count(*) FILTER (WHERE elapsed_ms>=0) AS timed_calls,
+           round((percentile_cont(0.9) WITHIN GROUP (ORDER BY elapsed_ms)
+               FILTER (WHERE elapsed_ms>=0))::numeric,2) AS p90_ms
+    FROM tool_metrics GROUP BY trace_kind,status
 )
 SELECT jsonb_build_object('bounds',to_jsonb(b),'scope',to_jsonb(c),
     'coverage',(SELECT jsonb_agg(to_jsonb(v) ORDER BY phase) FROM coverage v),
-    'timings',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY phase,stage) FROM timings t),'[]'::jsonb))
+    'timings',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY phase,stage) FROM timings t),'[]'::jsonb),
+    'attempt_summary',(SELECT to_jsonb(a) FROM attempt_summary a),
+    'tool_summary',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY trace_kind,status) FROM tool_summary t),'[]'::jsonb))
 FROM bounds b CROSS JOIN scope c;
 ROLLBACK;

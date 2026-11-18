@@ -57,6 +57,8 @@ The `timings` array reports the median and 90th percentile by cohort and match p
 
 Run `review_latency.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC placement cutoff> -v end=<UTC stop>` to break down the time from source message version to recommendation. It uses distinct recommendations associated with automatic fills for one account binding. A timing row requires a chronological chain through the stored Telegram event, the review job, and the Hermes request for the attempt named in the quote evidence. The final interval includes the review, tool calls, and recommendation write. Check the coverage counts before interpreting the timings, especially for older fills whose raw evidence may have expired.
 
+The `attempt_summary` counts each producing attempt once and uses its latest final result trace for HTTP and input preparation timings. The HTTP duration includes the Hermes tool calls and can include continuation rounds after the recommendation was saved. The `tool_summary` gives observed service-side durations per call and status for the same attempts. These measurements can overlap and have different denominators. The timed counts show where a duration was unavailable.
+
 # Historical option coverage
 
 Run `review_price_coverage.sql` as a read-only diagnostic over the last 72 hours of retained review evidence. It matches the selected option to the immutable recommendation, then requires the expected distinct options from the same review attempt, database read time, native market instance, line, phase and score context. It reports the stricter count with one shared upstream quote timestamp. The sum of inverse prices describes the provider's quote set at review time. It does not establish a fair price, execution price, or realizable return.
