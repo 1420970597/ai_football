@@ -192,9 +192,9 @@ WITH bounds AS (
                    WHEN preflight_price < recommendation_price THEN 'lower' ELSE 'equal' END AS direction
     FROM priced
     WHERE manual IS FALSE AND price_bridge_available AND (phase <> 'live' OR live_scores_match)
-), direction_summary AS (
+), direction_fixtures AS (
     SELECT cohort, window_start, CASE WHEN grouping(phase)=1 THEN 'all' ELSE phase END AS phase, direction,
-           count(*) AS settled, count(DISTINCT fixture_id) AS fixtures,
+           count(*) AS settled,
            count(*) FILTER (WHERE provider_currency IS NULL OR provider_fees IS NULL) AS missing_cost_fields,
            sum(provider_stake) AS stake, sum(settled_net) AS receipt_net,
            sum(at_recommendation) AS net_at_recommendation,
@@ -203,7 +203,19 @@ WITH bounds AS (
     WHERE (SELECT count(DISTINCT (account_id,provider_identity_hash))=1
                   AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
                   AND count(DISTINCT provider_currency)<=1 FROM settled WHERE manual IS FALSE)
-    GROUP BY cohort, direction, GROUPING SETS ((), (phase), (window_start), (window_start,phase))
+    GROUP BY cohort, direction, fixture_id, GROUPING SETS ((), (phase), (window_start), (window_start,phase))
+), direction_summary AS (
+    SELECT cohort, window_start, phase, direction,
+           sum(settled) AS settled, count(*) AS fixtures,
+           sum(missing_cost_fields) AS missing_cost_fields,
+           sum(stake) AS stake, sum(receipt_net) AS receipt_net,
+           sum(net_at_recommendation) AS net_at_recommendation,
+           sum(recommendation_to_preflight_delta) AS recommendation_to_preflight_delta,
+           count(*) FILTER (WHERE receipt_net>0) AS positive_receipt_fixtures,
+           max(receipt_net) AS highest_fixture_receipt_net,
+           CASE WHEN count(*)>1 THEN sum(receipt_net) - max(receipt_net) END AS receipt_net_without_highest_fixture
+    FROM direction_fixtures
+    GROUP BY cohort, window_start, phase, direction
 ), exclusions AS (
     SELECT cohort, window_start, sport, phase, market_kind, period, price_bridge_exclusion AS reason, signal_settlement_reason,
            count(*) AS orders, count(settled_net) AS with_receipt_net, sum(settled_net) AS provider_net
