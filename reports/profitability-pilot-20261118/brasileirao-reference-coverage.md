@@ -12,6 +12,18 @@
 
 23:21 UTC 的当前订单簿抽查中，Polymarket 四个抽样市场的两侧均有深度及原生快照时间。Kalshi 同四个抽样市场均返回双边买盘，响应体缺少原生报价时点。该次采样发生在旧单成交数小时后。后续候选需保存来源自身的盘口时点、同合同的非空深度及收费和状态证据，并对真实预检时点配对。仅本轮第三单具备两个市场较接近的历史记录，仍没有第二个独立、同步、含实际深度的历史报价样本可用于评估成交规则。 [Kalshi 当前订单簿文档](https://docs.kalshi.com/api-reference/market/get-market-orderbook)
 
+## 开球前后订单簿试采
+
+11 月 18 日 23:29:49 至 23:33:21 UTC 完成两批、八轮采样。采样器保存市场与选项身份、规则摘要、实际接收时间、最优买卖价及各自规模。Polymarket 订单簿同时保存来源时点。Kalshi 按 YES 买盘与 NO 买盘的补集还原 YES 买卖边，源时点保留为空。市场元数据中的更新时间和订单簿接收时间也无法补足这一缺口。 [Polymarket 盘口数据](https://docs.polymarket.com/market-data/prices-order-books) [Kalshi 当前订单簿文档](https://docs.kalshi.com/api-reference/market/get-market-orderbook)
+
+| 盘口组合 | 轮次 | Polymarket 双边齐全且有原生时点 | Polymarket 同轮最大时点差 | Kalshi 双边齐全但缺原生时点 |
+| --- | ---: | ---: | ---: | ---: |
+| 弗拉门戈相邻让球 | 5 | 20 份 | 1.975 秒 | 10 份 |
+| 雷默相邻大小 | 3 | 12 份 | 4.505 秒 | 未采此组 |
+| 帕尔梅拉斯胜平负三项 | 3 | 18 份 | 1.982 秒 | 9 份 |
+
+两批归档位于私有运行目录，文件权限 0600。该次试采验证了首档深度和时间的留存。样本缺同轮乐鱼真实预检、独立赛况和费用证据。下一批在观察真实预检时同步采集，优先寻找带原生时点的第二条独立行情。同一市场的多个选项只算一个来源。 [订单簿采样器](reference_orderbooks.py) [采样回归](test_reference_orderbooks.py)
+
 ## 复跑
 
 历史脚本的 `--kalshi-peer-ticker` 可重复传入一至两次，选择原盘口与其他盘口共同拥有有效买卖收值的最近已闭合分钟。缺共同分钟时返回空值。以下复现第三单的共同分钟。 [历史采样脚本](reference_history.py) [回归测试](test_reference_history.py)
@@ -23,3 +35,5 @@ docker run --rm --network host --cpus .25 --memory 128m --entrypoint python \
   bra-fla-cap-2026-11-18-spread-home-1pt5 KXBRASILEIROSPREAD KXBRASILEIROSPREAD-26NOV18FLACAP-FLA2 \
   --kalshi-peer-ticker KXBRASILEIROSPREAD-26NOV18FLACAP-FLA3
 ```
+
+当前订单簿可用同一挂载，改用 `/research/reference_orderbooks.py`，分别通过 `--polymarket` 和 `--kalshi` 传入已核验的公开市场编号。每轮输出一行 JSON。用 `--samples 5 --interval-seconds 20` 可复跑相同的有限采样窗口。
