@@ -198,7 +198,9 @@ WITH bounds AS (
            count(*) FILTER (WHERE provider_currency IS NULL OR provider_fees IS NULL) AS missing_cost_fields,
            sum(provider_stake) AS stake, sum(settled_net) AS receipt_net,
            sum(at_recommendation) AS net_at_recommendation,
-           sum(at_preflight - at_recommendation) AS recommendation_to_preflight_delta
+           sum(at_preflight - at_recommendation) AS recommendation_to_preflight_delta,
+           sum(at_fill - at_preflight) AS preflight_to_fill_delta,
+           sum(settled_net - at_fill) AS settlement_residual
     FROM price_directions
     WHERE (SELECT count(DISTINCT (account_id,provider_identity_hash))=1
                   AND bool_and(account_id IS NOT NULL AND provider_identity_hash IS NOT NULL)
@@ -211,6 +213,8 @@ WITH bounds AS (
            sum(stake) AS stake, sum(receipt_net) AS receipt_net,
            sum(net_at_recommendation) AS net_at_recommendation,
            sum(recommendation_to_preflight_delta) AS recommendation_to_preflight_delta,
+           sum(preflight_to_fill_delta) AS preflight_to_fill_delta,
+           sum(settlement_residual) AS settlement_residual,
            count(*) FILTER (WHERE receipt_net>0) AS positive_receipt_fixtures,
            max(receipt_net) AS highest_fixture_receipt_net,
            CASE WHEN count(*)>1 THEN sum(receipt_net) - max(receipt_net) END AS receipt_net_without_highest_fixture

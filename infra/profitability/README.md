@@ -49,6 +49,8 @@ For a closed window, set `-v analysis_end=<exclusive UTC settlement boundary>` a
 
 The same report counts fixtures with positive aggregate receipts and shows each group's receipts after excluding its highest-receipt fixture. All comparable orders in that fixture and group are removed together. Groups covering only one fixture have no remainder. This check measures concentration and uses unadjusted receipts.
 
+For each direction group, recommendation-price reconstruction plus the two price deltas plus `settlement_residual` equals `receipt_net`. The residual is the difference between recorded receipts and reconstruction at the filled price. It can include rounding and settlement differences and does not identify fees by itself.
+
 The diagnostic reconstructs existing equivalent-outcome settlements under the same result version for Leyu period totals (native markets 2 and 18) and full-time live handicap (native market 4). The stored calculation must match the recommendation inputs and confirm the result. A matching submission permit must link to the preflight, and the latest settled receipt must match the native order and receipt net. Handicap reconstruction also requires the original provider-home line convention, matching effective stake, and agreement on the remaining-period score between the recommendation, preflight and permit. Separate report counts identify the two groups. The diagnostic does not modify recommendation, order, or wallet records.
 
 # Fixture exposure replay
