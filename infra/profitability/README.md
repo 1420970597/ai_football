@@ -25,3 +25,9 @@ Run `execution_quality.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v anchor=<UTC e
 Run `fixture_exposure.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC start> -v split=<UTC cohort boundary> -v end=<UTC end> -v observed=<UTC receipt cutoff>` using read access to orders, expert signals and receipts. The replay compares no cap with a cap of one or two open fills per fixture for new automatic orders. All sports and markets are included. Manual and pre-period fills remain in the exposure. A fill releases its slot once its first settled receipt was observable. Fills with no such receipt stay open at the evidence cutoff.
 
 Inspect coverage, tied timestamps and unresolved outcomes before interpreting the figures. The aggregate requires a single account binding and rejects mixed known currencies or incomplete fill evidence. Missing fee or currency fields are counted separately from receipt net. The counterfactual reuses existing fills and misses rejected or unsubmitted opportunities, rescheduled orders, and changes to remaining account budget. Treat the output as a concentration diagnostic.
+
+# Private wallet observations
+
+Install `install_wallet_observation.sql` as a database administrator after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the binding is unique and healthy. The monitor role receives function execution only, without account-table column access.
+
+The monitor stores five-minute samples under its private runtime directory and keeps 72 hours. These samples reveal unexplained available-balance movement when compared with dated receipts. Available balance is not a wallet statement, currency evidence, or a full equity balance. No currency or fee may be inferred from the numeric amount.
