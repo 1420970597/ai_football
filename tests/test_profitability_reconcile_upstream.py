@@ -104,6 +104,22 @@ class ReconcileUpstreamTests(unittest.TestCase):
             self.assertEqual(matching.name, verified['file'])
             self.assertTrue(verified['current_receipt_fields_reconciled'])
 
+    def test_digest_retry_uses_the_best_available_reconciliation(self):
+        digest = 'v1:' + 'a' * 64
+        report = reconcile_window(self.page, [self.local], START, END) | {'local_receipt_digest': digest}
+        window = {'ordinal': 0, 'settled': 1, 'local_receipt_digest': digest}
+        with TemporaryDirectory() as temporary:
+            reports = Path(temporary)
+            initial = reports / f'0.receipt-{digest[3:]}.json'
+            retry = reports / f'0.receipt-{digest[3:]}.retry.json'
+            initial.write_text(json.dumps([report]))
+            retry.write_text(json.dumps([report | {'complete_page': False}]))
+            self.assertEqual(initial.name, reconciliation(reports, window, START, END)['file'])
+            retry.write_text(json.dumps([report | {'order_receipt_fields_reconciled': True}]))
+            result = reconciliation(reports, window, START, END)
+            self.assertEqual(retry.name, result['file'])
+            self.assertTrue(result['current_receipt_fields_reconciled'])
+
     def test_placement_timestamp_gap_or_disagreement_prevents_receipt_reconciliation(self):
         self.upstream.update(currency='CNY', fees='0')
         self.local.update(currency='CNY', fees='0')

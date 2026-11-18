@@ -33,8 +33,10 @@ def reconciliation(reports, window, begin, end):
     paths += [reports / f'{ordinal}.retry.json', reports / f'{ordinal}.json']
     snapshot_digest = window.get('local_receipt_digest')
     if valid_digest(snapshot_digest):
-        paths.insert(0, reports / f'{ordinal}.receipt-{snapshot_digest[3:]}.json')
+        stem = f'{ordinal}.receipt-{snapshot_digest[3:]}'
+        paths = [reports / f'{stem}.retry.json', reports / f'{stem}.json', *paths]
     fallback = None
+    fallback_rank = (-1, -1)
     for path in paths:
         scan = load_report(path)
         if not isinstance(scan, list) or len(scan) != 1 or not matches_window(scan[0], 'begin', 'end', begin, end):
@@ -56,10 +58,12 @@ def reconciliation(reports, window, begin, end):
             'current_receipt_fields_reconciled': count_matches and ledger_matches is True
             and report.get('order_receipt_fields_reconciled') is True,
         }
-        if count_matches and ledger_matches is True:
+        if result['current_receipt_fields_reconciled']:
             return result
-        if fallback is None:
+        rank = (ledger_matches is True, count_matches)
+        if rank > fallback_rank:
             fallback = result
+            fallback_rank = rank
     return fallback
 
 

@@ -227,6 +227,37 @@ bash ./reconcile_due_windows.sh "$anchor" "$state_path"
 test "$(wc -l < calls)" = "$((calls_before + 4))"
 cmp "$state_path/0.json" original_receipts
 
+for scan_issue in incomplete payout_difference; do
+    state_path="$test_dir/watch/digest-$scan_issue"
+    snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$old_digest"
+    export test_report="${correct_report/$new_digest/$old_digest}"
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$new_digest"
+    if [[ "$scan_issue" == incomplete ]]; then
+        export test_report="${correct_report/true/false}"
+    else
+        test_report=$(python -c '
+import json
+import sys
+reports = json.loads(sys.argv[1])
+reports[0]["issues"] = {"payout_difference": 1}
+print(json.dumps(reports))
+' "$correct_report")
+        export test_report
+    fi
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    receipt="$state_path/0.receipt-$new_digest"
+    cp "$receipt.json" partial_receipts
+    calls_before=$(wc -l < calls)
+    export test_report=$correct_report
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    test -s "$receipt.retry.json"
+    test "$(stat -c %a "$receipt.retry.json")" = 600
+    cmp "$receipt.json" partial_receipts
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    test "$(wc -l < calls)" = "$((calls_before + 1))"
+done
+
 mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
 cp "$root/infra/profitability/restore_reconciliation_timer.sh" infra/profitability/
 

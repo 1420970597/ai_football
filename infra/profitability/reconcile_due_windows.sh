@@ -37,7 +37,7 @@ record_report() (
     bash "$root/$collector" "$start" > "$draft" || exit
     test -s "$draft" || exit
     if [[ "$suffix" == .receipt-*.json ]]; then
-        expected_digest="v1:${suffix#.receipt-}"
+        digest=${suffix#.receipt-}
         if ! docker exec -i ai-football-v2-executor-1 python -c '
 from datetime import datetime, timedelta
 import json
@@ -52,7 +52,7 @@ try:
         raise ValueError
 except (KeyError, TypeError, ValueError):
     sys.exit(1)
-' "$start" "${expected_digest%.json}" < "$draft"; then
+' "$start" "v1:${digest%%.*}" < "$draft"; then
             printf 'Window %s receipt recheck did not match the selected ledger version and bounds\n' "$ordinal" >&2
             exit 75
         fi
@@ -86,6 +86,13 @@ for ((index=0; index<=latest_due; index++)); do
         candidates+=("$index.json")
     elif ((${#snapshot_member[@]} && index>latest_due-5)); then
         candidates+=("$index.json" "$index.retry.json")
+    fi
+    if ((${#snapshot_member[@]} && index>latest_due-5)); then
+        for report in "$state_dir/$index".receipt-*.json; do
+            if [[ -s "$report" && "$report" != *.retry.json ]]; then
+                candidates+=("${report##*/}")
+            fi
+        done
     fi
 done
 
@@ -137,9 +144,9 @@ with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as archive:
             reports[entry.name] = window_report(data)
 
 for name, report in reports.items():
-    if name.endswith(".retry.json"):
-        continue
     index = name.removesuffix(".json")
+    if not index.isdecimal():
+        continue
     if requires_retry(report) and f"{index}.retry.json" not in reports:
         print(index, "retry")
         break
@@ -173,9 +180,15 @@ else:
         counts = [count for count in counts if type(count) is int and count >= 0]
         digest = window.get("local_receipt_digest")
         if settled > 0 and isinstance(digest, str) and re.fullmatch(r"v1:[0-9a-f]{64}", digest):
-            if not any(r.get("local_receipt_digest") == digest for r in (original, retry)
-                       if matches_bounds(r, "begin", "end", start, end)):
-                print(index, f"receipt-{digest[3:]}")
+            stem = f"receipt-{digest[3:]}"
+            previous = reports.get(f"{index}.{stem}.json")
+            if previous is not None:
+                if (not matches_bounds(previous, "begin", "end", start, end)
+                        or previous.get("local_receipt_digest") != digest or requires_retry(previous)):
+                    print(index, f"{stem}.retry")
+            elif not any(r.get("local_receipt_digest") == digest for r in (original, retry)
+                         if matches_bounds(r, "begin", "end", start, end)):
+                print(index, stem)
             continue
         if counts and settled > max(counts):
             print(index, f"late-{settled}")
