@@ -82,7 +82,9 @@ async def persist_signals(conn, *, job, attempt_id, entries):
             i.selection,i.price,'expert_signal',saved.id,i.quote_time,
             i.evidence || CASE WHEN market.options IS NULL THEN '{}'::jsonb ELSE jsonb_build_object(
                 'market_snapshot', jsonb_build_object('market_instance_id', i.market_instance_id, 'play_id', i.play_id,
-                    'received_at', i.quote_received_at, 'options', market.options)) END, i.baseline
+                    'received_at', i.quote_received_at, 'options', market.options)
+                    || CASE WHEN adjacent.lines IS NULL THEN '{}'::jsonb
+                        ELSE jsonb_build_object('adjacent_half_lines', adjacent.lines) END) END, i.baseline
         FROM incoming i JOIN saved ON saved.id=i.id JOIN v2_fixtures f ON f.id=i.fixture_id
         CROSS JOIN LATERAL (SELECT CASE
             WHEN i.market_kind='winner' AND f.sport='football' THEN ARRAY['away','draw','home']
@@ -105,6 +107,34 @@ async def persist_signals(conn, *, job, attempt_id, entries):
                 AND count(DISTINCT q.selection_id)=cardinality(expected.selections)
                 AND bool_or(q.id::text=i.evidence->>'quote_id' AND q.selection=i.selection AND q.price=i.price)
         ) market ON true
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(jsonb_build_object('line', paired.line::text,
+                'market_instance_id', paired.instance, 'options', paired.options) ORDER BY paired.line) AS lines
+            FROM (
+                SELECT q.line,q.market_instance_id AS instance,
+                       jsonb_agg(jsonb_build_object('selection',q.selection,'selection_id',q.selection_id,
+                          'price',q.price::text) ORDER BY q.selection) AS options
+                FROM v2_current_quotes q
+                WHERE market.options IS NOT NULL AND i.market_kind IN ('handicap','total','team_total')
+                  AND abs(i.line)%1 IN (0,0.25,0.75) AND f.phase=i.phase
+                  AND (i.phase<>'live' OR (
+                      f.home_score IS NOT NULL AND f.away_score IS NOT NULL
+                      AND i.baseline=jsonb_build_object('home',f.home_score,'away',f.away_score,
+                          'half_home',f.half_home_score,'half_away',f.half_away_score)))
+                  AND (q.fixture_id,q.market_id,q.period,q.market_kind,q.score_basis,q.play_id)
+                      =(i.fixture_id,i.market_id,i.period,i.market_kind,i.score_basis,i.play_id)
+                  AND q.line IN (floor(i.line+0.5)-0.5,floor(i.line+0.5)+0.5)
+                  AND (i.market_kind='handicap' OR q.line>0)
+                  AND q.source_time_quality='known' AND q.source_updated_at=i.quote_time
+                  AND q.received_at=i.quote_received_at AND q.status='active'
+                  AND q.price>1 AND q.price<'Infinity'::numeric
+                  AND nullif(q.market_instance_id,'') IS NOT NULL AND nullif(q.selection_id,'') IS NOT NULL
+                GROUP BY q.line,q.market_instance_id
+                HAVING array_agg(q.selection ORDER BY q.selection)=expected.selections
+                    AND count(DISTINCT q.selection_id)=2
+            ) paired
+            HAVING count(*)=2 AND count(DISTINCT paired.line)=2
+        ) adjacent ON true
         RETURNING reference_id AS id
         """, job['message_id'], job['expert_id'], payload)
     new_ids = {str(row['id']) for row in inserted}

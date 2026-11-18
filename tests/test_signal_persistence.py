@@ -84,6 +84,55 @@ class SignalPersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_record_keeps_signal_when_other_side_has_different_batch(self):
         await self.check_market_snapshot(same_batch=False)
 
+    async def test_record_retains_adjacent_halves_outside_filtered_read(self):
+        await self.check_adjacent_market_snapshot(same_batch=True)
+
+    async def test_adjacent_snapshot_requires_one_batch(self):
+        await self.check_adjacent_market_snapshot(same_batch=False)
+
+    async def check_adjacent_market_snapshot(self, *, same_batch):
+        markets = []
+        for line in ('2.5', '2.75', '3.5'):
+            for selection in ('over', 'under'):
+                received = self.now
+                if not same_batch and (line, selection) == ('3.5', 'under'):
+                    received += timedelta(milliseconds=1)
+                markets.append({
+                    'market_id': '2', 'market_name': 'Match total', 'kind': 'total',
+                    'period': 'full_time', 'line': line, 'selection': selection, 'price': '1.95',
+                    'source_time_quality': 'known', 'play_id': 'native-play',
+                    'market_instance_id': 'native-' + line, 'selection_id': line + '-' + selection,
+                    'source_updated_at': self.now.isoformat(), 'received_at': received.isoformat(),
+                })
+        fixture = await self.fixture(markets=markets)
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        read = await self.post('list_match_markets', fixture_id=fixture, market_kind='total',
+                               period='full_time', line='2.75', selection='over')
+        self.assertEqual(200, read.status_code, read.text)
+        self.assertEqual(1, len(read.json()['markets']))
+        quote = read.json()['markets'][0]
+        pick = {'fixture_id': fixture, 'quote_id': quote['quote_id'], 'evidence_text': 'Alpha over 2.75'}
+        response = await self.post('record_expert_signals', signals=[pick])
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(1, len(response.json()['accepted']))
+        evidence = await self.pool.fetchval("SELECT evidence FROM v2_quote_evidence WHERE evidence_kind='expert_signal'")
+        snapshot = evidence['market_snapshot']
+        self.assertEqual('native-2.75', snapshot['market_instance_id'])
+        if same_batch:
+            self.assertEqual(
+                [(Decimal('2.5'), 'native-2.5', ['2.5-over', '2.5-under']),
+                 (Decimal('3.5'), 'native-3.5', ['3.5-over', '3.5-under'])],
+                [(Decimal(row['line']), row['market_instance_id'],
+                  [option['selection_id'] for option in row['options']]) for row in snapshot['adjacent_half_lines']],
+            )
+            await self.pool.execute('UPDATE v2_current_quotes SET price=2.15 WHERE line=3.5')
+            response = await self.post('record_expert_signals', signals=[pick])
+            self.assertTrue(response.json()['accepted'][0]['duplicate'])
+            self.assertEqual(evidence, await self.pool.fetchval('SELECT evidence FROM v2_quote_evidence'))
+        else:
+            self.assertNotIn('adjacent_half_lines', snapshot)
+
     async def check_market_snapshot(self, *, same_batch):
         market = {'market_id': '2', 'market_name': 'Match total', 'kind': 'total',
                   'period': 'full_time', 'line': '2.5', 'source_time_quality': 'known',
