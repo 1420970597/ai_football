@@ -29,6 +29,9 @@ WITH bounds AS (
            lag(observed_at) OVER (ORDER BY observed_at) AS previous_at,
            lag(balance) OVER (ORDER BY observed_at) AS previous_balance
     FROM samples
+), sample_span AS (
+    SELECT count(*) AS samples, min(observed_at) AS first_at, max(observed_at) AS last_at
+    FROM samples
 ), coverage AS (
     SELECT count(DISTINCT (account_id, provider_identity_hash)) AS bindings,
            count(*) FILTER (WHERE provider_identity_hash IS NULL) AS missing_identity
@@ -76,15 +79,29 @@ WITH bounds AS (
                 WHEN observed_change = settled_payout - placed_stake THEN 'matches_known_orders'
                 ELSE 'unexplained_change' END AS evidence
     FROM intervals
+), interval_summary AS (
+    SELECT count(*) AS compared_intervals,
+           count(*) FILTER (WHERE evidence = 'sampling_gap') AS sampling_gaps,
+           count(*) FILTER (WHERE evidence = 'incomplete') AS incomplete_intervals,
+           count(*) FILTER (WHERE cash_flow_difference <> 0) AS intervals_with_difference,
+           sum(placements) AS placements, sum(settlements) AS settlements,
+           sum(placed_stake) AS placed_stake, sum(settled_payout) AS settled_payout,
+           sum(observed_change) AS observed_change,
+           sum(cash_flow_difference) AS cash_flow_difference,
+           sum(abs(cash_flow_difference)) AS absolute_cash_flow_difference
+    FROM result
 )
 SELECT jsonb_build_object(
     'window_start', b.window_start,
     'window_end', b.window_end,
-    'samples', (SELECT count(*) FROM samples),
-    'first_at', (SELECT min(observed_at) FROM samples),
-    'last_at', (SELECT max(observed_at) FROM samples),
+    'samples', span.samples,
+    'first_at', span.first_at,
+    'last_at', span.last_at,
+    'unobserved_start_seconds', extract(epoch FROM span.first_at - b.window_start),
+    'unobserved_end_seconds', extract(epoch FROM b.window_end - span.last_at),
     'bindings', c.bindings,
     'missing_identity', c.missing_identity,
+    'comparison', to_jsonb(summary),
     'intervals', coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY start_at) FROM result r), '[]'::jsonb)
-) FROM coverage c CROSS JOIN bounds b;
+) FROM coverage c CROSS JOIN bounds b CROSS JOIN sample_span span CROSS JOIN interval_summary summary;
 ROLLBACK;
