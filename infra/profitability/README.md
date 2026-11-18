@@ -33,6 +33,10 @@ Inspect coverage, tied timestamps and unresolved outcomes before interpreting th
 
 Run `source_holdout.sql` with the same four UTC parameters as the fixture exposure replay. It covers filled automatic orders across all markets. A source or a source and author pair qualifies for a replay exclusion if its earlier fills span at least 20 settled fixtures and three UTC placement dates and have a negative sum of net receipts per unit staked. Only settled receipts observed before the split inform that exclusion. The later cohort reports realized receipt net, settled stake, and equal-stake return by phase and in aggregate. A zero exclusion count means the training sample did not trigger the rule. The fills represent the existing policy's accepted orders, so the replay omits opportunities that the original policy did not submit or fill.
 
+# Recommendation freshness replay
+
+Run `freshness_replay.sql` with the same four UTC parameters as the fixture exposure replay. It compares all observed automatic fills against two pre-send limits, 60 seconds since signal creation and 120 seconds since the original message. It uses the authorization timestamp for the execution attempt that filled the order. Missing or inconsistent timestamps stay visible in the baseline and fail the candidate limits. This replay covers existing fills and does not capture new opportunities that faster processing might make available.
+
 # Private wallet observations
 
 Install `install_wallet_observation.sql` as a database administrator in a single transaction after confirming the production order ledger has exactly one distinct account binding and provider identity. The security-definer function exposes only that account's available balance and observation timestamp when the active binding is healthy and its provider identity matches the order ledger. The monitor role receives function execution only, without account-table column access.
