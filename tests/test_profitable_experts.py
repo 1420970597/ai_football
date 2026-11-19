@@ -70,8 +70,8 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
         signal, quote = uuid.uuid4(), uuid.uuid4()
         fixture = 'leyu:' + uuid.uuid4().hex
         await self.pool.execute(
-            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,source_updated_at) "
-            "VALUES($1,$1,$2,'联赛','甲','乙',now(),$3,now())", fixture, sport, phase)
+            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,source_updated_at,home_score,away_score) "
+            "VALUES($1,$1,$2,'联赛','甲','乙',now(),$3,now(),0,0)", fixture, sport, phase)
         await self.pool.execute(
             "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,period,market_kind,status,play_id,market_instance_id,selection_id) "
             "VALUES($1,$2,'2','全场大小',2.5,'over',1.95,now(),'full_time','total','active','2','market','option')", quote, fixture)
