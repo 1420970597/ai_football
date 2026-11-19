@@ -1,4 +1,9 @@
 from copy import deepcopy
+import json
+from pathlib import Path
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
 import unittest
 
 from reference_preflight import compare
@@ -48,3 +53,33 @@ class ReferencePreflightTests(unittest.TestCase):
         self.assertEqual('different_rules', self.compare(self.market)[0]['status'])
         self.binding['period'] = 'full_time'
         self.assertEqual([], self.compare(self.market))
+
+    def test_replay_retains_complete_rounds_from_interrupted_capture(self):
+        first_round = json.dumps({'markets': [self.market], 'captured_at': self.preflight['captured_at']}).encode() + b'\n'
+        shut = deepcopy(self.market)
+        shut['accepting_orders'] = False
+        shut['books'][0]['received_at'] = '2026-11-19T12:02:59Z'
+        last_round = json.dumps({'markets': [shut], 'captured_at': self.preflight['captured_at']}).encode() + b'\n'
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / 'preflights.json').write_text(json.dumps([self.preflight]))
+            (path / 'bindings.json').write_text(json.dumps([self.binding]))
+            first = path / 'capture-first.jsonl'
+            second = path / 'capture-second.jsonl'
+            command = [sys.executable, str(Path(__file__).with_name('reference_preflight.py')),
+                       str(path / 'preflights.json'), str(path / 'bindings.json')]
+            first.write_bytes(first_round + b'{"markets":["\xe4')
+            second.write_bytes(last_round)
+            recovered = subprocess.run([*command, first, second], capture_output=True, text=True, timeout=5)
+            self.assertEqual(0, recovered.returncode, recovered.stderr)
+            report = json.loads(recovered.stdout)
+            self.assertEqual((2, 1), (report['capture_rounds'], report['archives_with_incomplete_tail']))
+            self.assertEqual('market_not_open', report['preflights'][0]['references'][0]['status'])
+
+            for data in (b'{"markets":', b'{"markets":\n' + first_round):
+                with self.subTest(data=data):
+                    first.write_bytes(data)
+                    result = subprocess.run([*command, first], capture_output=True, text=True, timeout=5)
+                    self.assertEqual(1, result.returncode)
+                    self.assertEqual('', result.stdout)

@@ -97,13 +97,19 @@ def main():
         preflights = json.loads(args.preflights.read_text())
         bindings = json.loads(args.bindings.read_text())
         archive = []
+        interrupted = 0
         for path in args.archive:
-            with path.open() as records:
-                archive.extend(json.loads(line) for line in records)
+            with path.open('rb') as records:
+                for line in records:
+                    if not line.endswith(b'\n'):
+                        interrupted += 1
+                        break
+                    archive.append(json.loads(line))
         if not archive:
             raise ValueError('no captured order book rounds')
         matches = compare(preflights, bindings, archive, args.max_age_seconds)
         print(json.dumps({'capture_rounds': len(archive), 'max_age_seconds': args.max_age_seconds,
+                          'archives_with_incomplete_tail': interrupted,
                           'preflights': matches}))
     except (OSError, KeyError, TypeError, ValueError, InvalidOperation) as error:
         parser.exit(1, f'Invalid preflight evidence ({type(error).__name__})\n')
