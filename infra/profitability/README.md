@@ -87,6 +87,12 @@ The two persistent-loss comparisons additionally require at least five distinct 
 
 The fixture-loss comparisons start from the original source and source-author exclusions. They additionally require at least 20 distinct training fixtures with usable stake and net in the receipts available at the split. Each fixture contributes the mean of its order-level returns per unit staked. The resulting sum must be negative after removing the lowest-return fixture.
 
+# Expert message exposure
+
+Run `message_exposure.sql` with `psql -XqAt -v ON_ERROR_STOP=1 -v begin=<UTC placement start> -v end=<UTC placement cutoff> -v observed=<UTC receipt cutoff> -v anchor=<UTC settlement anchor>`. Group native automatic fills by the original message within the specified placement interval. It assigns each message to a 12-hour placement cohort based on its first fill in that interval. A later report can reuse `begin` and `end` with a newer `observed` to track receipts without adding fills. Source names, account identifiers, message identifiers and individual orders are omitted.
+
+Read coverage before interpreting groups. The query publishes groups when the cohort has one account binding, complete message and stake context, at most one known currency, and documented upstream acceptance for every fill as of `observed`. Fully settled messages require a settlement receipt with a finite net amount observed by the cutoff for every fill. Their results are placement diagnostics. The settlement-window report provides the distinct 12-hour verification.
+
 # Cross-source recommendation replay
 
 Run `cross_source_replay.sql` with the same four UTC parameters as the source holdout. It compares existing automatic fills across all observed markets. A peer must have a different author and source, an exact match on recorded contract fields, and a recommendation and underlying message already available within the five minutes before the matching send authorization. Withdrawn or deleted picks are excluded as of that authorization. Live peers must have matching recorded scores at recommendation, and the filled order needs the same known full-match score in its permit. A missing permit or live score is reported separately from an eligible order with no peers.
