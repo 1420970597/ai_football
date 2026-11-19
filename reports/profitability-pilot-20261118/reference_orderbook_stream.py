@@ -14,7 +14,7 @@ from reference_orderbooks import polymarket_metadata
 
 
 ENDPOINT = 'wss://ws-subscriptions-clob.polymarket.com/ws/market'
-ARCHIVE_LIMIT = 16 * 1024 * 1024
+ARCHIVE_LIMIT = 64 * 1024 * 1024
 
 
 def book_event(row, received, conditions, initialized):
@@ -35,7 +35,7 @@ def book_event(row, received, conditions, initialized):
     return {'kind': kind, 'received_at': received.isoformat(), 'event': row}
 
 
-def capture(markets, seconds):
+def capture(markets, seconds, end_at=None):
     conditions = {}
     for slug in markets:
         metadata, sides = polymarket_metadata(slug)
@@ -49,7 +49,10 @@ def capture(markets, seconds):
     initialized = set()
     with connect(ENDPOINT, open_timeout=8, close_timeout=2, max_size=1024 * 1024) as socket:
         socket.send(json.dumps({'assets_ids': list(conditions), 'type': 'market', 'custom_feature_enabled': True}))
-        deadline = monotonic() + seconds
+        remaining = min(seconds, end_at - datetime.now(timezone.utc).timestamp()) if end_at is not None else seconds
+        if remaining <= 0:
+            raise ValueError('scheduled stream window has ended')
+        deadline = monotonic() + remaining
         heartbeat = monotonic() + 8
         while (current := monotonic()) < deadline:
             if current >= heartbeat:
@@ -60,6 +63,8 @@ def capture(markets, seconds):
             except TimeoutError:
                 continue
             received = datetime.now(timezone.utc)
+            if end_at is not None and received.timestamp() >= end_at:
+                break
             if message == 'PONG':
                 continue
             decoded = json.loads(message)
@@ -71,13 +76,14 @@ def capture(markets, seconds):
                     yield record
     if initialized != conditions.keys():
         raise ValueError('initial subscription books are incomplete')
-    yield {'kind': 'observation_end', 'assets_initialized': len(initialized), 'observation_seconds': seconds}
+    yield {'kind': 'observation_end', 'assets_initialized': len(initialized), 'observation_seconds': remaining}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('markets', nargs='+')
     parser.add_argument('--seconds', type=int, default=60)
+    parser.add_argument('--end-at', type=int, help='scheduled UTC end as POSIX seconds')
     args = parser.parse_args()
     if (not 5 <= args.seconds <= 900 or not 1 <= len(args.markets) <= 8
             or len(set(args.markets)) != len(args.markets)
@@ -85,7 +91,7 @@ def main():
         parser.error('provide one to eight public markets and a duration of 5 to 900 seconds')
     size = 0
     try:
-        for row in capture(args.markets, args.seconds):
+        for row in capture(args.markets, args.seconds, args.end_at):
             payload = json.dumps(row, separators=(',', ':'))
             size += len(payload) + 1
             if size > ARCHIVE_LIMIT:

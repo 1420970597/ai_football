@@ -37,7 +37,8 @@ if [[ ! -s "$archive/$bindings" || ! -r "$archive/$bindings" ]]; then
 fi
 
 unit_active() {
-    systemctl is-active --quiet "$1.timer" || systemctl is-active --quiet "$1.service"
+    systemctl is-active --quiet "$1.timer" ||
+        [[ $(systemctl show "$1.service" --property=ActiveState --value) =~ ^(active|activating)$ ]]
 }
 
 restore_score() {
@@ -81,13 +82,15 @@ restore_fixture() {
     local capture_unit="ai-football-profitability-reference-$name"
     local stream_unit="ai-football-profitability-reference-stream-$name"
     local replay_unit="ai-football-profitability-reference-replay-$name"
-    local now begin_epoch end_epoch earliest capture_at stream_at replay_at
+    local now begin_epoch end_epoch earliest capture_at stream_at stream_start stream_end replay_at
     now=$(date -u +%s)
     begin_epoch=$(date -u -d "$begin" +%s)
     end_epoch=$(date -u -d "$end" +%s)
     earliest=$((now + 5))
     capture_at=$((begin_epoch > earliest ? begin_epoch : earliest))
     stream_at=$((begin_epoch + 180))
+    stream_start=$((stream_at > earliest ? stream_at : earliest))
+    stream_end=$((stream_at + 900))
     replay_at=$((end_epoch > earliest ? end_epoch : earliest))
 
     if unit_active "$capture_unit"; then
@@ -104,9 +107,9 @@ restore_fixture() {
 
     if unit_active "$stream_unit"; then
         printf '%s\n' "$name public stream observation is active."
-    elif (( earliest <= stream_at )); then
-        register_once "$stream_unit" "$stream_at" 930s \
-            "$root/capture_reference_window.sh" --stream "$label" --seconds 900 \
+    elif (( stream_start + 5 <= stream_end )); then
+        register_once "$stream_unit" "$stream_start" 930s \
+            "$root/capture_reference_window.sh" --stream "$label" --seconds 900 --end-at "$stream_end" \
             "$label-$home" "$label-draw" "$label-$away" "$label-total-2pt5" \
             "$label-first-half-total-1pt5" "$label-spread-$handicap-1pt5"
     fi

@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SVAY = 'ai-football-profitability-reference-svay'
+SVAY_STREAM = 'ai-football-profitability-reference-stream-svay'
 SVAY_REPLAY = 'ai-football-profitability-reference-replay-svay'
 SVAY_LABEL = 'aseanc-svr-por-2026-11-19'
 
@@ -32,7 +33,13 @@ class ReferencePilotRestoreTests(unittest.TestCase):
 
         for name, body in {
             'date': 'if [[ $* == "-u +%s" ]]; then echo "$NOW"; else exec /bin/date "$@"; fi',
-            'systemctl': '[[ $* == "is-active --quiet $LIVE_UNIT" ]]',
+            'systemctl': '''
+if [[ $1 == is-active ]]; then
+    [[ $3 == "$LIVE_UNIT" && $LIVE_STATE == active ]]
+elif [[ $1 == show ]]; then
+    if [[ $2 == "$LIVE_UNIT" ]]; then echo "$LIVE_STATE"; else echo inactive; fi
+fi
+''',
             'systemd-run': 'printf "%s\\t" "$@"; printf "\\n"',
         }.items():
             executable = commands / name
@@ -40,8 +47,8 @@ class ReferencePilotRestoreTests(unittest.TestCase):
             executable.chmod(0o700)
         (scripts / 'capture_reference_window.sh').write_text('printf "%s\\n" "$@"\n')
 
-    def invoke(self, now, *args, active=''):
-        env = dict(self.env, NOW=str(int(datetime.fromisoformat(now).timestamp())), LIVE_UNIT=active)
+    def invoke(self, now, *args, active='', state='active'):
+        env = dict(self.env, NOW=str(int(datetime.fromisoformat(now).timestamp())), LIVE_UNIT=active, LIVE_STATE=state)
         result = subprocess.run(
             ['bash', self.script, *args], env=env, capture_output=True, text=True, timeout=5,
         )
@@ -59,7 +66,7 @@ class ReferencePilotRestoreTests(unittest.TestCase):
         vienna = units['ai-football-profitability-reference-vienna']
         self.assertIn('--on-calendar=2026-11-19 17:42:00 UTC', vienna)
         self.assertIn('KXUCLWSPREAD-26NOV19FAKBMU-BMU2', vienna)
-        stream = units['ai-football-profitability-reference-stream-svay']
+        stream = units[SVAY_STREAM]
         self.assertIn('--on-calendar=2026-11-19 12:00:00 UTC', stream)
         self.assertIn('--stream', stream)
         self.assertIn(f'{SVAY_LABEL}-spread-home-1pt5', stream)
@@ -74,7 +81,7 @@ class ReferencePilotRestoreTests(unittest.TestCase):
         result, units = self.invoke('2026-11-19T12:00:00+00:00')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn('--on-calendar=2026-11-19 12:00:05 UTC', units[SVAY])
-        self.assertNotIn('ai-football-profitability-reference-stream-svay', units)
+        self.assertIn('--on-calendar=2026-11-19 12:00:05 UTC', units[SVAY_STREAM])
         capture = ('--capture', '2026-11-19T11:57:00Z', SVAY_LABEL, '--polymarket', SVAY_LABEL + '-svr')
         result, _ = self.invoke('2026-11-19T12:07:00+00:00', *capture)
         self.assertEqual(0, result.returncode, result.stderr)
@@ -85,6 +92,21 @@ class ReferencePilotRestoreTests(unittest.TestCase):
         result, _ = self.invoke('2026-11-19T14:07:22+00:00', *capture)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn('--samples', result.stdout)
+
+    def test_interrupted_stream_resumes_until_fixed_end_and_running_stream_is_preserved(self):
+        now = '2026-11-19T12:09:00+00:00'
+        result, units = self.invoke(now)
+        self.assertEqual(0, result.returncode, result.stderr)
+        stream = units[SVAY_STREAM]
+        self.assertIn('--on-calendar=2026-11-19 12:09:05 UTC', stream)
+        self.assertEqual(str(int(datetime.fromisoformat('2026-11-19T12:15:00+00:00').timestamp())),
+                         stream[stream.index('--end-at') + 1])
+        result, units = self.invoke(now, active=f'{SVAY_STREAM}.service', state='activating')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn(SVAY_STREAM, units)
+        result, units = self.invoke('2026-11-19T12:15:00+00:00')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn(SVAY_STREAM, units)
 
     def test_elapsed_windows_replay_only_when_usable_archive_exists(self):
         capture = self.archive / f'{SVAY_LABEL}-2026-11-19T11:57:00Z.jsonl'
