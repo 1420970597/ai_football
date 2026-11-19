@@ -1,12 +1,15 @@
 # 自然预检的同步外部报价采样
 
-2026 年 11 月 19 日以近 72 小时已成交的赛事类型为起点，匹配同日赛程。东南亚球会锦标赛、欧女冠、巴甲各有一场已登记连续采样。每场从开球前 3 分钟开始，以 33 秒为轮次间隔，最多 238 轮。采集包括胜平负三项、全场大小、上半场大小和全场让球。欧女冠另有 Kalshi 全场大小与让球，巴甲另有 Kalshi 全场大小。 [柴桢对泰港目录](https://gamma-api.polymarket.com/events/slug/aseanc-svr-por-2026-11-19) [奥地利维也纳对拜仁目录](https://gamma-api.polymarket.com/events/slug/uwcl-faw-bm-2026-11-19) [瓦斯科对巴西国际目录](https://gamma-api.polymarket.com/events/slug/bra-vas-int-2026-11-19)
+2026 年 11 月 19 日以近期已成交的赛事类型为起点，匹配同日赛程。东南亚球会锦标赛和巴甲各登记一场连续采样，欧女冠登记两场。每场从开球前 3 分钟开始，以 33 秒为轮次间隔，最多 238 轮。采集包括胜平负三项、全场大小、上半场大小和全场让球。奥地利维也纳对拜仁另有 Kalshi 全场大小与让球，巴甲另有 Kalshi 全场大小。 [柴桢对泰港目录](https://gamma-api.polymarket.com/events/slug/aseanc-svr-por-2026-11-19) [奥地利维也纳对拜仁目录](https://gamma-api.polymarket.com/events/slug/uwcl-faw-bm-2026-11-19) [本菲卡对罗马目录](https://gamma-api.polymarket.com/events/slug/uwcl-slb-asr-2026-11-19) [瓦斯科对巴西国际目录](https://gamma-api.polymarket.com/events/slug/bra-vas-int-2026-11-19)
 
 | 比赛 | 采样启动 UTC | 回放启动 UTC |
 | --- | --- | --- |
 | 柴桢对泰港 | 11 月 19 日 11:57 | 11 月 19 日 14:32 |
 | 奥地利维也纳女足对拜仁女足 | 11 月 19 日 17:42 | 11 月 19 日 20:17 |
+| 本菲卡女足对罗马女足 | 11 月 19 日 19:57 | 11 月 19 日 22:32 |
 | 瓦斯科达伽马对巴西国际 | 11 月 19 日 22:27 | 11 月 20 日 01:02 |
+
+13:48 UTC，近 48 小时实际订单中，东南亚球会锦标赛、巴甲、欧女冠分别有 14、13、10 笔。欧女冠新增一场，采样时段与已有三场错开。生产赛事、欧足联赛程、ESPN 赛况和 Polymarket 原生开球时间相符。单轮线上试采读取六个市场的 12 份订单簿，规则摘要均与采样映射和私有赛事绑定一致。ESPN 试读取回正确的主客标识和赛前状态。已登记 19:57 UTC 报价及比分采样、20:00 UTC 盘口公开流和 22:32 UTC 回放。恢复依赖宿主取证目录中的原始赛事绑定，其中已加入该场六个来源绑定。 [欧足联赛程](https://www.uefa.com/womenschampionsleague/news/02ab-220ff9af21a9-748c51d8b995-1000--women-s-champions-league-matchday-5-preview-chelsea-vs-pa/) [ESPN 赛况](https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.wchampions/summary?event=401916974) [方向映射](reference-outcomes-20261119.json)
 
 03:28 UTC 欧女冠试采拿到三个 Polymarket 盘口的双边深度和各侧原生时间。Kalshi 的全场大小和让球均有双边深度，公开订单簿缺原生 UTC 时间。其成交时间仅适用于对应成交。三场计划使用的 21 个市场均经公开入口查验。公开目录可核验比赛和盘口含义，源独立性、滚球基线及实际交易费用仍需核实。 [Kalshi 欧女冠大小](https://api.elections.kalshi.com/trade-api/v2/markets?event_ticker=KXUCLWTOTAL-26NOV19FAKBMU) [Kalshi 巴甲大小](https://api.elections.kalshi.com/trade-api/v2/markets?event_ticker=KXBRASILEIROTOTAL-26NOV19VDGINT)
 

@@ -131,12 +131,16 @@ restore_fixture svay aseanc-svr-por-2026-11-19 leyu:5860873 \
 restore_fixture vienna uwcl-faw-bm-2026-11-19 leyu:5831446 \
     2026-11-19T17:42:00Z 2026-11-19T20:17:00Z faw bm away \
     --kalshi KXUCLWTOTAL-26NOV19FAKBMU-3 --kalshi KXUCLWSPREAD-26NOV19FAKBMU-BMU2
+restore_fixture benfica uwcl-slb-asr-2026-11-19 leyu:5831469 \
+    2026-11-19T19:57:00Z 2026-11-19T22:32:00Z slb asr home
 restore_fixture vasco bra-vas-int-2026-11-19 leyu:5816659 \
     2026-11-19T22:27:00Z 2026-11-20T01:02:00Z vas int home \
     --kalshi KXBRASILEIROTOTAL-26NOV19VDGINT-3
 
 restore_score vienna 2026-11-19T17:42:00Z uwcl-faw-bm-2026-11-19 \
     401916978 VIE MUN --soccer-league uefa.wchampions --kickoff 2026-11-19T17:45:00Z
+restore_score benfica 2026-11-19T19:57:00Z uwcl-slb-asr-2026-11-19 \
+    401916974 BEN ROMA --soccer-league uefa.wchampions --kickoff 2026-11-19T20:00:00Z
 restore_score vasco 2026-11-19T22:27:00Z bra-vas-int-2026-11-19 \
     401841308 VAS INT --soccer-league bra.1 --kickoff 2026-11-19T22:30:00Z
 

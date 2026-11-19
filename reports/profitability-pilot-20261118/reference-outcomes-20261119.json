@@ -1,5 +1,11 @@
 {
   "polymarket": {
+    "uwcl-slb-asr-2026-11-19-slb": {"rules_sha256": "23551d1e4f5198b7cc196279f5ad7556d49dc631d8470d87b2438890da123d89", "selection": "home", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-slb-asr-2026-11-19-draw": {"rules_sha256": "c961cfb350b5707f59bc657c1dfd6e3f758ba6f260b6cf120d75881035226565", "selection": "draw", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-slb-asr-2026-11-19-asr": {"rules_sha256": "a527fc96db22854ba39603b0e371bbbe28beb31369a8f7b2624f7ba5e7e09eeb", "selection": "away", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-slb-asr-2026-11-19-total-2pt5": {"rules_sha256": "6427d0e4040c96e7745c6b40f14b5c4836d5662c32196694875fa8acc2826404", "labels": {"Over": "over", "Under": "under"}},
+    "uwcl-slb-asr-2026-11-19-first-half-total-1pt5": {"rules_sha256": "ebd43be50387f31271c2a0ea6fb9a09989ffa694a125a79341fb31489b37098c", "labels": {"Over": "over", "Under": "under"}},
+    "uwcl-slb-asr-2026-11-19-spread-home-1pt5": {"rules_sha256": "901a76549c3c2ded04e8a49429f680b7511e68819796ebbb3266dc1c571eaf8f", "labels": {"Sport Lisboa e Benfica": "home", "AS Roma": "away"}},
     "aseanc-svr-por-2026-11-19-svr": {"rules_sha256": "ac1ff64132f1b00f2b651b44922e520de7d3d0ef67b29477ce86affa70c3507f", "selection": "home", "labels": {"Yes": "yes", "No": "no"}},
     "aseanc-svr-por-2026-11-19-draw": {"rules_sha256": "328f5921b4b221042058bf060734ac2ca3003fc72a7a84a3d1a5a62871cbd338", "selection": "draw", "labels": {"Yes": "yes", "No": "no"}},
     "aseanc-svr-por-2026-11-19-por": {"rules_sha256": "c2a654bb734766a7dff593c7d49fc280e239f3b7c39a5cecc12da9cf23faf05e", "selection": "away", "labels": {"Yes": "yes", "No": "no"}},

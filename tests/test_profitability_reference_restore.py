@@ -93,6 +93,29 @@ fi
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn('--samples', result.stdout)
 
+    def test_benfica_market_and_score_observation_share_the_fixture_window(self):
+        result, units = self.invoke('2026-11-19T13:00:00+00:00')
+        self.assertEqual(0, result.returncode, result.stderr)
+        prefix = 'ai-football-profitability-reference-'
+        label = 'uwcl-slb-asr-2026-11-19'
+        markets = units[prefix + 'benfica']
+        stream = units[prefix + 'stream-benfica']
+        score = units[prefix + 'score-benfica']
+        replay = units[prefix + 'replay-benfica']
+        for unit in (markets, score):
+            self.assertIn('--on-calendar=2026-11-19 19:57:00 UTC', unit)
+        self.assertIn('--on-calendar=2026-11-19 20:00:00 UTC', stream)
+        market_names = [f'{label}-{suffix}' for suffix in (
+            'slb', 'draw', 'asr', 'total-2pt5', 'first-half-total-1pt5', 'spread-home-1pt5',
+        )]
+        self.assertEqual(market_names, [value for value in markets if value.startswith(f'{label}-')])
+        self.assertEqual(market_names, stream[-6:])
+        self.assertEqual(['401916974', 'BEN', 'ROMA', '--soccer-league', 'uefa.wchampions',
+                          '--kickoff', '2026-11-19T20:00:00Z'], score[-7:])
+        self.assertIn('--on-calendar=2026-11-19 22:32:00 UTC', replay)
+        self.assertEqual([label, 'leyu:5831469', '2026-11-19T19:57:00Z', '2026-11-19T22:32:00Z',
+                          self.bindings.name], replay[-5:])
+
     def test_interrupted_stream_resumes_until_fixed_end_and_running_stream_is_preserved(self):
         now = '2026-11-19T12:09:00+00:00'
         result, units = self.invoke(now)
