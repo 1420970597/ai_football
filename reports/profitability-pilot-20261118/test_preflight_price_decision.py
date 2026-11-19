@@ -86,6 +86,8 @@ class PreflightPriceDecisionTests(unittest.TestCase):
         }
         self.assertEqual(['live_state_unverified', 'live_delay_unresolved', 'live_event_evidence_conflict'],
                          self.evaluate()['reasons'])
+        self.row['score_comparison']['kalshi_comparison'] = {'status': 'score_conflict'}
+        self.assertIn('cross_source_live_state_conflict', self.evaluate()['reasons'])
 
     def test_live_handicap_conversion_preserves_selection_and_requires_matching_state(self):
         terms = {'market_id': '4', 'kind': 'handicap', 'phase': 'live', 'line': '0.5',

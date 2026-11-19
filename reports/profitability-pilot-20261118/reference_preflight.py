@@ -126,16 +126,25 @@ def match_scores(preflight, binding, records, cutoff, max_age_seconds):
     if result['age_seconds'] > max_age_seconds:
         return result | {'status': 'stale_score_observation'}
     status = sample['status']
-    if status.get('type', {}).get('state') != 'in':
+    phase = status.get('type', {})
+    name, period = phase.get('name'), status.get('period')
+    result |= {'period': period, 'display_clock': status.get('displayClock'), 'native_status': name}
+    if 'kalshi_milestone' in binding:
+        result['kalshi_comparison'] = compare_kalshi(sample, binding['kalshi_milestone'], cutoff, max_age_seconds)
+    if phase.get('state') != 'in':
         return result | {'status': 'score_phase_mismatch'}
+    if name == 'STATUS_HALFTIME':
+        return result | {'status': 'score_play_paused'}
+    expected = {1: 'STATUS_FIRST_HALF', 2: 'STATUS_SECOND_HALF'}.get(period) if type(period) is int else None
+    if expected is None or name not in {expected, 'STATUS_IN_PROGRESS'}:
+        return result | {'status': 'score_play_state_unverified'}
     native_times = [instant(event['wallclock']) for event in sample['key_events'] if event.get('wallclock')]
     if any(stamp > received for stamp in native_times):
         return result | {'status': 'invalid_score_event_time'}
     baseline = preflight.get('score_baseline') or {}
     observed = [teams[side][1] for side in ('home', 'away')]
     wanted = [baseline.get(side) for side in ('home', 'away')]
-    result |= {'period': status.get('period'), 'display_clock': status.get('displayClock'),
-               'latest_native_event_at': max(native_times).isoformat() if native_times else None,
+    result |= {'latest_native_event_at': max(native_times).isoformat() if native_times else None,
                'event_context': soccer_event_context(sample, received)}
     if not all(type(value) is int and value >= 0 for value in wanted):
         return result | {'status': 'preflight_score_missing'}
@@ -143,6 +152,34 @@ def match_scores(preflight, binding, records, cutoff, max_age_seconds):
         return result | {'status': 'reference_score_missing'}
     actual = list(map(int, observed))
     return result | {'score': actual, 'status': 'observed_score_matches' if actual == wanted else 'score_mismatch'}
+
+
+def compare_kalshi(sample, milestone, cutoff, max_age_seconds):
+    observation = sample.get('kalshi')
+    if not observation:
+        return {'status': 'missing_observation'}
+    if observation.get('milestone') != milestone:
+        return {'status': 'fixture_mismatch'}
+    received = instant(observation['received_at'])
+    if received > cutoff or instant(observation['requested_at']) > received:
+        return {'status': 'invalid_observation_time'}
+    if cutoff - received > timedelta(seconds=max_age_seconds) or observation.get('live_data_delayed') is True:
+        return {'status': 'delayed_observation'}
+    if observation.get('error'):
+        return {'status': 'read_failed'}
+    scores = [observation.get(key) for key in ('home_same_game_score', 'away_same_game_score')]
+    if any(type(score) is not int or score < 0 for score in scores):
+        return {'status': 'score_missing'}
+    phase = observation.get('match_status')
+    result = {'received_at': observation['received_at'], 'score': scores, 'native_status': phase}
+    if (phase == 'halftime' or sample['status'].get('type', {}).get('name') == 'STATUS_HALFTIME'):
+        return result | {'status': 'halftime_observed'}
+    if sample['status'].get('type', {}).get('state') == 'in' and phase in {'not_started', 'ended'}:
+        return result | {'status': 'phase_conflict'}
+    expected = [str(sample['teams'][side][1]) for side in ('home', 'away')]
+    if not all(re.fullmatch(r'[0-9]{1,3}', score) for score in expected):
+        return result | {'status': 'espn_score_missing'}
+    return result | {'status': 'same_observed_score' if scores == list(map(int, expected)) else 'score_conflict'}
 
 
 def native_book_times(observation, cutoff):

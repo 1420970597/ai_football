@@ -322,12 +322,12 @@ class ReferencePreflightTests(unittest.TestCase):
         preflight = self.preflight | {'sport': 'football', 'phase': 'live', 'effective_score_basis': 'full_period',
                                       'score_baseline': {'home': 1, 'away': 0}}
         binding = {'event': '101', 'league': 'bra.1', 'scheduled_start': '2026-11-19T12:00:00Z',
-                   'home': 'VAS', 'away': 'INT'}
+                   'home': 'VAS', 'away': 'INT', 'kalshi_milestone': 'independent-match'}
         observation = {
             'event': '101', 'league': 'bra.1', 'scheduled_start': '2026-11-19T12:00Z',
             'requested_at': '2026-11-19T12:02:48Z', 'received_at': '2026-11-19T12:02:50Z',
             'teams': {'home': ['VAS', '1'], 'away': ['INT', '0']},
-            'status': {'period': 1, 'displayClock': "3'", 'type': {'state': 'in'}},
+            'status': {'period': 1, 'displayClock': "3'", 'type': {'state': 'in', 'name': 'STATUS_FIRST_HALF'}},
             'key_events': [{'wallclock': '2026-11-19T12:01:10Z'}],
         }
 
@@ -352,6 +352,9 @@ class ReferencePreflightTests(unittest.TestCase):
             ({'requested_at': '2026-11-19T12:02:51Z'}, 'invalid_score_observation_time'),
             ({'key_events': [{'wallclock': '2026-11-19T12:02:51Z'}]}, 'invalid_score_event_time'),
             ({'status': {'type': {'state': 'pre'}}}, 'score_phase_mismatch'),
+            ({'status': {'period': 1, 'type': {'state': 'in', 'name': 'STATUS_HALFTIME'}}}, 'score_play_paused'),
+            ({'status': {'period': 3, 'type': {'state': 'in', 'name': 'STATUS_IN_PROGRESS'}}}, 'score_play_state_unverified'),
+            ({'status': {'period': 2, 'type': {'state': 'in', 'name': 'STATUS_FIRST_HALF'}}}, 'score_play_state_unverified'),
             ({'teams': {'home': ['VAS', '2'], 'away': ['INT', '0']}}, 'score_mismatch'),
             ({'teams': {'home': ['VAS', None], 'away': ['INT', '0']}}, 'reference_score_missing'),
         ]
@@ -359,6 +362,18 @@ class ReferencePreflightTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertEqual(status, replay(observation | patch)['status'])
         self.assertEqual('score_source_read_failed', replay(observation, observation | cases[0][0])['status'])
+        external = {'milestone': binding['kalshi_milestone'], 'requested_at': '2026-11-19T12:02:51Z',
+                    'received_at': '2026-11-19T12:02:52Z', 'match_status': 'first_half',
+                    'home_same_game_score': 1, 'away_same_game_score': 0}
+        for patch, status in (({}, 'same_observed_score'), ({'home_same_game_score': 2}, 'score_conflict'),
+                              ({'match_status': 'halftime'}, 'halftime_observed'),
+                              ({'match_status': 'ended'}, 'phase_conflict'),
+                              ({'live_data_delayed': True}, 'delayed_observation'),
+                              ({'milestone': 'different-match'}, 'fixture_mismatch'),
+                              ({'received_at': '2026-11-19T12:03:01Z'}, 'invalid_observation_time')):
+            with self.subTest(status=status):
+                checked = replay(observation | {'kalshi': external | patch})
+                self.assertEqual(status, checked['kalshi_comparison']['status'])
 
     def test_team_total_requires_explicit_matching_team_direction(self):
         offered = self.preflight | {'kind': 'team_total'}
@@ -380,7 +395,7 @@ class ReferencePreflightTests(unittest.TestCase):
         sample = score_binding | {
             'requested_at': '2026-11-19T12:02:56Z', 'received_at': '2026-11-19T12:02:58Z',
             'teams': {'home': ['VAS', '1'], 'away': ['INT', '0']},
-            'status': {'period': 1, 'type': {'state': 'in'}},
+            'status': {'period': 1, 'type': {'state': 'in', 'name': 'STATUS_FIRST_HALF'}},
             'team_ids': {'home': '1001', 'away': '1002'}, 'red_cards': {'home': 0, 'away': 1},
             'wallclock_available': True, 'key_events_available': True, 'key_events': [delay, card],
         }

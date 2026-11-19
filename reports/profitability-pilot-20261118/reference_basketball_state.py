@@ -10,6 +10,7 @@ from urllib.request import urlopen
 
 
 SUMMARY = 'https://site.api.espn.com/apis/site/v2/sports'
+KALSHI = 'https://external-api.kalshi.com/trade-api/v2/live_data/milestone/'
 STATE_KEYS = ('clock', 'displayClock', 'period', 'type')
 PLAY_KEYS = ('id', 'sequenceNumber', 'wallclock', 'period', 'clock', 'homeScore', 'awayScore', 'type', 'scoringPlay')
 SOCCER_EVENT_KEYS = ('id', 'wallclock', 'period', 'clock', 'type', 'scoringPlay', 'shootout')
@@ -76,6 +77,26 @@ def capture(event_id, home, away, *, league=None, kickoff=None):
     return result | {'requested_at': requested_at.isoformat(), 'received_at': received_at.isoformat()}
 
 
+def capture_kalshi(milestone):
+    requested = datetime.now(timezone.utc)
+    result = {'milestone': milestone}
+    try:
+        with urlopen(KALSHI + milestone, timeout=8) as response:
+            raw = response.read(64_001)
+        if len(raw) > 64_000:
+            raise ValueError('Kalshi game state size limit')
+        state = json.loads(raw)['live_data']
+        if state['milestone_id'] != milestone or state['type'] != 'soccer_tournament_multi_leg':
+            raise ValueError('Kalshi game state identity mismatch')
+        details = state['details']
+        fields = ('status', 'match_status', 'half', 'time', 'home_same_game_score', 'away_same_game_score',
+                  'live_data_delayed')
+        result.update({key: details.get(key) for key in fields})
+    except (HTTPException, KeyError, TypeError, ValueError, OSError) as error:
+        result.update(error=type(error).__name__, http_status=getattr(error, 'code', None))
+    return result | {'requested_at': requested.isoformat(), 'received_at': datetime.now(timezone.utc).isoformat()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('event_id')
@@ -83,6 +104,7 @@ def main():
     parser.add_argument('away')
     parser.add_argument('--soccer-league')
     parser.add_argument('--kickoff')
+    parser.add_argument('--kalshi-milestone')
     parser.add_argument('--samples', type=int, default=1)
     parser.add_argument('--interval-seconds', type=int, default=30)
     args = parser.parse_args()
@@ -101,10 +123,15 @@ def main():
             parser.error('soccer observations require a league and an explicit kickoff timezone')
     if not 1 <= args.samples <= 238 or not 20 <= args.interval_seconds <= 300:
         parser.error('samples must be 1-238 and interval must be 20-300 seconds')
+    if args.kalshi_milestone and (kickoff is None or not re.fullmatch(
+            r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', args.kalshi_milestone)):
+        parser.error('a Kalshi milestone requires a bound soccer fixture and a valid UUID')
     for index in range(args.samples):
         started_at = monotonic()
-        print(json.dumps(capture(args.event_id, args.home, args.away,
-                                 league=args.soccer_league, kickoff=kickoff)), flush=True)
+        state = capture(args.event_id, args.home, args.away, league=args.soccer_league, kickoff=kickoff)
+        if args.kalshi_milestone:
+            state['kalshi'] = capture_kalshi(args.kalshi_milestone)
+        print(json.dumps(state), flush=True)
         if index + 1 < args.samples:
             sleep(max(0, args.interval_seconds - (monotonic() - started_at)))
 

@@ -311,7 +311,13 @@ restore_score vienna 2026-11-19T17:42:00Z uwcl-faw-bm-2026-11-19 \
 restore_score benfica 2026-11-19T19:57:00Z uwcl-slb-asr-2026-11-19 \
     401916974 BEN ROMA --soccer-league uefa.wchampions --kickoff 2026-11-19T20:00:00Z
 restore_score vasco 2026-11-19T22:27:00Z bra-vas-int-2026-11-19 \
-    401841308 VAS INT --soccer-league bra.1 --kickoff 2026-11-19T22:30:00Z
+    401841308 VAS INT --soccer-league bra.1 --kickoff 2026-11-19T22:30:00Z \
+    --kalshi-milestone 9ad8504b-0f64-5763-9d07-777f01164e7e
+restore_score orlando 2026-11-20T00:27:00Z mls-orl-fcc-2026-11-19 \
+    401933535 ORL CIN --soccer-league usa.1 --kickoff 2026-11-20T00:30:00Z \
+    --kalshi-milestone 57142069-94b7-53cb-ba17-d2165114ac34
+restore_score seattle 2026-11-20T02:57:00Z mls-sea-rsl-2026-11-19 \
+    401933555 SEA RSL --soccer-league usa.1 --kickoff 2026-11-20T03:00:00Z
 
 adjacent_unit=ai-football-profitability-reference-vasco-adjacent
 adjacent_begin=2026-11-19T22:27:00Z

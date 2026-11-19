@@ -120,6 +120,9 @@ def evaluate(row, approvals, max_age_seconds):
         if state and (state.get('home_score'), state.get('away_score')) != (baseline['home'], baseline['away']):
             reasons.append('remaining_period_score_mismatch')
     context = row.get('score_comparison', {}).get('event_context', {})
+    kalshi = row.get('score_comparison', {}).get('kalshi_comparison', {})
+    if offer['phase'] == 'live' and kalshi.get('status') in {'halftime_observed', 'phase_conflict', 'score_conflict'}:
+        reasons.append('cross_source_live_state_conflict')
     if context.get('delay_status') == 'delay_unresolved':
         reasons.append('live_delay_unresolved')
     if (context.get('red_card_status') in {'source_counts_conflict', 'invalid_red_card_event'}
