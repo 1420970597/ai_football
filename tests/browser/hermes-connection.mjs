@@ -19,7 +19,7 @@ const actual = async (...args) => {
 };
 
 if (process.env.VERIFY_RESTART === "1") {
-  assert.equal(await actual(), "next:fixture-restored-model");
+  assert.equal(await actual(), "v1:fixture-same-address");
   console.log("persisted connection restored after Hermes restart");
   process.exit(0);
 }
@@ -94,6 +94,13 @@ try {
       await save.click();
       await state.getByText(/版本 4 · 已生效/).waitFor();
       assert.equal(await actual(), "next:fixture-restored-model");
+      await address.fill(provider + "/v1");
+      await model.fill("fixture-same-address");
+      await key.fill("fixture-key-two");
+      await save.click();
+      await state.getByText(/版本 5 · 已生效/).waitFor();
+      assert.equal(await actual(), "v1:fixture-same-address");
+      assert.equal(await actual("fixture-same-address", "custom:cline"), "v1:fixture-same-address");
     }
     const response = await page.request.get(endpoint);
     assert.match(response.headers()["cache-control"], /no-store/);

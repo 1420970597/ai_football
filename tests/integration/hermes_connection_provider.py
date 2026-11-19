@@ -11,12 +11,14 @@ class Provider(BaseHTTPRequestHandler):
 
     def do_POST(self):
         keys = {"/v1/chat/completions": "fixture-key-one", "/next/chat/completions": "fixture-key-two"}
+        data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        model = data["model"]
         key = keys.get(self.path)
+        if self.path == "/v1/chat/completions" and model == "fixture-same-address":
+            key = "fixture-key-two"
         if key is None or self.headers.get("Authorization") != "Bearer " + key:
             self.send_error(401)
             return
-        data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        model = data["model"]
         result = self.path.split("/")[1] + ":" + model
         envelope = {"id": "fixture", "created": int(time.time()), "model": model}
         if data.get("stream"):

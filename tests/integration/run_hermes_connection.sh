@@ -70,7 +70,7 @@ checks() {
 wait_http http://web/healthz
 checks 0
 docker exec "$name-pg" psql -v ON_ERROR_STOP=1 -U postgres -d v2_hermes_connection -tAc \
-  "SELECT (SELECT count(*) FROM v2_audit_log WHERE action='hermes_connection_updated')=4
+  "SELECT (SELECT count(*) FROM v2_audit_log WHERE action='hermes_connection_updated')=5
     AND (SELECT encrypted_value NOT LIKE '%fixture-key%' FROM v2_admin_settings WHERE setting_key='_hermes_connection_v1')" |
   rg -qx 't'
 docker restart "$name-hermes" >/dev/null

@@ -215,7 +215,10 @@ def install():
         if runtime_kwargs.get("provider") == "custom":
             if not active.api_key:
                 raise _ProviderAuthResolutionError("Hermes connection API key is not configured")
-            runtime_kwargs.update(api_key=active.api_key, base_url=active.base_url, credential_pool=None)
+            # A named provider reloads key_env at turn start and would restore the
+            # bootstrap key if the administrator rotates it at the same address.
+            runtime_kwargs.update(api_key=active.api_key, base_url=active.base_url,
+                                  requested_provider="custom", credential_pool=None)
         return result
 
     APIServerAdapter._http_route_table = route_table
