@@ -14,7 +14,21 @@
 
 后续先用已发生加时、且有原生结算的比赛分别核验乐鱼胜负、让分和大小分。覆盖照此扩展到其他比赛和可核验盘口。每笔候选配对同合同的可用外部深度、原生时点与真实执行预检。历史提前量与费用由归档计算，在后续独立样本上复用固定口径。 [采样器](reference_orderbooks.py) [采样测试](test_reference_orderbooks.py)
 
+## 开球前后的赛况采样
+
+同一场比赛沿用乐鱼赛事、两个公开盘口目录和 ESPN 赛事编号的绑定。赛况采样逐次保存事件编号、主客队、报告比分、阶段、本方请求与接收时间，以及逐事件序列、比分与 `wallclock`。赛前缺字段时保留空值。同秒事件和后续更正保留各自记录。 [ESPN 赛事摘要](https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=401910015) [赛况采样入口](reference_basketball_state.py)
+
+02:32:13 UTC 的乐鱼只读样本短暂出现 0 比 0，赛事仍标记为赛前，原生状态时间为空。下一轮比分恢复为空。同期 ESPN 仍为赛前且没有逐事件数据。用阶段、比分和原生时间一起核验，比分单独出现只能作为观察证据。
+
+02:27:50 至 02:33:20 UTC 的 16 轮订单簿中，国际站 96 条选项和美国站 48 条长侧记录都提供了原生双边深度。国际站接收时的报价年龄为 0.014 至 10.621 秒，美国站为 1.954 至 37.641 秒。同一轮两站全部盘口的原生时差为 13.619 至 36.584 秒。同期 16 轮乐鱼投影均为赛前，没有该场真实执行预检。改正后的 ESPN 采样从 02:28:54 UTC 开始，首批 16 轮均为赛前，尚无逐事件数据。
+
+第二批截至 02:40:43 UTC。17 轮外部订单簿全部 153 条选项记录都有双边深度及原生时间，跨站同轮时差 13.070 至 35.957 秒。17 轮乐鱼投影仍为赛前，3 轮短暂显示 0 比 0，全部缺原生状态时间。ESPN 18 轮也保持赛前且无逐事件数据。未观察到该场真实执行预检。计划开球时间后仍应以赛况源可核验的阶段为准。样本只能说明这段时间的报价覆盖和阶段证据，尚不能计算实际开赛延迟或滚球价差。
+
 ```bash
+docker run --rm --network host --cpus .25 --memory 128m --entrypoint python \
+  -v "$PWD/reports/profitability-pilot-20261118:/research:ro" ai-football-verifier:v2.0.0-dev \
+  /research/reference_basketball_state.py 401910015 DEN BOS --samples 16 --interval-seconds 22
+
 docker run --rm --network host --cpus .25 --memory 128m --entrypoint python \
   -v "$PWD/reports/profitability-pilot-20261118:/research:ro" ai-football-verifier:v2.0.0-dev \
   /research/reference_orderbooks.py --samples 3 --interval-seconds 20 \
