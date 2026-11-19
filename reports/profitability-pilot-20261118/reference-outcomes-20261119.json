@@ -16,12 +16,14 @@
     "bra-vas-int-2026-11-19-draw": {"rules_sha256": "718447276522a1262834c02a19205f8bc2d023e40f98645cfe5c76343dbafc11", "selection": "draw", "labels": {"Yes": "yes", "No": "no"}},
     "bra-vas-int-2026-11-19-int": {"rules_sha256": "8674562cdf77fd0c080207ecabfc280a1e082aab7aa18e214a19e2f689d93e5b", "selection": "away", "labels": {"Yes": "yes", "No": "no"}},
     "bra-vas-int-2026-11-19-total-2pt5": {"rules_sha256": "621a8b649ac9df0026592847c80fde82cc5de72ff883695fb9583ecc80d949cd", "labels": {"Over": "over", "Under": "under"}},
+    "bra-vas-int-2026-11-19-total-3pt5": {"rules_sha256": "3d54027f6ffe5fc0fd3a56c7b85ae26b58a120015524dc1cbd0e39e1473e9525", "labels": {"Over": "over", "Under": "under"}},
     "bra-vas-int-2026-11-19-first-half-total-1pt5": {"rules_sha256": "08d0da385a01a397a76cd0ea55077177914e39964145852ccbae8871313f22f9", "labels": {"Over": "over", "Under": "under"}},
     "bra-vas-int-2026-11-19-spread-home-1pt5": {"rules_sha256": "6ef91a1f2e1d72f35e2fb48700195846754e4e5b7dfef7ed529cb06a2a8bf653", "labels": {"CR Vasco da Gama": "home", "SC Internacional": "away"}}
   },
   "kalshi": {
     "KXUCLWTOTAL-26NOV19FAKBMU-3": {"rules_sha256": "f7aaac40fc57cc702029de0d65870c506f54629254e9cb6389a6cc76a9ebfb88", "labels": {"yes": "over"}},
     "KXUCLWSPREAD-26NOV19FAKBMU-BMU2": {"rules_sha256": "2ff595f06d6a17b6b0a8ec5205a0c0b142d54825d3196b8ddb1dec22aa1fde4e", "labels": {"yes": "away"}},
-    "KXBRASILEIROTOTAL-26NOV19VDGINT-3": {"rules_sha256": "59142e2ace1e39fe2cef62c1d569882dba759f64635ab494e1e97676ee7392db", "labels": {"yes": "over"}}
+    "KXBRASILEIROTOTAL-26NOV19VDGINT-3": {"rules_sha256": "59142e2ace1e39fe2cef62c1d569882dba759f64635ab494e1e97676ee7392db", "labels": {"yes": "over"}},
+    "KXBRASILEIROTOTAL-26NOV19VDGINT-4": {"rules_sha256": "318b88b5ad99ba0b7f2f42484fe6eb98d9448a441ea127ac0c0690d8b45e5e75", "labels": {"yes": "over"}}
   }
 }

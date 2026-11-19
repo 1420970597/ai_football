@@ -6,6 +6,8 @@ from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 
+from reference_lines import adjacent_lines
+
 REFERENCE_SIDES = {'winner': {'home', 'draw', 'away'}, 'handicap': {'home', 'away'},
                    'total': {'over', 'under'}, 'team_total': {'over', 'under'}}
 
@@ -19,7 +21,9 @@ def instant(value):
 
 def contract_key(row):
     line = row.get('line')
-    return row['fixture_id'], row['kind'], row['period'], Decimal(str(line)) if line is not None else None
+    kind = row['kind']
+    side = row.get('team_side') if kind == 'team_total' else None
+    return row['fixture_id'], kind, row['period'], side, Decimal(str(line)) if line is not None else None
 
 
 def native_book_times(observation, cutoff):
@@ -111,7 +115,65 @@ def source_groups(references, kind):
     return groups
 
 
-def compare(preflights, bindings, archive, max_age_seconds, outcomes=None):
+def quote_at(binding, records, cutoff, earliest, outcomes):
+    observed, observation = next((r for r in records if r[0] <= cutoff), (None, None))
+    source = {'source': binding['source'], 'market': binding['market']}
+    if observation is None:
+        status = 'no_observation_before_preflight'
+    elif observed < earliest:
+        status = 'stale_before_preflight'
+    elif observation.get('error'):
+        status = 'source_read_failed'
+    elif observation.get('rules_sha256') != binding['rules_sha256']:
+        status = 'different_rules'
+    else:
+        status, timestamps = native_book_times(observation, cutoff)
+        if timestamps and min(timestamps) < earliest:
+            status = 'stale_before_preflight'
+    if status == 'timed_depth':
+        try:
+            books = replay_books(observation)
+        except (InvalidOperation, KeyError, TypeError, ValueError):
+            status = 'invalid_depth_evidence'
+        else:
+            first, last = min(timestamps), max(timestamps)
+            source |= {'oldest_quote_age_seconds': (cutoff - first).total_seconds(),
+                       'within_market_skew_seconds': (last - first).total_seconds(),
+                       'rules_sha256': observation['rules_sha256'], 'books': books}
+            if outcomes is not None:
+                orientation = outcomes.get(binding['source'], {}).get(binding['market'])
+                source['outcome_status'] = bind_outcomes(source, orientation, binding['kind'])
+    return source | {'status': status}
+
+
+def adjacent_groups(contract, lookup, quote, max_skew):
+    fixture, kind, period, team_side, line = contract
+    if (kind not in {'total', 'team_total', 'handicap'} or line is None or not line.is_finite()
+            or line % Decimal('0.25')):
+        return None
+    if abs(line) % 1 == Decimal('0.5'):
+        return None
+    lines, _ = adjacent_lines(kind, line)
+    references = [[quote(binding) for binding in lookup.get((fixture, kind, period, team_side, half), [])]
+                  for half in lines]
+    groups = [source_groups(quotes, kind) for quotes in references]
+    sources = {}
+    for source in sorted(groups[0].keys() | groups[1].keys()):
+        states = [group.get(source, {}).get('status', 'missing_binding') for group in groups]
+        entry = {'line_statuses': states, 'status': 'incomplete'}
+        if 'ambiguous' in states:
+            entry['status'] = 'ambiguous'
+        elif states == ['complete', 'complete']:
+            times = [instant(book['quoted_at']) for quotes in references for ref in quotes
+                     if ref['source'] == source and ref.get('outcome_status') == 'mapped' for book in ref['books']]
+            skew = (max(times) - min(times)).total_seconds()
+            entry |= {'quote_skew_seconds': skew, 'status': 'paired' if skew <= max_skew else 'different_quote_times'}
+        sources[source] = entry
+    return {'lines': [{'line': str(half), 'references': quotes} for half, quotes in zip(lines, references)],
+            'source_groups': sources, 'max_native_skew_seconds': max_skew}
+
+
+def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjacent_skew_seconds=5):
     archive_by_market = {}
     for batch in archive:
         for observation in batch['markets']:
@@ -123,46 +185,26 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None):
         records.sort(key=lambda record: record[0], reverse=True)
     by_contract = {}
     for binding in bindings:
-        by_contract.setdefault(contract_key(binding), []).append(binding)
+        contract = contract_key(binding)
+        if binding['kind'] != 'team_total' or contract[3] in {'home', 'away'}:
+            by_contract.setdefault(contract, []).append(binding)
     rows = []
     for preflight in preflights:
         cutoff = instant(preflight['captured_at'])
         earliest = cutoff - timedelta(seconds=max_age_seconds)
-        sources = []
-        for binding in by_contract.get(contract_key(preflight), []):
-            key = binding['source'], binding['market']
-            observed, observation = next((r for r in archive_by_market.get(key, []) if r[0] <= cutoff), (None, None))
-            source = {'source': key[0], 'market': key[1]}
-            if observation is None:
-                status = 'no_observation_before_preflight'
-            elif observed < earliest:
-                status = 'stale_before_preflight'
-            elif observation.get('error'):
-                status = 'source_read_failed'
-            elif observation.get('rules_sha256') != binding['rules_sha256']:
-                status = 'different_rules'
-            else:
-                status, timestamps = native_book_times(observation, cutoff)
-                if timestamps and min(timestamps) < earliest:
-                    status = 'stale_before_preflight'
-            if status == 'timed_depth':
-                try:
-                    books = replay_books(observation)
-                except (InvalidOperation, KeyError, TypeError, ValueError):
-                    status = 'invalid_depth_evidence'
-                else:
-                    first, last = min(timestamps), max(timestamps)
-                    source |= {'oldest_quote_age_seconds': (cutoff - first).total_seconds(),
-                               'within_market_skew_seconds': (last - first).total_seconds(),
-                               'rules_sha256': observation['rules_sha256'], 'books': books}
-                    if outcomes is not None:
-                        orientation = outcomes.get(binding['source'], {}).get(binding['market'])
-                        source['outcome_status'] = bind_outcomes(source, orientation, preflight['kind'])
-            source['status'] = status
-            sources.append(source)
+        contract = contract_key(preflight)
+
+        def quote(binding):
+            records = archive_by_market.get((binding['source'], binding['market']), [])
+            return quote_at(binding, records, cutoff, earliest, outcomes)
+
+        sources = [quote(binding) for binding in by_contract.get(contract, [])]
         row = {'preflight': preflight, 'references': sources}
         if outcomes is not None:
             row['source_groups'] = source_groups(sources, preflight['kind'])
+            adjacent = adjacent_groups(contract, by_contract, quote, min(adjacent_skew_seconds, max_age_seconds))
+            if adjacent is not None:
+                row['adjacent_line_coverage'] = adjacent
         rows.append(row)
     return rows
 

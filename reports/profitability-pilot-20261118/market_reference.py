@@ -3,9 +3,10 @@
 import json
 import sys
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+from decimal import Decimal, InvalidOperation
 
 from price_contract import decimal
+from reference_lines import adjacent_lines
 
 
 MARKET_SIDES = {'total': ('over', 'under'), 'team_total': ('over', 'under'),
@@ -93,17 +94,6 @@ def market_terms(contract):
     if line is None or line % step or kind in {'total', 'team_total'} and line <= 0:
         raise ValueError('invalid scoring line')
     return sides, line
-
-
-def adjacent_lines(kind, line):
-    if line is None or abs(line) % 1 == Decimal('0.5'):
-        raise ValueError('adjacent half lines require an integer or quarter line')
-    # Higher totals reduce Over coverage. A lower home handicap reduces Home coverage.
-    factor = -1 if kind == 'handicap' else 1
-    threshold = line * factor
-    half = Decimal('0.5')
-    center = (threshold + half).to_integral_value(rounding=ROUND_FLOOR)
-    return ((center - half) * factor, (center + half) * factor), threshold - center
 
 
 def book_probability(quote, sides):

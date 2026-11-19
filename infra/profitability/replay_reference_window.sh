@@ -19,6 +19,9 @@ archive="$root/.runtime/profitability-watch/public-orderbook-pilot-20261118"
 test -r "$archive/$bindings"
 shopt -s nullglob
 captures=("$archive/$label-"*.jsonl)
+if [[ "$label" == bra-vas-int-2026-11-19 && "$fixture" == leyu:5816659 ]]; then
+    captures+=("$archive/vasco-adjacent-totals-"*.jsonl)
+fi
 if (( ${#captures[@]} == 0 )); then
     printf '%s\n' 'No order book archive for this fixture' >&2
     exit 1

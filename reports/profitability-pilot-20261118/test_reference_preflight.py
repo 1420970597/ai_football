@@ -119,6 +119,42 @@ class ReferencePreflightTests(unittest.TestCase):
         self.assertEqual('ambiguous', group['status'])
         self.assertEqual(['home'], group['duplicates'])
 
+    def test_adjacent_totals_require_two_timely_lines_from_the_same_source(self):
+        preflight = self.preflight | {'kind': 'total', 'period': 'full_time', 'line': '2.75'}
+        bindings = [self.binding | preflight | {'line': line, 'market': market}
+                    for line, market in (('2.5', 'lower'), ('3.5', 'upper'))]
+        markets = [self.market | {'market': name} for name in ('lower', 'upper')]
+        orientation = {'rules_sha256': 'rules', 'labels': {'Over': 'over', 'Under': 'under'}}
+        outcomes = {'polymarket': {b['market']: orientation for b in bindings}}
+
+        def replay(records):
+            batch = {'captured_at': preflight['captured_at'], 'markets': records}
+            row, = compare([preflight], bindings, [batch], 30, outcomes)
+            self.assertFalse(row['references'])
+            return row['adjacent_line_coverage']
+
+        covered = replay(markets)
+        self.assertEqual(['2.5', '3.5'], [line['line'] for line in covered['lines']])
+        self.assertEqual('paired', covered['source_groups']['polymarket']['status'])
+        self.assertEqual('incomplete', replay(markets[:1])['source_groups']['polymarket']['status'])
+        for upper, expected in (({'quote_time': '2026-11-19T12:02:40Z'}, 'different_quote_times'),
+                                ({'received_at': '2026-11-19T12:03:01Z'}, 'incomplete'),
+                                ({'status': 'missing_side'}, 'incomplete')):
+            changed = markets[1] | {'books': [book | upper for book in self.market['books']]}
+            self.assertEqual(expected, replay([markets[0], changed])['source_groups']['polymarket']['status'])
+        bindings[1]['source'] = 'polymarket_us'
+        self.assertFalse(any(group['status'] == 'paired' for group in replay(markets)['source_groups'].values()))
+
+    def test_team_total_requires_explicit_matching_team_direction(self):
+        offered = self.preflight | {'kind': 'team_total'}
+        binding = self.binding | {'kind': 'team_total'}
+        batch = {'captured_at': offered['captured_at'], 'markets': [self.market]}
+        self.assertEqual([], compare([offered], [binding], [batch], 30)[0]['references'])
+        self.assertEqual([], compare([offered | {'team_side': 'away'}],
+                                     [binding | {'team_side': 'home'}], [batch], 30)[0]['references'])
+        self.assertEqual('timed_depth', compare([offered | {'team_side': 'home'}],
+                                                [binding | {'team_side': 'home'}], [batch], 30)[0]['references'][0]['status'])
+
     def test_replay_retains_complete_rounds_from_interrupted_capture(self):
         first_round = json.dumps({'markets': [self.market], 'captured_at': self.preflight['captured_at']}).encode() + b'\n'
         shut = deepcopy(self.market)
