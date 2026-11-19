@@ -8,7 +8,8 @@ WITH bounds AS (
     SELECT :'begin'::timestamptz AS begin_at, now() AS observed_at,
            least(now(), nullif(:'end','')::timestamptz) AS end_at
 ), fills AS (
-    SELECT f.sport,s.phase,s.market_kind,s.period,s.fixture_id,o.manual,o.state,o.provider_price AS fill_price,
+    SELECT f.sport,s.phase,s.market_kind,s.period,s.fixture_id,o.id AS order_id,o.provider_order_no,
+           o.manual,o.state,o.provider_price AS fill_price,
            p.price AS preflight_price,s.recommendation_price,
            e.id IS NOT NULL AS has_snapshot, p.id IS NOT NULL AS has_preflight,
            p.fixture_id = s.fixture_id AND p.market_id = s.market_id AND p.period = s.period
@@ -123,6 +124,27 @@ WITH bounds AS (
           THEN 'payout_conflicts_with_reconstruction'
     END AS margin_exclusion
     FROM margin_payouts
+), margin_receipts AS (
+    SELECT m.*, (m.margin_exclusion='payout_conflicts_with_reconstruction'
+             AND m.provider_payout=m.provider_stake AND m.settled_net=0
+             AND receipt.payload->'provider_settlement_codes' @> '{"betResult":0,"betStatus":5,"orderStatus":4}'
+             AND receipt.payload->'provider_settlement_codes'->>'cancelType' ~ '^[1-9][0-9]{0,8}$'
+             AND (CASE WHEN pg_input_is_valid(receipt.payload->>'stake','numeric')
+                       THEN (receipt.payload->>'stake')::numeric END)=m.provider_stake
+             AND (CASE WHEN pg_input_is_valid(receipt.payload->>'payout','numeric')
+                       THEN (receipt.payload->>'payout')::numeric END)=m.provider_payout
+             AND (CASE WHEN pg_input_is_valid(receipt.payload->>'net_profit','numeric')
+                       THEN (receipt.payload->>'net_profit')::numeric END)=m.settled_net
+             ) IS TRUE AS native_cancellation_return
+    FROM margin_evidence m CROSS JOIN bounds b
+    LEFT JOIN LATERAL (
+        SELECT e.payload FROM v2_order_receipt_evidence e
+        WHERE m.margin_exclusion='payout_conflicts_with_reconstruction'
+          AND m.provider_payout=m.provider_stake AND m.settled_net=0
+          AND e.order_id=m.order_id AND e.payload->>'order_no'=m.provider_order_no
+          AND e.payload->>'state'='settled' AND e.observed_at<=b.observed_at
+        ORDER BY e.observed_at DESC,e.id DESC LIMIT 1
+    ) receipt ON true
 ), margin_summary AS (
     SELECT CASE WHEN grouping(phase)=1 THEN 'all' ELSE phase END AS phase,
            count(*) AS price_comparable_settled,
@@ -133,6 +155,7 @@ WITH bounds AS (
            count(*) FILTER (WHERE margin_exclusion='payout_unavailable') AS payout_unavailable,
            count(*) FILTER (WHERE margin_exclusion='payout_conflicts_with_reconstruction')
                AS payout_conflicts_with_reconstruction,
+           count(*) FILTER (WHERE native_cancellation_return) AS payout_conflicts_with_native_cancellation_return,
            count(*) FILTER (WHERE margin_exclusion IS NULL AND (provider_currency IS NULL OR provider_fees IS NULL))
                AS verified_payout_missing_cost_fields,
            CASE WHEN count(DISTINCT (account_id,provider_identity_hash))=1
@@ -149,7 +172,7 @@ WITH bounds AS (
                        FILTER (WHERE margin_exclusion IS NULL),2)
                )
            END AS amounts
-    FROM margin_evidence GROUP BY GROUPING SETS ((), (phase))
+    FROM margin_receipts GROUP BY GROUPING SETS ((), (phase))
 ), exclusions AS (
     SELECT sport, phase, market_kind, period, exclusion, count(*) AS fills,
            count(*) FILTER (WHERE state = 'settled') AS settled

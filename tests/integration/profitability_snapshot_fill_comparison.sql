@@ -15,6 +15,7 @@ CREATE TABLE v2_quote_evidence (
     selection text, line numeric, price numeric, evidence jsonb, score_baseline jsonb,
     evidence_kind text, captured_at timestamptz, source_updated_at timestamptz
 );
+CREATE TABLE v2_order_receipt_evidence (id integer PRIMARY KEY, order_id integer, observed_at timestamptz, payload jsonb);
 
 INSERT INTO v2_fixtures VALUES ('leyu:123', 'football'), ('other:123', 'football');
 INSERT INTO v2_expert_signals
@@ -76,6 +77,11 @@ SET outcome = CASE WHEN id=1 THEN 'win' ELSE 'half_win' END,
     unit_net = CASE WHEN id=1 THEN 1 ELSE 0.5 END,
     result_version = 1, settlement_reason = 'confirmed_test', settled_at = created_at + interval '3 hours'
 WHERE id IN (1,6);
+
+INSERT INTO v2_order_receipt_evidence
+VALUES (1, 1, :'begin'::timestamptz + interval '15 seconds',
+        '{"order_no":"1","state":"settled","stake":"5.00","payout":"5","net_profit":"0",
+          "provider_settlement_codes":{"betResult":0,"betStatus":5,"orderStatus":4,"cancelType":41}}');
 INSERT INTO v2_signal_settlements
 SELECT id,fixture_id,result_version,outcome,unit_net,effective_stake,settlement_reason
 FROM v2_expert_signals WHERE id IN (1,6);
