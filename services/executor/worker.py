@@ -105,6 +105,7 @@ class Executor:
                 receipts = []
                 scanned = []
                 reconciliation_errors = []
+                complete_settled_recheck = False
                 stage = "order_history"
                 planned_orders = work.get("orders", [])[:2]
                 lookups = {}
@@ -126,6 +127,8 @@ class Executor:
                         continue
                     lookup = lookups[order['provider_order_no']]
                     scanned.append(order['id'])
+                    if order['id'] == work.get('settled_recheck'):
+                        complete_settled_recheck = lookup.get('scan_complete') is True
                     if lookup["found"] and not lookup.get("ambiguous"):
                         item = lookup["receipt"]
                         receipt = {key: item.get(key) for key in (
@@ -147,6 +150,8 @@ class Executor:
             if not result["category"]:
                 result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"],
                               receipts=receipts, scanned_orders=scanned)
+                if complete_settled_recheck:
+                    result['complete_settled_recheck'] = True
                 if reconciliation_errors:
                     result.update(category="order_reconciliation_partial", reconciliation_errors=reconciliation_errors)
         except asyncio.CancelledError:
@@ -193,7 +198,8 @@ class Executor:
                 if time.monotonic() >= dispatch_at:
                     await self.rpc("POST", "/dispatch")
                     dispatch_at = time.monotonic() + 10
-                work = await self.rpc("POST", "/claim", params={"live_capable": str(self.live_orders_enabled).lower()})
+                work = await self.rpc("POST", "/claim", params={"live_capable": str(self.live_orders_enabled).lower(),
+                                                               "settled_recheck": "true"})
                 if work.get("kind") == "account":
                     await self.account_job(work)
                 elif work.get("kind") == "order":

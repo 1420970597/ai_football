@@ -135,26 +135,87 @@ async def expire_leases(conn):
         await conn.execute("UPDATE v2_leyu_accounts SET renewal_state='unknown',updated_at=now() WHERE id=$1 AND renewal_state='running' AND renewal_lease_until<=now()", account['id'])
 
 
-async def reconcile_receipts(conn, account, receipts: list[dict]):
+async def due_settled_recheck(conn, account):
+    return await conn.fetchrow(
+        "SELECT o.id,o.provider_order_no,o.created_at FROM v2_bet_orders o "
+        "WHERE o.user_id=$1 AND o.account_id=$2 AND o.provider_identity_hash=$3 AND o.binding_revision=$4 "
+        "AND o.state='settled' AND o.provider_order_no IS NOT NULL AND o.settled_net>0 "
+        "AND o.provider_placed_at IS NOT NULL AND o.provider_stake>0 AND o.provider_price>1 "
+        "AND o.settled_at>=now()-interval '12 hours' "
+        "AND o.receipt_observed_at<=now()-interval '30 minutes' "
+        "AND (o.updated_at<=o.receipt_observed_at OR o.updated_at<=now()-interval '1 hour') "
+        "AND NOT EXISTS(SELECT 1 FROM v2_account_jobs j WHERE j.account_id=o.account_id "
+        "AND j.binding_revision=o.binding_revision AND j.details ? 'settled_recheck' "
+        "AND j.updated_at>now()-interval '5 minutes') ORDER BY o.updated_at,o.id LIMIT 1",
+        account["user_id"], account["id"], account["provider_identity_hash"], account["binding_revision"],
+    )
+
+
+def receipt_time(value):
+    return datetime.fromisoformat(value.replace('Z', '+00:00')) if value else None
+
+
+def confirmed_principal_refund(order, receipt, observed_at):
+    codes = receipt.get('provider_settlement_codes') or {}
+    previous_codes = order['result_payload'].get('provider_settlement_codes') or {}
+    settled_at = receipt_time(receipt.get('settled_at'))
+    return (
+        receipt['state'] == 'settled'
+        and receipt.get('pnl_basis') == 'provider_reported_net'
+        and order['pnl_basis'] == 'provider_reported_net' and order['settled_net'] > 0
+        and order['provider_payout'] is not None and order['provider_stake'] is not None
+        and order['provider_payout'] - order['provider_stake'] == order['settled_net']
+        and previous_codes.get('cancelType') == 0 and (codes.get('cancelType') or 0) > 0
+        and settled_at is not None and order['receipt_observed_at'] is not None
+        and order['settled_at'] is not None
+        and max(order['receipt_observed_at'], order['settled_at']) < settled_at <= observed_at
+        and order['provider_placed_at'] is not None and receipt_time(receipt.get('placed_at')) == order['provider_placed_at']
+        and order['provider_currency'] == receipt.get('currency')
+        and all(receipt.get(key) is not None for key in ('net_profit', 'stake', 'price', 'payout'))
+        and Decimal(receipt['net_profit']) == 0
+        and Decimal(receipt['stake']) == order['provider_stake'] == Decimal(receipt['payout']) > 0
+        and Decimal(receipt['price']) == order['provider_price']
+        and (Decimal(receipt['fees']) if receipt.get('fees') is not None else None) == order['provider_fees']
+    )
+
+
+async def reconcile_receipts(conn, account, receipts: list[dict], *, settled_recheck=None, observed_at=None):
     for receipt in receipts:
         row = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND provider_identity_hash=$2 AND provider_order_no=$3 "
                                   "AND state IN('accepted','unknown','submitting') FOR UPDATE", account["user_id"], account["provider_identity_hash"], receipt["order_no"])
-        if not row:
-            continue
         state = receipt.get("state")
         if state not in {"settled", "unsettled"}:
             continue
+        revised = row is None and settled_recheck is not None and observed_at is not None
+        if revised:
+            row = await conn.fetchrow(
+                "SELECT o.* FROM v2_bet_orders o WHERE o.id=$1 AND o.user_id=$2 AND o.account_id=$3 "
+                "AND o.binding_revision=$4 AND o.provider_identity_hash=$5 AND o.provider_order_no=$6 "
+                "AND o.state='settled' AND o.settled_net>0 AND EXISTS ("
+                "SELECT 1 FROM v2_order_receipt_evidence e WHERE e.order_id=o.id "
+                "AND e.observed_at=o.receipt_observed_at AND e.payload=o.result_payload) FOR UPDATE OF o",
+                settled_recheck, account["user_id"], account["id"], account["binding_revision"],
+                account["provider_identity_hash"], receipt["order_no"],
+            )
+            if not row or not confirmed_principal_refund(row, receipt, observed_at):
+                continue
+        if not row:
+            continue
         digest = hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-        await conn.execute("INSERT INTO v2_order_receipt_evidence(id,order_id,receipt_sha256,payload) VALUES($1,$2,$3,$4) "
-                           "ON CONFLICT(order_id,receipt_sha256) DO NOTHING",uuid.uuid4(),row['id'],digest,receipt)
+        inserted = await conn.fetchval(
+            "INSERT INTO v2_order_receipt_evidence(id,order_id,receipt_sha256,payload) VALUES($1,$2,$3,$4) "
+            "ON CONFLICT(order_id,receipt_sha256) DO NOTHING RETURNING id", uuid.uuid4(), row['id'], digest, receipt,
+        )
+        if revised and inserted is None:
+            continue
         numeric = lambda key: Decimal(receipt[key]) if receipt.get(key) is not None else None
-        timestamp = lambda key: datetime.fromisoformat(receipt[key].replace('Z', '+00:00')) if receipt.get(key) else None
         await conn.execute(
             "UPDATE v2_bet_orders SET state=$2,reserved_stake=CASE WHEN $2='settled' THEN 0 ELSE reserved_stake END,"
             "settled_net=$3,settled_at=$4,result_payload=$5,provider_price=$6,provider_stake=$7,provider_payout=$8,"
             "provider_currency=$9,provider_fees=$10,provider_placed_at=$11,pnl_basis=$12,receipt_observed_at=now(),updated_at=now() WHERE id=$1",
             row["id"], "settled" if state == "settled" else "accepted",
-            numeric('net_profit') if state == "settled" else None, timestamp('settled_at') if state == "settled" else None,
+            numeric('net_profit') if state == "settled" else None, receipt_time(receipt.get('settled_at')) if state == "settled" else None,
             receipt, numeric('price'), numeric('stake'), numeric('payout'), receipt.get('currency'), numeric('fees'),
-            timestamp('placed_at'), receipt.get('pnl_basis', 'unknown'))
-        await audit(conn, None, "executor", "order_reconciled", "bet_order", str(row["id"]), details={"state": state})
+            receipt_time(receipt.get('placed_at')), receipt.get('pnl_basis', 'unknown'))
+        await audit(conn, None, "executor", "order_settlement_revised" if revised else "order_reconciled",
+                    "bet_order", str(row["id"]), details={"state": state})

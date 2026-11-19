@@ -1192,6 +1192,80 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Decimal('2'),Decimal(str(visible['provider_price'])))
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
 
+    async def test_complete_history_can_append_a_verified_principal_refund(self):
+        await self.healthy()
+        signal, expert, _, _ = await self.signal()
+        await self.enable([expert])
+        order = await self.reserve(signal)
+        order_id = order['id']
+        now = datetime.now(timezone.utc)
+        placed = now - timedelta(hours=2)
+        first_settlement = now - timedelta(hours=1, minutes=5)
+        first_observed = now - timedelta(hours=1)
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='accepted',provider_order_no='AMENDED',created_at=$2 WHERE id=$1",
+            order_id, placed)
+
+        async def claim():
+            response = await self.api.post('/api/v1/accounts/leyu/refresh')
+            self.assertEqual(202, response.status_code, response.text)
+            response = await self.worker_api.post('/internal/executor/claim?settled_recheck=true')
+            self.assertEqual(200, response.status_code, response.text)
+            return response.json()
+
+        winning_receipt = {'orderNo': 'AMENDED', 'betAmount': '2', 'backAmount': '3.60', 'profitAmount': '1.60',
+                           'oddFinally': '1.80', 'betTime': placed.isoformat(), 'settleTime': first_settlement.isoformat(),
+                           'orderStatus': 1, 'detailList': [{'betResult': 4, 'betStatus': 1, 'cancelType': 0}]}
+        refund = winning_receipt | {
+            'backAmount': '2.00', 'profitAmount': '0', 'settleTime': (first_observed + timedelta(minutes=5)).isoformat(),
+            'orderStatus': 2, 'detailList': [{'betResult': 4, 'betStatus': 3, 'cancelType': 12}]}
+        receipt, complete = winning_receipt, True
+
+        def native(request):
+            if request.url.path != ORDERS_PATH:
+                return self.native(request)
+            settled = json.loads(request.content)['orderStatus'] == 1
+            total = (1 if complete else 2) if settled else 0
+            return httpx.Response(200, json={'code': 0, 'data': {
+                'total': total, 'records': [receipt] if settled else []}})
+
+        transport = httpx.MockTransport(native)
+        executor = Executor(
+            self.worker_api, 'https://platform.invalid/internal/executor',
+            client_factory=lambda scope, session, **kwargs: AccountProtocolClient(
+                scope, session, transport=transport, **kwargs))
+        work = await claim()
+        self.assertNotIn('settled_recheck', work)
+        await executor.account_job(work)
+        current = await self.pool.fetchrow('SELECT settled_net,result_payload FROM v2_bet_orders WHERE id=$1', order_id)
+        self.assertEqual(Decimal('1.60'), current['settled_net'])
+        original = current['result_payload']
+        await self.pool.execute('UPDATE v2_order_receipt_evidence SET observed_at=$2 WHERE order_id=$1', order_id,
+                                first_observed)
+        for receipt, complete in (
+                (refund, False), (refund | {'settleTime': first_settlement.isoformat()}, True), (refund, True)):
+            await self.pool.execute(
+                "UPDATE v2_bet_orders SET updated_at=$2,receipt_observed_at=$2 WHERE id=$1", order_id, first_observed)
+            await self.pool.execute("UPDATE v2_account_jobs SET updated_at=now()-interval '6 minutes'")
+            work = await claim()
+            self.assertEqual(str(order_id), work['settled_recheck'])
+            await executor.account_job(work)
+            current = await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1', order_id)
+            expect_amendment = complete and receipt == refund
+            self.assertEqual(Decimal('0') if expect_amendment else Decimal('1.60'), current['settled_net'])
+
+        evidence = await self.pool.fetch(
+            'SELECT payload FROM v2_order_receipt_evidence WHERE order_id=$1 ORDER BY observed_at', order_id)
+        first, amended = [row['payload'] for row in evidence]
+        self.assertEqual(original, first)
+        self.assertEqual(current['result_payload'], amended)
+        self.assertEqual(12, amended['provider_settlement_codes']['cancelType'])
+        self.assertEqual((Decimal('2.00'), None, None),
+                         (current['provider_payout'], current['provider_fees'], current['provider_currency']))
+        await self.pool.execute("UPDATE v2_account_jobs SET updated_at=now()-interval '6 minutes'")
+        self.assertNotIn('settled_recheck', await claim())
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
+
     async def test_history_rate_limit_preserves_fresh_balance_and_other_receipt(self):
         account=await self.healthy()
         signal,expert,_,_=await self.signal()
@@ -1437,7 +1511,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         original=dict(await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id']))
         evidence=dict(await self.pool.fetchrow('SELECT * FROM v2_order_receipt_evidence WHERE order_id=$1',row['id']))
         self.assertNotIn('provider_settlement_codes',evidence['payload'])
-        legacy_document=accounts.JobFinish.model_validate(body).model_dump(mode='json')
+        legacy_document=accounts.JobFinish.model_validate(body).model_dump(
+            mode='json', exclude={'complete_settled_recheck'})
         for key in ('provider_code','reconciliation_errors'):
             legacy_document.pop(key)
         legacy_document['receipts'][0]=evidence['payload']

@@ -351,13 +351,16 @@ class AccountProtocolClient:
         conflicts = set()
         for state in ("unsettled", "settled"):
             previous_ids = set()
+            reported_total = None
             for page in range(1, max_pages + 1):
                 response = await self.orders(state, page=page, begin=begin, end=end)
-                if response["total"] is None:
+                if page == 1:
+                    reported_total = response["total"]
+                if reported_total is None or response["total"] != reported_total:
                     complete = False
                 conflicts.update(response["conflicting_order_ids"])
                 identities = {(item["identifier_kind"], item["order_no"]) for item in response["items"]}
-                if response["malformed_records"] or (page > 1 and identities and identities <= previous_ids):
+                if response["malformed_records"] or identities.intersection(previous_ids):
                     complete = False
                 previous_ids |= identities
                 matches.extend(item for item in response["items"] if item["identifier_kind"] == "order" and item["order_no"] in order_nos)
@@ -365,6 +368,8 @@ class AccountProtocolClient:
                     break
                 if page == max_pages:
                     complete = False
+            if len(previous_ids) != reported_total:
+                complete = False
         # 缺失不能证明拒单；结算回执优于同订单的短暂未结缓存。
         result = {}
         for order_no in order_nos:

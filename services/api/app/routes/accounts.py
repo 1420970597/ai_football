@@ -128,6 +128,7 @@ class JobFinish(AttemptInput):
     receipts: list[Receipt] = Field(default_factory=list, max_length=10)
     scanned_orders: list[uuid.UUID] = Field(default_factory=list,max_length=2)
     reconciliation_errors: list[ReconciliationError] = Field(default_factory=list, max_length=2)
+    complete_settled_recheck: bool = False
 
 
 class AuthorizeInput(AttemptInput):
@@ -414,7 +415,7 @@ async def list_orders(request: Request, limit: int = 30, before: uuid.UUID | Non
 
 
 @executor_router.post("/claim")
-async def claim_work(request: Request, live_capable: bool = False):
+async def claim_work(request: Request, live_capable: bool = False, settled_recheck: bool = False):
     service_auth(request)
     settings = request.app.state.settings
     async with database.current_pool().acquire() as conn:  # noqa: SIM117
@@ -442,13 +443,22 @@ async def claim_work(request: Request, live_capable: bool = False):
                 attempt = uuid.uuid4()
                 await conn.execute("UPDATE v2_account_jobs SET state='running',attempt_id=$2,config_revision=$3,lease_until=now()+interval '300 seconds',updated_at=now() WHERE id=$1", job["id"], attempt, account["config_revision"])
                 reconcile = [] if history_request else await conn.fetch("SELECT id,provider_order_no,created_at FROM v2_bet_orders WHERE user_id=$1 AND provider_identity_hash=$2 AND state IN('accepted','unknown') AND provider_order_no IS NOT NULL ORDER BY updated_at LIMIT 2", account["user_id"], account["provider_identity_hash"])
+                revision_order = (await jobs.due_settled_recheck(conn, account)
+                                  if settled_recheck and job['kind'] in {'refresh', 'reconcile'} and len(reconcile) < 2
+                                  else None)
+                if revision_order is not None:
+                    reconcile.append(revision_order)
                 job_details = {'orders': {str(row['id']): row['provider_order_no'] for row in reconcile}}
+                if revision_order is not None:
+                    job_details['settled_recheck'] = str(revision_order['id'])
                 if authorization.get('device_authorization'):
                     job_details['device_authorization'] = True
                 await conn.execute('UPDATE v2_account_jobs SET details=$2 WHERE id=$1', job['id'], job_details)
                 work = {"kind": "account", "job_id": str(job["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "orders": [dict(row) for row in reconcile]}
                 if history_request:
                     work['history'] = history_request
+                if revision_order is not None:
+                    work['settled_recheck'] = str(revision_order['id'])
                 return work
             if live_capable and orders.live_enabled(settings):
                 account = await conn.fetchrow("SELECT a.* FROM v2_leyu_accounts a WHERE EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.account_id=a.id AND o.state='pending' AND o.attempt_id IS NULL) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 1")
@@ -602,6 +612,8 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
         finish_document.pop('provider_code')
     if not body.reconciliation_errors:
         finish_document.pop('reconciliation_errors')
+    if not body.complete_settled_recheck:
+        finish_document.pop('complete_settled_recheck')
     receipts = finish_document['receipts']
     for receipt in receipts:
         if receipt['provider_settlement_codes'] is None:
@@ -622,6 +634,10 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
             if job['kind'] == 'history':
                 raise HTTPException(409, '只读历史任务必须通过专用历史回执完成')
+            recheck_id = job['details'].get('settled_recheck')
+            if body.complete_settled_recheck and (
+                    effective_status != 'success' or recheck_id not in {str(order_id) for order_id in body.scanned_orders}):
+                raise HTTPException(422, '已结订单复查超出任务范围')
             if keep_receipts and (effective_status != 'failed' or job['kind'] not in {'refresh', 'reconcile'}):
                 raise HTTPException(422,'只有账户刷新或对账任务可保留部分回执')
             if effective_status=='success' or keep_receipts:
@@ -654,7 +670,11 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                     "UPDATE v2_leyu_accounts SET renewal_retry_after=GREATEST(renewal_retry_after,"
                     "now()+interval '60 seconds'),updated_at=now() WHERE id=$1", account['id'])
             if effective_status=='success' or keep_receipts:
-                await jobs.reconcile_receipts(conn,account,receipts)
+                if effective_status == 'success' and body.complete_settled_recheck:
+                    await jobs.reconcile_receipts(conn, account, receipts, settled_recheck=uuid.UUID(recheck_id),
+                                                  observed_at=body.observed_at)
+                else:
+                    await jobs.reconcile_receipts(conn, account, receipts)
                 # Timestamp attempted reads so the scheduler can rotate orders.
                 attempted = body.scanned_orders + [item.order_id for item in body.reconciliation_errors]
                 await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',attempted,account['user_id'])
