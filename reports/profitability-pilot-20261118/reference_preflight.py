@@ -49,6 +49,60 @@ def settlement_comparison(preflight):
     return 'phase_unverified'
 
 
+def red_card_status(sample, received):
+    observed = sample.get('red_cards', {})
+    sides = ('home', 'away')
+    if not all(type(observed.get(side)) is int and observed[side] >= 0 for side in sides):
+        return 'missing_team_statistics'
+    teams = sample.get('team_ids', {})
+    if (sample.get('wallclock_available') is not True or sample.get('key_events_available') is not True
+            or not all(isinstance(teams.get(side), str) and teams[side] for side in sides)
+            or teams['home'] == teams['away']):
+        return 'missing_event_evidence'
+
+    team_sides = {team: side for side, team in teams.items()}
+    events = sample['key_events']
+    cards = [event for event in events if (event.get('type') or {}).get('type') == 'red-card']
+    counts = dict.fromkeys(sides, 0)
+    seen = set()
+    for card in cards:
+        native = card.get('wallclock')
+        event_id = card.get('id')
+        side = team_sides.get(card.get('team_id'))
+        if not native or not event_id or event_id in seen or side is None or instant(native) > received:
+            return 'invalid_red_card_event'
+        seen.add(event_id)
+        counts[side] += 1
+
+    return 'source_counts_match' if observed == counts else 'source_counts_conflict'
+
+
+def soccer_event_context(sample, received):
+    context = {'red_card_status': red_card_status(sample, received)}
+    if 'red_cards' in sample:
+        context['red_cards'] = sample['red_cards']
+    material = []
+    for event in sample['key_events']:
+        kind = (event.get('type') or {}).get('type')
+        if (event.get('scoringPlay') is True or kind in {
+                'goal', 'penalty---scored', 'red-card', 'kickoff', 'start-2nd-half',
+                'halftime', 'end-regular-time', 'start-delay', 'end-delay'}):
+            if not event.get('wallclock'):
+                return context | {'latest_material_event_status': 'missing_native_event_time'}
+            material.append((instant(event['wallclock']), kind))
+    if material:
+        latest = max(stamp for stamp, _ in material)
+        context['latest_material_event_at'] = latest.isoformat()
+        context['latest_material_events'] = sorted({kind for stamp, kind in material if stamp == latest and kind})
+    delays = [(stamp, kind) for stamp, kind in material if kind in {'start-delay', 'end-delay'}]
+    if delays:
+        latest_delay = max(stamp for stamp, _ in delays)
+        context['delay_status'] = (
+            'delay_unresolved' if (latest_delay, 'start-delay') in delays else 'delay_ended'
+        )
+    return context
+
+
 def match_scores(preflight, binding, records, cutoff, max_age_seconds):
     if not binding:
         return {'status': 'fixture_not_bound'}
@@ -79,7 +133,8 @@ def match_scores(preflight, binding, records, cutoff, max_age_seconds):
     observed = [teams[side][1] for side in ('home', 'away')]
     wanted = [baseline.get(side) for side in ('home', 'away')]
     result |= {'period': status.get('period'), 'display_clock': status.get('displayClock'),
-               'latest_native_event_at': max(native_times).isoformat() if native_times else None}
+               'latest_native_event_at': max(native_times).isoformat() if native_times else None,
+               'event_context': soccer_event_context(sample, received)}
     if not all(type(value) is int and value >= 0 for value in wanted):
         return result | {'status': 'preflight_score_missing'}
     if not all(type(value) in (str, int) and re.fullmatch(r'[0-9]{1,3}', str(value)) for value in observed):
@@ -262,10 +317,21 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
         earliest = cutoff - timedelta(seconds=max_age_seconds)
         contract = contract_key(preflight)
         binary_winner = preflight.get('sport') == 'basketball' and preflight['kind'] == 'winner'
+        score_comparison = None
+        if preflight.get('sport') == 'football' and preflight.get('phase') == 'live':
+            score_comparison = match_scores(preflight, (score_bindings or {}).get(preflight['fixture_id']),
+                                            score_records, cutoff, score_max_age_seconds)
+        event_context = (score_comparison or {}).get('event_context', {})
 
         def quote(binding):
             records = archive_by_market.get((binding['source'], binding['market']), [])
             reference = quote_at(binding, records, cutoff, earliest, outcomes, binary_winner)
+            latest_event = event_context.get('latest_material_event_at')
+            if latest_event and reference['status'] == 'timed_depth':
+                first_quote = min(instant(book['quoted_at']) for book in reference['books'])
+                reference['live_event_quote_status'] = (
+                    'quote_predates_known_event' if first_quote < instant(latest_event) else 'quote_after_known_event'
+                )
             if stream_segments is not None and binding['source'] == 'polymarket':
                 stream = stream_quote(binding, stream_segments, cutoff, max_age_seconds)
                 compare_rest(stream, reference)
@@ -275,9 +341,8 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
         sources = [quote(binding) for binding in by_contract.get(contract, [])]
         row = {'preflight': preflight, 'references': sources,
                'settlement_comparison': settlement_comparison(preflight)}
-        if preflight.get('sport') == 'football' and preflight.get('phase') == 'live':
-            row['score_comparison'] = match_scores(preflight, (score_bindings or {}).get(preflight['fixture_id']),
-                                                   score_records, cutoff, score_max_age_seconds)
+        if score_comparison is not None:
+            row['score_comparison'] = score_comparison
         if outcomes is not None:
             row['source_groups'] = source_groups(sources, preflight['kind'], binary_winner)
             adjacent = adjacent_groups(contract, by_contract, quote, min(adjacent_skew_seconds, max_age_seconds))

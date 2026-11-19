@@ -81,6 +81,11 @@ class PreflightPriceDecisionTests(unittest.TestCase):
         self.row['preflight']['phase'] = self.approval['contract']['phase'] = 'live'
         self.row['score_comparison'] = {'status': 'observed_score_matches'}
         self.assertEqual(['live_state_unverified'], self.evaluate()['reasons'])
+        self.row['score_comparison']['event_context'] = {
+            'delay_status': 'delay_unresolved', 'red_card_status': 'source_counts_conflict',
+        }
+        self.assertEqual(['live_state_unverified', 'live_delay_unresolved', 'live_event_evidence_conflict'],
+                         self.evaluate()['reasons'])
 
     def test_missing_source_quotes_and_cost_proof_are_visible(self):
         self.row.update(references=[], source_groups={})

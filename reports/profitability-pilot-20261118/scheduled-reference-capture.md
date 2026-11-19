@@ -15,6 +15,8 @@
 
 14:57 UTC，已为维也纳对拜仁、本菲卡对罗马、瓦斯科对巴西国际登记 41、41、40 个额外 Polymarket 合约，覆盖全场让球、半场及全场大小、半场及全场各队大小。各场沿用原定开始时点及回放。采样每轮读取一次赛事目录，按不超过 16 个选项分批取订单簿。识别主客、开球、盘口线后生成的私有 `catalog-<赛事标签>.json` 保存方向及规则摘要，恢复入口沿用同一份清单。三场用同一入口试采，244 份订单簿全部返回，规则摘要均匹配。按当轮最终接收时点构造的诊断，分别有 14、9、18 个合约达到双边深度及时效。Kalshi 的原生时间盘口流仍需可用 API 凭据。 [维也纳附加盘](https://gamma-api.polymarket.com/events/slug/uwcl-faw-bm-2026-11-19-more-markets) [本菲卡附加盘](https://gamma-api.polymarket.com/events/slug/uwcl-slb-asr-2026-11-19-more-markets) [瓦斯科附加盘](https://gamma-api.polymarket.com/events/slug/bra-vas-int-2026-11-19-more-markets) [Kalshi 订单簿流](https://docs.kalshi.com/websockets/orderbook-updates)
 
+15:10 UTC，赛况采集保留按原生球队编号绑定的红牌统计与逐事件归属，回放标注同源统计与事件一致、冲突或缺失，并检查订单簿是否早于最近已知的进球、红牌、正常比赛阶段边界或暂停事件。缺原生时点及未解除暂停阻止滚球定价资格。历史欧女冠正式样本有 45 条关键事件，客队一张红牌的原生时间为 11 月 18 日 18:27:37 UTC，球队统计和逐事件均为主队 0、客队 1。今晚三场赛前摘要均缺红牌统计，程序保留未知。球队红牌两条证据来自同一服务，乐鱼独立状态、完整 VAR 及恢复时点仍待核验。 [欧女冠原生样本](https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.wchampions/summary?event=401916981)
+
 03:28 UTC 欧女冠试采拿到三个 Polymarket 盘口的双边深度和各侧原生时间。Kalshi 的全场大小和让球均有双边深度，公开订单簿缺原生 UTC 时间。其成交时间仅适用于对应成交。三场计划使用的 21 个市场均经公开入口查验。公开目录可核验比赛和盘口含义，源独立性、滚球基线及实际交易费用仍需核实。 [Kalshi 欧女冠大小](https://api.elections.kalshi.com/trade-api/v2/markets?event_ticker=KXUCLWTOTAL-26NOV19FAKBMU) [Kalshi 巴甲大小](https://api.elections.kalshi.com/trade-api/v2/markets?event_ticker=KXBRASILEIROTOTAL-26NOV19VDGINT)
 
 04:45 UTC 起验证每轮合并读取 Polymarket 订单簿。柴桢对泰港三轮各读 12 个选项，批量耗时 0.050 至 0.054 秒，逐项读取 0.644 至 0.707 秒。三轮返回顺序均不同，按市场条件和选项编号核对。04:48 UTC 欧女冠执行真实采集入口，一轮 0.847 秒拿到六个 Polymarket 市场的 12 份双边订单簿和各自原生时点，也拿到两份缺原生时间的 Kalshi 订单簿。Polymarket 同一批使用同一接收时点，原生报价仍使用各自上游时间。缺项、重复和截断留作采样失败。 [批量接口](https://docs.polymarket.com/api-reference/market-data/get-order-books-request-body)

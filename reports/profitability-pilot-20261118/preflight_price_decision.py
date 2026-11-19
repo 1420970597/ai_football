@@ -50,7 +50,8 @@ def reference_input(offer, source, name, sections, mode):
     samples = []
     for line, refs in sections:
         bound = [ref for ref in refs if ref['source'] == name and ref.get('outcome_status') == 'mapped'
-                 and ref['status'] == 'timed_depth']
+                 and ref['status'] == 'timed_depth'
+                 and ref.get('live_event_quote_status') != 'quote_predates_known_event']
         kind = 'winner' if mode == 'three_way_books' else offer['kind']
         samples.extend(book_sample(offer, ref, source, line=line, kind=kind) for ref in bound)
     result = {'venue': source['venue'], 'feed_origin': source['feed_origin']}
@@ -104,6 +105,15 @@ def evaluate(row, approvals, max_age_seconds):
     if offer['phase'] == 'live' and (row.get('score_comparison', {}).get('status') != 'observed_score_matches'
                                     or not row.get('verified_offer_event_state')):
         reasons.append('live_state_unverified')
+    context = row.get('score_comparison', {}).get('event_context', {})
+    if context.get('delay_status') == 'delay_unresolved':
+        reasons.append('live_delay_unresolved')
+    if (context.get('red_card_status') in {'source_counts_conflict', 'invalid_red_card_event'}
+            or context.get('latest_material_event_status') == 'missing_native_event_time'):
+        reasons.append('live_event_evidence_conflict')
+    if any(ref.get('live_event_quote_status') == 'quote_predates_known_event'
+           for _, refs in sections for ref in refs):
+        result['has_reference_quote_before_known_event'] = True
     try:
         cutoff = aware_time(preflight['captured_at'])
         checked = aware_time(preflight.get('provider_quote_checked_at'))

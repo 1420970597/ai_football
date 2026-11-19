@@ -52,3 +52,22 @@ class BasketballReferenceStateTests(unittest.TestCase):
         for league, start in [('bra.2', kickoff), ('bra.1', kickoff.replace(minute=31))]:
             with self.subTest(league=league, start=start), self.assertRaises(ValueError):
                 game_state(self.data, '101', 'DEN', 'BOS', league=league, kickoff=start)
+
+    def test_soccer_stat_counts_are_bound_to_team_ids_and_reported_when_explicit(self):
+        self.data['header']['league'] = {'slug': 'bra.1'}
+        self.game['competitors'][0]['team']['id'] = 'away-101'
+        self.game['competitors'][1]['team']['id'] = 'home-101'
+        self.data['keyEvents'] = [{'id': 'dismissal', 'team': {'id': 'away-101'}}]
+        home = {'team': {'id': 'home-101'}, 'statistics': [{'name': 'redCards', 'displayValue': '0'}]}
+        away = {'team': {'id': 'away-101'}, 'statistics': [{'name': 'redCards', 'displayValue': '1'}]}
+        self.data['boxscore'] = {'teams': [away, home]}
+        kickoff = datetime.fromisoformat(self.game['date'])
+        result = game_state(self.data, '101', 'DEN', 'BOS', league='bra.1', kickoff=kickoff)
+        self.assertEqual({'home': 0, 'away': 1}, result['red_cards'])
+        self.assertEqual('away-101', result['key_events'][0]['team_id'])
+        self.assertTrue(result['key_events_available'])
+        self.data['boxscore']['teams'] = [away, away]
+        del self.data['keyEvents']
+        result = game_state(self.data, '101', 'DEN', 'BOS', league='bra.1', kickoff=kickoff)
+        self.assertEqual({'home': None, 'away': None}, result['red_cards'])
+        self.assertFalse(result['key_events_available'])

@@ -214,6 +214,41 @@ class ReferencePreflightTests(unittest.TestCase):
         self.assertEqual('timed_depth', compare([offered | {'team_side': 'home'}],
                                                 [binding | {'team_side': 'home'}], [batch], 30)[0]['references'][0]['status'])
 
+    def test_live_book_can_predate_a_known_dismissal_or_delay(self):
+        preflight = self.preflight | {'sport': 'football', 'phase': 'live', 'effective_score_basis': 'full_period',
+                                      'score_baseline': {'home': 1, 'away': 0}}
+        score_binding = {'event': '101', 'league': 'bra.1', 'scheduled_start': '2026-11-19T12:00:00Z',
+                         'home': 'VAS', 'away': 'INT'}
+        card = {'id': 'card', 'type': {'type': 'red-card'}, 'wallclock': '2026-11-19T12:02:54Z', 'team_id': '1002'}
+        delay = {'id': 'delay', 'type': {'type': 'start-delay'}, 'wallclock': '2026-11-19T12:02:55Z'}
+        sample = score_binding | {
+            'requested_at': '2026-11-19T12:02:56Z', 'received_at': '2026-11-19T12:02:58Z',
+            'teams': {'home': ['VAS', '1'], 'away': ['INT', '0']},
+            'status': {'period': 1, 'type': {'state': 'in'}},
+            'team_ids': {'home': '1001', 'away': '1002'}, 'red_cards': {'home': 0, 'away': 1},
+            'wallclock_available': True, 'key_events_available': True, 'key_events': [delay, card],
+        }
+        batch = {'captured_at': preflight['captured_at'], 'markets': [self.market]}
+
+        def replay(observation):
+            row, = compare([preflight], [self.binding], [batch], 30, score_records=[observation],
+                           score_bindings={'leyu:123': score_binding})
+            return row['score_comparison']['event_context'], row['references'][0]
+
+        context, reference = replay(sample)
+        self.assertEqual('source_counts_match', context['red_card_status'])
+        self.assertEqual('delay_unresolved', context['delay_status'])
+        self.assertEqual(['start-delay'], context['latest_material_events'])
+        self.assertEqual('quote_predates_known_event', reference['live_event_quote_status'])
+        for patch, outcome in (({'key_events': [card, card]}, 'invalid_red_card_event'),
+                               ({'red_cards': {'home': 0, 'away': 0}}, 'source_counts_conflict'),
+                               ({'key_events_available': False}, 'missing_event_evidence'),
+                               ({'red_cards': {}}, 'missing_team_statistics')):
+            with self.subTest(patch=patch):
+                self.assertEqual(outcome, replay(sample | patch)[0]['red_card_status'])
+        ended = delay | {'id': 'ended', 'type': {'type': 'end-delay'}, 'wallclock': '2026-11-19T12:02:57Z'}
+        self.assertEqual('delay_ended', replay(sample | {'key_events': [card, ended, delay]})[0]['delay_status'])
+
     def test_replay_retains_complete_rounds_from_interrupted_capture(self):
         first_round = json.dumps({'markets': [self.market], 'captured_at': self.preflight['captured_at']}).encode() + b'\n'
         shut = deepcopy(self.market)

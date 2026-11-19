@@ -15,6 +15,24 @@ PLAY_KEYS = ('id', 'sequenceNumber', 'wallclock', 'period', 'clock', 'homeScore'
 SOCCER_EVENT_KEYS = ('id', 'wallclock', 'period', 'clock', 'type', 'scoringPlay', 'shootout')
 
 
+def soccer_red_cards(document, competitors):
+    identities = {row['team'].get('id'): row['homeAway'] for row in competitors}
+    counts = {}
+    if None in identities or len(identities) != 2:
+        return counts
+    for row in document.get('boxscore', {}).get('teams', []):
+        side = identities.get(row['team']['id'])
+        if side is None:
+            continue
+        values = [stat.get('displayValue') for stat in row.get('statistics', [])
+                  if stat.get('name') == 'redCards']
+        if side in counts or len(values) != 1 or not re.fullmatch(r'[0-9]{1,2}', str(values[0])):
+            counts[side] = None
+            continue
+        counts[side] = int(values[0])
+    return {side: counts.get(side) for side in ('home', 'away')}
+
+
 def game_state(document, event_id, home, away, *, league=None, kickoff=None):
     header = document['header']
     game, = header['competitions']
@@ -30,10 +48,15 @@ def game_state(document, event_id, home, away, *, league=None, kickoff=None):
         return state | {'plays': [{key: play.get(key) for key in PLAY_KEYS} for play in document.get('plays', [])]}
     if header['league']['slug'] != league or datetime.fromisoformat(game['date']) != kickoff:
         raise ValueError('soccer event league or kickoff mismatch')
+    events = document.get('keyEvents')
+    team_ids = {side['homeAway']: side['team'].get('id') for side in game['competitors']}
     return state | {
         'league': league, 'wallclock_available': document.get('wallclockAvailable'),
+        'team_ids': team_ids, 'red_cards': soccer_red_cards(document, game['competitors']),
+        'key_events_available': isinstance(events, list),
         'key_events': [{key: event.get(key) for key in SOCCER_EVENT_KEYS}
-                       for event in document.get('keyEvents', [])],
+                       | {'team_id': (event.get('team') or {}).get('id')}
+                       for event in (events if isinstance(events, list) else [])],
     }
 
 
