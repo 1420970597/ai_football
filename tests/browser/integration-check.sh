@@ -30,6 +30,11 @@ cleanup() {
  else
   compose logs --no-color api seed web > "$task_evidence/service-final.log" 2>&1 || true
  fi
+ for task_report in integration-results.json integration-account-results.json; do
+  if [ -f "$task_snapshot/tests/browser/$task_report" ]; then
+   cp "$task_snapshot/tests/browser/$task_report" "$task_evidence/$task_report" || true
+  fi
+ done
  compose down --volumes --remove-orphans >/dev/null 2>&1 || true
  printf 'browser_acceptance_exit=%s evidence=%s\n' "$task_result" "$task_evidence"
  exit "$task_result"
