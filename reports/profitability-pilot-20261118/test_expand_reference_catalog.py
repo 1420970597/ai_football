@@ -32,6 +32,7 @@ class CatalogExpansionTests(unittest.TestCase):
 
     def test_market_directions_and_existing_markets(self):
         expanded = self.bind(self.catalog)
+        self.assertEqual(datetime.fromisoformat(self.begin), datetime.fromisoformat(expanded['kickoff_at']))
         handicap, team = expanded['bindings']
         self.assertEqual(('handicap', '1.5'), (handicap['kind'], handicap['line']))
         self.assertEqual(('team_total', 'first_half', 'home'), (team['kind'], team['period'], team['team_side']))

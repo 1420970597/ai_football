@@ -41,6 +41,18 @@
 
 部署使用临时 systemd 定时器。主机重启后运行 `bash infra/profitability/restore_reference_pilot.sh`。入口复用当期私有绑定档案，保留已经运行的定时器。未开始的赛程仍按原时间采样，进行中的赛程从当前时间采集剩余轮次，过去的时段保留缺口。原窗口已闭合时，只为有采样且缺少结果的比赛补做回放。回放合并重启前后的完整记录，遇到未写完的尾行时记录中断档案数，档案内已换行的坏行会使回放失败。Docker 回放复现两场此前巴甲的 5 条真实预检。欧女冠提前试运行生成 1 轮订单簿、0 笔预检的归档。脚本仅观察公开市场和已写入的执行记录。 [恢复入口](../../infra/profitability/restore_reference_pilot.sh) [回放边界测试](test_reference_preflight.py)
 
+11 月 19 日 19:53 UTC，按未来赛程再登记五场。先用正式赛程核对双方、主客和开球，以 `expand_reference_catalog.py` 写入带独立原生赛事、盘口线和规则摘要的私有目录。保存为 `catalog-<目录标签>.json` 后，运行 `bash infra/profitability/restore_reference_pilot.sh --schedule-catalog <目录标签> <乐鱼赛事编号> <UTC 开球时间>`。重启后使用相同参数恢复该场。赛前、滚球、回放分别在开球前 150 分钟、前 3 分钟和后 152 分钟预约。
+
+| 比赛 | 开球 UTC | 对应目录 |
+| --- | --- | --- |
+| 维多利亚对布拉甘蒂诺 | 11 月 19 日 22:30 | `bra-vit-bra-2026-11-19` |
+| 圣保罗对弗鲁米嫩塞 | 11 月 20 日 00:30 | `bra-sao-flu-2026-11-19` |
+| 奥兰多城对辛辛那提 | 11 月 20 日 00:30 | `mls-orl-fcc-2026-11-19` |
+| 西雅图海湾人对皇家盐湖城 | 11 月 20 日 03:00 | `mls-sea-rsl-2026-11-19` |
+| 西悉尼流浪者对阿德莱德联 | 11 月 20 日 08:40 | `aus-wsw-ade-2026-11-20` |
+
+五场采用同一只读报价源，匹配到全场让球、全场大小、半场大小和部分球队大小。MLS 的晋级和点球合同在本轮绑定范围之外，正常时间及异常情形仍需逐盘核对。同期第二源、合法费用和实际预检均由回放独立核验。 [巴甲赛程](https://credencial.cbf.com.br/competicoes/listar/42/1) [MLS 赛程及赛制](https://www.mlssoccer.com/playoffs/2026/news/wild-card-format-key-info-audi-2026-mls-cup-playoffs) [澳超赛程](https://aleagues.com.au/news/news-aleague-men-ins-outs-matchweek-5/)
+
 10:17 UTC，生产预检回放加入原生赛事项目、盘口编号、已核验的结算范围和盘口方向。足球赛前全期间报价还需逐条核对两边的结算条款。滚球全期间盘口需要独立记录的同一比分和比赛状态。剩余期间盘口需要按对应比分基线结算的外部合约。球队大小按原生盘口编号核对主队或客队。状态单列为 `settlement_comparison`，仍保留原报价时效和深度状态。68 项 Docker 研究测试通过。对瓦斯科两笔真实预检回放，赛前全场大小 2.75 和主队视角 −0.75 均标为待核对结算条款，采样在两笔预检之后，仍缺同期外部报价。 [结算范围规则](../../services/api/app/score_rules.py) [回放实现](reference_preflight.py)
 
 10:56 UTC，已确认 ESPN 摘要与现有两个比赛绑定的主客、赛事及开球时间一致。欧女冠和瓦斯科的赛况分别从 17:42 和 22:27 UTC 每 33 秒取样，与同场订单簿使用相同起点。赛前两次线上读取成功，赛事尚未开始，逐事件为空。此前两场同联赛历史摘要的 66 条关键事件均带原生 UTC 时点，比赛状态摘要无原生更新时间。采样保留原生事件时点以及本机请求、接收时间，同一事件后续更正逐轮留存。红牌和 VAR 的完整性、数据供应商独立性以及现场延迟仍待验证。柴桢场保留原订单簿采集，尚无经核验的第三方状态流。 [UEFA 官方赛程](https://www.uefa.com/womenschampionsleague/match/2050573/) [ESPN 欧女冠摘要](https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.wchampions/summary?event=401916978) [ESPN 巴甲摘要](https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/summary?event=401841308) [采样与恢复入口](../../infra/profitability/restore_reference_pilot.sh)

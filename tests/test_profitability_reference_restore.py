@@ -170,6 +170,31 @@ fi
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([label, '--samples', '883', '--interval-seconds', '10'], result.stdout.splitlines()[:5])
 
+    def test_reviewed_catalog_is_scheduled_ahead_of_kickoff(self):
+        label = 'bra-vit-bra-2026-11-19'
+        unit = f'ai-football-profitability-reference-{label}'
+        (self.archive / f'catalog-{label}.json').write_text('{}\n')
+        self.env['CATALOG_MARKET'] = f'{label}-total-3pt5'
+        args = ('--schedule-catalog', label, 'leyu:5824084', '2026-11-19T22:30:00Z')
+        result, entries = self.invoke('2026-11-19T19:40:00Z', *args)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({f'{unit}-{suffix}' for suffix in ('prematch', 'live', 'replay')}, entries.keys())
+        self.assertIn('--on-calendar=2026-11-19 20:00:00 UTC', entries[f'{unit}-prematch'])
+        self.assertIn('--on-calendar=2026-11-19 22:27:00 UTC', entries[f'{unit}-live'])
+        self.assertIn('--on-calendar=2026-11-20 01:02:00 UTC', entries[f'{unit}-replay'])
+        self.assertEqual([label, 'leyu:5824084', '2026-11-19T20:00:00Z', '2026-11-20T01:02:00Z',
+                          self.bindings.name], entries[f'{unit}-replay'][-5:])
+        result, entries = self.invoke('2026-11-19T20:10:00Z', *args, active=f'{unit}-prematch.service',
+                                      state='activating')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn(f'{unit}-prematch', entries)
+        result, entries = self.invoke('2026-11-20T01:10:00Z', *args)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertFalse(entries)
+        result, entries = self.invoke('2026-11-19T19:40:00Z', *args[:2], 'not-leyu', args[3])
+        self.assertEqual(2, result.returncode)
+        self.assertFalse(entries)
+
     def test_expanded_capture_uses_five_seconds_and_an_absolute_deadline(self):
         begin = '2026-11-19T19:57:00Z'
         label = 'uwcl-slb-asr-2026-11-19'

@@ -59,7 +59,8 @@ def bind_catalog(catalog, label, fixture, home, away, kickoff, existing):
         outcomes[slug] = {'rules_sha256': terms['rules_sha256'], 'labels': labels}
     if not bindings:
         raise ValueError('no additional open contracts were verified')
-    return {'event': catalog['slug'], 'observed_at': now().isoformat(), 'bindings': bindings,
+    return {'event': catalog['slug'], 'kickoff_at': kickoff.isoformat(),
+            'observed_at': now().isoformat(), 'bindings': bindings,
             'outcomes': {'polymarket': outcomes}}
 
 

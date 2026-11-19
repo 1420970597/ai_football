@@ -57,8 +57,8 @@ if [[ ${1-} == --capture || ${1-} == --score ]]; then
         "${deadline_args[@]}" "${@:2}"
 fi
 
-if (( $# != 0 )); then
-    printf '%s\n' 'Usage: restore_reference_pilot.sh' >&2
+if (( $# != 0 )) && [[ ${1-} != --schedule-catalog || $# != 4 ]]; then
+    printf '%s\n' 'Usage: restore_reference_pilot.sh [--schedule-catalog <label> <fixture-id> <UTC kickoff>]' >&2
     exit 2
 fi
 if [[ ! -s "$archive/$bindings" || ! -r "$archive/$bindings" ]]; then
@@ -128,6 +128,77 @@ has_archive() {
     return 1
 }
 
+catalog_markets() {
+    local label=$1 fixture=$2 kickoff=${3-}
+    docker run --rm --user "$(id -u):$(id -g)" --network none --cpus .25 --memory 96m \
+        --mount "type=bind,src=$archive/catalog-$label.json,dst=/catalog.json,readonly" --entrypoint python \
+        ai-football-verifier:v2.0.0-dev -c '
+from datetime import datetime
+import json
+import re
+import sys
+
+with open("/catalog.json") as source:
+    data = json.load(source)
+if data["event"] != sys.argv[1] + "-more-markets" or not 1 <= len(data["bindings"]) <= 48:
+    raise ValueError("catalog event differs or has an invalid market count")
+if sys.argv[3]:
+    kickoff = datetime.fromisoformat(data["kickoff_at"])
+    if kickoff.utcoffset() is None or kickoff.timestamp() != int(sys.argv[3]):
+        raise ValueError("catalog kickoff differs from the scheduled fixture")
+markets = set()
+for item in data["bindings"]:
+    market = item["market"]
+    if (item["fixture_id"] != sys.argv[2] or item["source"] != "polymarket"
+            or not market.startswith(sys.argv[1] + "-")
+            or not re.fullmatch(r"[a-z0-9-]{1,160}", market) or market in markets):
+        raise ValueError("catalog binding differs from the scheduled fixture")
+    markets.add(market)
+    print(market)
+' "$label" "$fixture" "$kickoff"
+}
+
+restore_catalog() {
+    local label=$1 fixture=$2 kickoff=$3
+    if [[ ! "$label" =~ ^[a-z0-9-]{1,120}$ || ! "$fixture" =~ ^leyu:[0-9]+$ ||
+          ! "$kickoff" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ||
+          ! -s "$archive/catalog-$label.json" ]]; then
+        printf '%s\n' 'A verified fixture catalog and its UTC kickoff are required.' >&2
+        return 2
+    fi
+    local now_epoch kickoff_epoch live_epoch prematch_epoch live_end replay_epoch earliest
+    now_epoch=$(date -u +%s)
+    kickoff_epoch=$(date -u -d "$kickoff" +%s)
+    live_epoch=$((kickoff_epoch - 180))
+    prematch_epoch=$((live_epoch - prematch_offset))
+    live_end=$((live_epoch + last_offset))
+    replay_epoch=$((live_epoch + 155 * 60))
+    earliest=$((now_epoch + 5))
+    local early live end unit listing market
+    early=$(date -u -d "@$prematch_epoch" +%FT%TZ)
+    live=$(date -u -d "@$live_epoch" +%FT%TZ)
+    end=$(date -u -d "@$replay_epoch" +%FT%TZ)
+    unit="ai-football-profitability-reference-$label"
+    listing=$(catalog_markets "$label" "$fixture" "$kickoff_epoch")
+    local args=(--polymarket-event "$label-more-markets")
+    while IFS= read -r market; do
+        args+=(--polymarket "$market")
+    done <<< "$listing"
+    if (( earliest < live_epoch )) && ! unit_active "$unit-prematch"; then
+        register_once "$unit-prematch" "$((earliest > prematch_epoch ? earliest : prematch_epoch))" 9000s \
+            "$root/restore_reference_pilot.sh" --capture "$early" --before "$live" "$label-prematch-catalog" "${args[@]}"
+    fi
+    if (( earliest <= live_end )) && ! unit_active "$unit-live"; then
+        register_once "$unit-live" "$((earliest > live_epoch ? earliest : live_epoch))" 9000s \
+            "$root/restore_reference_pilot.sh" --capture "$live" "$label-catalog" "${args[@]}"
+    fi
+    if ! has_archive "$archive/$label-replay-"*.json && ! unit_active "$unit-replay" &&
+        { (( now_epoch < replay_epoch )) || has_archive "$archive/$label-"*.jsonl; }; then
+        register_once "$unit-replay" "$((earliest > replay_epoch ? earliest : replay_epoch))" 90s \
+            "$root/replay_reference_window.sh" "$label" "$fixture" "$early" "$end" "$bindings"
+    fi
+}
+
 restore_fixture() {
     local name=$1 label=$2 fixture=$3 begin=$4 end=$5 home=$6 away=$7 handicap=$8
     shift 8
@@ -174,20 +245,7 @@ restore_fixture() {
         { ! unit_active "$catalog_unit" || { (( prematch_at < begin_epoch )) && ! unit_active "$prematch_catalog_unit"; }; }; then
         local evidence market
         local catalog_args=()
-        evidence=$(docker run --rm --user "$(id -u):$(id -g)" --network none --cpus .25 --memory 96m \
-            --mount "type=bind,src=$catalog,dst=/catalog.json,readonly" --entrypoint python \
-            ai-football-verifier:v2.0.0-dev -c '
-import json
-import sys
-with open("/catalog.json") as source:
-    data = json.load(source)
-if data["event"] != sys.argv[1] + "-more-markets" or not 1 <= len(data["bindings"]) <= 48:
-    raise ValueError("catalog event differs or has an invalid market count")
-for item in data["bindings"]:
-    if item["fixture_id"] != sys.argv[2] or item["source"] != "polymarket":
-        raise ValueError("catalog binding differs from the scheduled fixture")
-    print(item["market"])
-' "$label" "$fixture")
+        evidence=$(catalog_markets "$label" "$fixture")
         while IFS= read -r market; do
             catalog_args+=(--polymarket "$market")
         done <<< "$evidence"
@@ -228,6 +286,11 @@ for item in data["bindings"]:
         printf '%s\n' "$name has no captured observations to replay."
     fi
 }
+
+if [[ ${1-} == --schedule-catalog ]]; then
+    restore_catalog "$2" "$3" "$4"
+    exit
+fi
 
 restore_fixture svay aseanc-svr-por-2026-11-19 leyu:5860873 \
     2026-11-19T11:57:00Z 2026-11-19T14:32:00Z svr por home
