@@ -363,7 +363,8 @@ async def _market_snapshot(conn, body, settings, filters):
     return fixture, total_quotes, quotes, max_age
 
 
-async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh):
+async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh,
+                              *, refresh_start=None):
     confirmations = confirmations_for(refresh.get('_observation'), quotes, fixture, max_age)
     if quotes:
         await conn.executemany(
@@ -384,7 +385,8 @@ async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age
               'refresh': refresh, 'market_filter': market_filter, 'market_coverage': coverage}
     return await tool_success(conn, body, result, {'fixture_id': body.fixture_id,
         'quote_ids': [str(q['id']) for q in quotes], 'refresh': refresh,
-        'market_filter': market_filter, 'market_coverage': coverage})
+        'market_filter': market_filter, 'market_coverage': coverage,
+        **({'refresh_start': refresh_start} if refresh_start is not None else {})})
 
 
 async def _request_market_refresh(fixture_id: str, source_match_id: str, request: Request, *,
@@ -442,12 +444,13 @@ async def list_match_markets(body: MarketInput, request: Request):
             age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
             missing_live_score = fixture['phase'] == 'live' and (
                 fixture['home_score'] is None or fixture['away_score'] is None)
+            quotes_are_fresh = bool(quotes) and all(fresh_quote(quote, max_age) for quote in quotes)
             reason = None
             if not getattr(settings, 'market_refresh_url', ''):
                 reason = 'refresh_unconfigured'
             elif job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS:
                 reason = 'historical_review_not_current'
-            elif not missing_live_score and quotes and all(fresh_quote(quote, max_age) for quote in quotes):
+            elif quotes_are_fresh and not missing_live_score:
                 reason = 'quotes_already_fresh'
             elif (not quotes and total_quotes and any(value is not None for value in filters.values())
                   and not (fixture['sport'] == 'football' and filters['market_kind'] == 'team_total')):
@@ -457,6 +460,7 @@ async def list_match_markets(body: MarketInput, request: Request):
                                                  filters, {'attempted': False, 'reason': reason})
             source_match_id = fixture['source_id']
             known_snapshot = known_quote_snapshot(fixture, quotes)
+            refresh_start = {'missing_live_score': missing_live_score, 'matched_quotes_fresh': quotes_are_fresh}
     # Nothing from the preflight transaction authorizes the post-I/O result.
     # Release its connection and locks, then reread every eligibility witness.
     refresh = await _request_market_refresh(body.fixture_id, source_match_id, request,
@@ -465,7 +469,8 @@ async def list_match_markets(body: MarketInput, request: Request):
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
             fixture, total_quotes, quotes, max_age = await _market_snapshot(conn, body, settings, filters)
-            return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh)
+            return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh,
+                                             refresh_start=refresh_start)
 
 
 async def _record_current_signals(conn, body, request, observations):

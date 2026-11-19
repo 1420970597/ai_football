@@ -917,6 +917,17 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, response.json()['fixture']['home_score'])
         self.assertEqual(0, response.json()['fixture']['away_score'])
         self.assertEqual('quotes_already_fresh', reread.json()['refresh']['reason'])
+        self.assertNotIn('refresh_start', response.json())
+        starts = await self.pool.fetch("""
+            SELECT payload->'refresh_start' AS initial_context
+            FROM v2_analysis_traces
+            WHERE job_id=$1 AND trace_kind='mcp_list_match_markets'
+            ORDER BY sequence_no
+        """, self.job)
+        self.assertEqual(
+            [{'missing_live_score': True, 'matched_quotes_fresh': True}] * 2 + [None],
+            [row['initial_context'] for row in starts],
+        )
 
     async def test_refresh_releases_single_pool_connection_and_rereads_updated_price(self):
         fixture_id = await self.fixture()
