@@ -135,6 +135,50 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         await self.worker_api.post('/internal/executor/dispatch')
         self.assertEqual('idle',(await self.worker_api.post('/internal/executor/claim')).json()['kind'])
 
+    async def test_distant_confirmed_order_waits_without_delaying_balance_or_urgent_checks(self):
+        account = await self.healthy()
+        fixture = 'leyu:886671'
+        signal, expert, _, _ = await self.signal(fixture=fixture)
+        await self.enable([expert])
+        await self.pool.execute(
+            "UPDATE v2_fixtures SET phase='scheduled',kickoff_at=now()+interval '1 hour' WHERE id=$1", fixture)
+        await self.pool.execute("UPDATE v2_expert_signals SET phase='scheduled' WHERE id=$1", signal)
+        order = await self.reserve(signal)
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='accepted',provider_order_no='DISTANT',"
+            "result_payload=$2,updated_at=now()-interval '1 minute' WHERE id=$1",
+            order['id'], {'order_no': 'DISTANT', 'state': 'unsettled'})
+        dispatch, claim = '/internal/executor/dispatch', '/internal/executor/claim'
+
+        async def finish(work):
+            response = await self.worker_api.post(f"/internal/executor/jobs/{work['job_id']}/finish", json={
+                'attempt_id': work['attempt_id'], 'status': 'success',
+                'balance': '100', 'observed_at': datetime.now(timezone.utc).isoformat()})
+            self.assertEqual(200, response.status_code, response.text)
+
+        await self.worker_api.post(dispatch)
+        self.assertEqual('idle', (await self.worker_api.post(claim)).json()['kind'])
+        await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '61 seconds' WHERE id=$1",
+                                account['id'])
+        await self.worker_api.post(dispatch)
+        work = (await self.worker_api.post(claim)).json()
+        self.assertEqual(('account', []), (work['kind'], work['orders']))
+        await finish(work)
+
+        await self.pool.execute("UPDATE v2_fixtures SET kickoff_at=now()+interval '14 minutes' WHERE id=$1", fixture)
+        await self.worker_api.post(dispatch)
+        work = (await self.worker_api.post(claim)).json()
+        self.assertEqual(['DISTANT'], [item['provider_order_no'] for item in work['orders']])
+        await finish(work)
+
+        await self.pool.execute("UPDATE v2_fixtures SET kickoff_at=now()+interval '1 hour' WHERE id=$1", fixture)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown' WHERE id=$1", order['id'])
+        await self.worker_api.post(dispatch)
+        work = (await self.worker_api.post(claim)).json()
+        self.assertEqual(['DISTANT'], [item['provider_order_no'] for item in work['orders']])
+        stored = await self.pool.fetchrow('SELECT state,reserved_stake FROM v2_bet_orders WHERE id=$1', order['id'])
+        self.assertEqual(('unknown', order['reserved_stake']), (stored['state'], stored['reserved_stake']))
+
     async def test_failed_refresh_preserves_longer_cooldown_and_other_accounts(self):
         account=await self.healthy()
         other_user,other_account=uuid.uuid4(),uuid.uuid4()

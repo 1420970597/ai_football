@@ -442,7 +442,12 @@ async def claim_work(request: Request, live_capable: bool = False, settled_reche
                     config['leyu_app_authorization_code'] = decrypt_secret(settings.encryption_key, authorization['encrypted_authorization_code'])
                 attempt = uuid.uuid4()
                 await conn.execute("UPDATE v2_account_jobs SET state='running',attempt_id=$2,config_revision=$3,lease_until=now()+interval '300 seconds',updated_at=now() WHERE id=$1", job["id"], attempt, account["config_revision"])
-                reconcile = [] if history_request else await conn.fetch("SELECT id,provider_order_no,created_at FROM v2_bet_orders WHERE user_id=$1 AND provider_identity_hash=$2 AND state IN('accepted','unknown') AND provider_order_no IS NOT NULL ORDER BY updated_at LIMIT 2", account["user_id"], account["provider_identity_hash"])
+                reconcile = [] if history_request else await conn.fetch(
+                    "SELECT o.id,o.provider_order_no,o.created_at FROM v2_bet_orders o "
+                    "WHERE o.user_id=$1 AND o.provider_identity_hash=$2 AND o.state IN('accepted','unknown') "
+                    "AND o.provider_order_no IS NOT NULL AND " + jobs.OPEN_ORDER_CHECK_DUE + " ORDER BY o.updated_at,o.id LIMIT 2",
+                    account["user_id"], account["provider_identity_hash"],
+                )
                 revision_order = (await jobs.due_settled_recheck(conn, account)
                                   if settled_recheck and job['kind'] in {'refresh', 'reconcile'} and len(reconcile) < 2
                                   else None)
@@ -520,7 +525,9 @@ async def dispatch(request: Request):
         async with conn.transaction():
             rows = await conn.fetch("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state='healthy' AND a.renewal_state='ready' "
                 "AND (a.renewal_retry_after IS NULL OR a.renewal_retry_after<=now()) "
-                "AND (a.last_verified_at<now()-interval '60 seconds' OR EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=a.user_id AND o.state IN('accepted','unknown') AND o.provider_order_no IS NOT NULL AND o.updated_at<now()-interval '30 seconds')) "
+                "AND (a.last_verified_at<now()-interval '60 seconds' OR EXISTS(SELECT 1 FROM v2_bet_orders o "
+                "WHERE o.user_id=a.user_id AND o.state IN('accepted','unknown') AND o.provider_order_no IS NOT NULL "
+                "AND o.updated_at<now()-interval '30 seconds' AND " + jobs.OPEN_ORDER_CHECK_DUE + ")) "
                 "AND NOT EXISTS(SELECT 1 FROM v2_account_jobs j WHERE j.account_id=a.id AND j.state IN('queued','running')) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 20")
             for account in rows:
                 await jobs.enqueue(conn, account, "refresh")

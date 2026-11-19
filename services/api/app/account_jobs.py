@@ -18,6 +18,15 @@ PROTOCOL_KEYS = frozenset({"leyu_app_host", "leyu_app_signing_config", "leyu_app
 SESSION_KEYS = frozenset({"leyu_app_host", "leyu_api_base", "leyu_origin", "leyu_request_id", "leyu_app_token"})
 LOGIN_PROTOCOL_KEYS = PROTOCOL_KEYS
 
+# Recheck a confirmed unsettled order sooner when its fixture approaches kickoff or changes phase.
+OPEN_ORDER_CHECK_DUE = (
+    "(o.updated_at<=now()-interval '15 minutes' OR ("
+    "o.state='accepted' AND o.result_payload->>'state'='unsettled' "
+    "AND o.result_payload->>'order_no'=o.provider_order_no "
+    "AND EXISTS(SELECT 1 FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id "
+    "WHERE s.id=o.signal_id AND f.phase='scheduled' AND f.kickoff_at>now()+interval '15 minutes')) IS NOT TRUE)"
+)
+
 
 def public_task(row, binding_revision):
     """Only bounded diagnostic fields may leave the private executor task."""
