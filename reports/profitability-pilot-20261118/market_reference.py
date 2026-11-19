@@ -25,7 +25,7 @@ def identity(value):
     return value.strip().casefold()
 
 
-def live_state(state, contract_period, cutoff):
+def live_state(state, contract_period, oldest, cutoff):
     period = state['period']
     if (state['status'] != 'playing' or period not in {'first_half', 'second_half'}
             or contract_period == 'first_half' and period != 'first_half'):
@@ -37,6 +37,8 @@ def live_state(state, contract_period, cutoff):
     received = aware_time(state['received_at'])
     if not confirmed <= received <= cutoff:
         raise ValueError('live state was unavailable at the decision time')
+    if received < oldest:
+        raise ValueError('live state observation is stale at the decision time')
     return (period, *values), confirmed
 
 
@@ -159,7 +161,7 @@ def price_from_verified_references(document):
             raise ValueError('offered quote is not active')
         quoted_times.append(quote_time(document['offer_quoted_at'], document['offer_received_at'], oldest, cutoff))
     if contract['phase'] == 'live':
-        state, latest_confirmation = live_state(document['event_state'], contract['period'], cutoff)
+        state, latest_confirmation = live_state(document['event_state'], contract['period'], oldest, cutoff)
     book_ranges = {}
     for source, quote in references.items():
         venue = identity(quote['venue'])
@@ -200,7 +202,7 @@ def price_from_verified_references(document):
                     quoted_times.append(quote_time(book['quoted_at'], book['received_at'], oldest, cutoff))
                 verified[outcome] = book_probability(sample, ('yes', 'no'))
             if state is not None:
-                reference_state, confirmed = live_state(sample['event_state'], contract['period'], cutoff)
+                reference_state, confirmed = live_state(sample['event_state'], contract['period'], oldest, cutoff)
                 if reference_state != state:
                     raise ValueError('reference live state differs from the offered state')
                 latest_confirmation = max(latest_confirmation, confirmed)

@@ -232,6 +232,22 @@ class VerifiedReferenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, reason):
                     price_from_verified_references(data)
 
+    def test_live_state_snapshot_must_be_recent_even_when_quotes_are_fresh(self):
+        for stale_offer in (True, False):
+            with self.subTest(stale_offer=stale_offer):
+                data = self.live_request()
+                stale = data['event_state'] if stale_offer else data['references']['b']['event_state']
+                stale['received_at'] = '2026-11-18T11:48:29.999999Z'
+                with self.assertRaisesRegex(ValueError, 'live state observation is stale'):
+                    price_from_verified_references(data)
+
+    def test_recent_state_observation_can_confirm_unchanged_score(self):
+        data = self.live_request()
+        states = [data['event_state'], *(row['event_state'] for row in data['references'].values())]
+        for state in states:
+            state['confirmed_at'] = '2026-11-18T11:47:00Z'
+        self.assertEqual(Decimal('2.06'), price_from_verified_references(data)['minimum_odds'])
+
     def test_closed_offer_and_already_determined_totals_are_rejected(self):
         data = self.live_request()
         with self.assertRaisesRegex(ValueError, 'offered quote is not active'):
