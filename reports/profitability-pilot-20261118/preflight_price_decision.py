@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from market_reference import aware_time, market_terms, price_from_verified_references
 from price_contract import decimal
+from reference_lines import full_match_line
 
 
 TERMS = ('fixture_id', 'market_id', 'sport', 'phase', 'kind', 'period', 'line',
@@ -77,10 +78,17 @@ def evaluate(row, approvals, max_age_seconds):
         offer['settlement_scope'] = 'regulation'
     try:
         _, offer['line'] = market_terms(offer)
+        reference_offer = offer
+        if offer['score_basis'] == 'remaining_period':
+            line = full_match_line(preflight)
+            matched_line = row.get('equivalent_full_match_line')
+            if line is None or matched_line is None or decimal(matched_line) != line:
+                return {'status': 'ineligible', 'reasons': ['remaining_period_conversion_unverified']}
+            reference_offer = offer | {'line': line, 'score_basis': 'full_period'}
     except (KeyError, TypeError, ValueError, InvalidOperation):
         return {'status': 'ineligible', 'reasons': ['contract_terms_unverified']}
 
-    kind, line = offer['kind'], offer['line']
+    kind, line = reference_offer['kind'], reference_offer['line']
     adjacent = row.get('adjacent_line_coverage') or {}
     winner = row.get('winner_reference_for_zero_handicap') or {}
     if offer['sport'] == 'football' and (kind == 'winner' or kind == 'handicap' and line == 0 and winner):
@@ -105,6 +113,12 @@ def evaluate(row, approvals, max_age_seconds):
     if offer['phase'] == 'live' and (row.get('score_comparison', {}).get('status') != 'observed_score_matches'
                                     or not row.get('verified_offer_event_state')):
         reasons.append('live_state_unverified')
+    if reference_offer is not offer:
+        result['equivalent_full_match_line'] = line
+        state = row.get('verified_offer_event_state') or {}
+        baseline = preflight['score_baseline']
+        if state and (state.get('home_score'), state.get('away_score')) != (baseline['home'], baseline['away']):
+            reasons.append('remaining_period_score_mismatch')
     context = row.get('score_comparison', {}).get('event_context', {})
     if context.get('delay_status') == 'delay_unresolved':
         reasons.append('live_delay_unresolved')
@@ -123,6 +137,7 @@ def evaluate(row, approvals, max_age_seconds):
         reasons.append('native_offer_check_time_unverified')
     try:
         approved = [entry for entry in approvals if terms_match(entry['contract'], offer)
+                    and (reference_offer is offer or entry.get('reference_score_basis') == 'full_period')
                     and aware_time(entry['approved_at']) <= aware_time(preflight['captured_at'])]
     except (KeyError, TypeError, ValueError, InvalidOperation):
         approved = []
@@ -140,13 +155,13 @@ def evaluate(row, approvals, max_age_seconds):
         references = {}
         for name in sorted(sources & approval['sources'].keys()):
             try:
-                references[name] = reference_input(offer, approval['sources'][name], name, sections, mode)
+                references[name] = reference_input(reference_offer, approval['sources'][name], name, sections, mode)
             except (KeyError, TypeError, ValueError, InvalidOperation):
                 continue
         if len(references) < 2:
             return result | {'status': 'ineligible', 'reasons': ['two_approved_depth_sources_missing']}
         document = {
-            'reference_mode': mode, 'contract': offer, 'as_of': preflight['captured_at'],
+            'reference_mode': mode, 'contract': reference_offer, 'as_of': preflight['captured_at'],
             'max_age_seconds': max_age_seconds, 'max_quote_skew_seconds': min(5, max_age_seconds),
             'offer_venue': 'leyu', 'offer_feed_origin': approval['offer_feed_origin'],
             'offer_status': 'active', 'offer_checked_at': preflight['provider_quote_checked_at'],

@@ -87,6 +87,41 @@ class PreflightPriceDecisionTests(unittest.TestCase):
         self.assertEqual(['live_state_unverified', 'live_delay_unresolved', 'live_event_evidence_conflict'],
                          self.evaluate()['reasons'])
 
+    def test_live_handicap_conversion_preserves_selection_and_requires_matching_state(self):
+        terms = {'market_id': '4', 'kind': 'handicap', 'phase': 'live', 'line': '0.5',
+                 'line_basis': 'provider_home', 'score_basis': 'remaining_period'}
+        self.row['preflight'].update(terms, selection='home', effective_score_basis='remaining_period',
+                                     settlement_rule='leyu-football-fulltime-live-handicap-e448-20261106',
+                                     score_baseline={'home': 2, 'away': 0})
+        self.approval['contract'].update(terms)
+        self.approval['reference_score_basis'] = 'full_period'
+        state = {'period': 'second_half', 'status': 'playing', 'home_score': 2, 'away_score': 0,
+                 'home_red_cards': 0, 'away_red_cards': 0, 'confirmed_at': '2026-11-19T11:59:19Z',
+                 'received_at': '2026-11-19T11:59:22Z'}
+        self.row.update(equivalent_full_match_line='-1.5', verified_offer_event_state=state,
+                        score_comparison={'status': 'observed_score_matches'})
+        for ref in self.row['references']:
+            ref['verified_event_state'] = state.copy()
+            for book, outcome in zip(ref['books'], ('home', 'away')):
+                book['canonical_outcome'] = outcome
+        decision = self.evaluate()
+        self.assertEqual('price_eligible', decision['status'])
+        self.assertEqual(Decimal('-1.5'), decision['equivalent_full_match_line'])
+        self.assertEqual(Decimal('1.03') / Decimal('0.59'), decision['pricing']['minimum_odds'])
+        self.row['preflight']['selection'] = 'away'
+        self.assertEqual('below_minimum_odds', self.evaluate()['status'])
+
+        self.row['equivalent_full_match_line'] = '-2.5'
+        self.assertIn('remaining_period_conversion_unverified', self.evaluate()['reasons'])
+        self.row['equivalent_full_match_line'] = '-1.5'
+        state['home_score'] = 3
+        self.assertIn('remaining_period_score_mismatch', self.evaluate()['reasons'])
+        state['home_score'] = 2
+        self.row['references'][1]['verified_event_state']['home_score'] = 3
+        self.assertIn('reference_validation_failed', self.evaluate()['reasons'])
+        self.approval.pop('reference_score_basis')
+        self.assertIn('settlement_and_cost_approval_missing', self.evaluate()['reasons'])
+
     def test_missing_source_quotes_and_cost_proof_are_visible(self):
         self.row.update(references=[], source_groups={})
         self.assertEqual(['reference_contract_missing', 'settlement_and_cost_approval_missing'],

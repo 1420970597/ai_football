@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 
 from preflight_price_decision import compare_with_receipts, evaluate
-from reference_lines import adjacent_lines
+from reference_lines import adjacent_lines, full_match_line
 from reference_stream_replay import compare_rest, read_segment, stream_quote
 
 REFERENCE_SIDES = {'winner': {'home', 'draw', 'away'}, 'handicap': {'home', 'away'},
@@ -40,7 +40,8 @@ def settlement_comparison(preflight):
         return 'line_orientation_unverified'
     basis = preflight.get('effective_score_basis')
     if basis == 'remaining_period':
-        return 'remaining_period_reference_missing'
+        return ('remaining_period_reference_missing' if full_match_line(preflight) is None
+                else 'equivalent_full_match_line_requires_live_state')
     if basis != 'full_period':
         return 'score_basis_unverified'
     if preflight.get('phase') == 'live':
@@ -351,7 +352,9 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
     for preflight in preflights:
         cutoff = instant(preflight['captured_at'])
         earliest = cutoff - timedelta(seconds=max_age_seconds)
-        contract = contract_key(preflight)
+        equivalent = full_match_line(preflight)
+        reference_offer = preflight if equivalent is None else preflight | {'line': equivalent}
+        contract = contract_key(reference_offer)
         binary_winner = preflight.get('sport') == 'basketball' and preflight['kind'] == 'winner'
         score_comparison = None
         if preflight.get('sport') == 'football' and preflight.get('phase') == 'live':
@@ -374,12 +377,15 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
                 reference['stream'] = stream
             return reference
 
-        sources = [quote(binding) for binding in by_contract.get(contract, [])]
+        remaining_unverified = equivalent is None and preflight.get('effective_score_basis') == 'remaining_period'
+        sources = [] if remaining_unverified else [quote(binding) for binding in by_contract.get(contract, [])]
         row = {'preflight': preflight, 'references': sources,
                'settlement_comparison': settlement_comparison(preflight)}
+        if equivalent is not None:
+            row['equivalent_full_match_line'] = equivalent
         if score_comparison is not None:
             row['score_comparison'] = score_comparison
-        if outcomes is not None:
+        if outcomes is not None and not remaining_unverified:
             row['source_groups'] = source_groups(sources, preflight['kind'], binary_winner)
             adjacent = adjacent_groups(contract, by_contract, quote, min(adjacent_skew_seconds, max_age_seconds))
             if adjacent is not None:

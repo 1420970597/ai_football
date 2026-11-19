@@ -281,8 +281,42 @@ class ReferencePreflightTests(unittest.TestCase):
             with self.subTest(phase=phase, basis=basis):
                 preflight = base | {'phase': phase, 'effective_score_basis': basis}
                 row, = compare([preflight], [binding], [batch], 30)
-                self.assertEqual('timed_depth', row['references'][0]['status'])
+                if basis == 'remaining_period':
+                    self.assertEqual([], row['references'])
+                else:
+                    self.assertEqual('timed_depth', row['references'][0]['status'])
                 self.assertEqual(expected, row['settlement_comparison'])
+
+    def test_live_remaining_handicap_looks_up_the_equivalent_final_line(self):
+        preflight = self.preflight | {
+            'sport': 'football', 'kind': 'handicap', 'period': 'full_time', 'market_id': '4',
+            'phase': 'live', 'effective_score_basis': 'remaining_period', 'line_basis': 'provider_home',
+            'settlement_rule': 'leyu-football-fulltime-live-handicap-e448-20261106',
+            'line': '0.5', 'selection': 'away', 'score_baseline': {'home': 2, 'away': 0},
+        }
+        bindings = [self.binding | {'kind': 'handicap', 'period': 'full_time', 'line': line, 'market': name}
+                    for line, name in (('0.5', 'raw-line'), ('-1.5', 'final-line'))]
+        markets = [self.market | {'market': binding['market']} for binding in bindings]
+        batch = {'captured_at': preflight['captured_at'], 'markets': markets}
+
+        def replay(offer):
+            return compare([offer], bindings, [batch], 30)[0]
+
+        row = replay(preflight)
+        self.assertEqual(Decimal('-1.5'), row['equivalent_full_match_line'])
+        self.assertEqual(['final-line'], [ref['market'] for ref in row['references']])
+        self.assertEqual('0.5', row['preflight']['line'])
+        self.assertEqual('away', row['preflight']['selection'])
+        self.assertEqual('equivalent_full_match_line_requires_live_state', row['settlement_comparison'])
+        self.assertEqual(['raw-line'], [ref['market'] for ref in replay(preflight | {
+            'score_baseline': {'home': 1, 'away': 1}})['references']])
+        for broken in ({'score_baseline': {'home': 2}}, {'settlement_rule': 'unverified'},
+                       {'score_baseline': {'home': True, 'away': 0}}, {'line_basis': 'selection'},
+                       {'market_id': '19'}, {'line': '0.3'}):
+            with self.subTest(broken=broken):
+                row = replay(preflight | broken)
+                self.assertNotIn('equivalent_full_match_line', row)
+                self.assertEqual([], row['references'])
 
     def test_score_replay_uses_only_the_latest_eligible_observation(self):
         preflight = self.preflight | {'sport': 'football', 'phase': 'live', 'effective_score_basis': 'full_period',
