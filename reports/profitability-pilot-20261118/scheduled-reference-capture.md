@@ -1,5 +1,22 @@
 # 自然预检的同步外部报价采样
 
+## 按历史实际下单时段验证
+
+11 月 19 日 20:45 UTC 起，在生产 API 容器以只读事务统计近 48 小时有同次预检和原生订单号的自动单。欧女冠 14 笔赛前单中，开球前 150 分钟以内有 1 笔，前 330 分钟内有 8 笔。巴甲 5 笔和 MLS 附加赛 4 笔均在开球前 8 小时以上。巴甲、MLS 共有 6 笔在 11 月 19 日 06:09 至 06:11 UTC 受理，巴甲另 3 笔在 11 月 18 日 11:51 至 14:09 UTC 受理。这两组时间用于选择采样时段，后续实际受理情况独立统计。
+
+| 比赛 | 开球 UTC | 额外采样 UTC |
+| --- | --- | --- |
+| 拜仁慕尼黑对科隆 | 11 月 20 日 19:30 | 11 月 20 日 05:58 至 06:25 |
+| 帕尔梅拉斯对弗拉门戈 | 11 月 21 日 19:30 | 11 月 21 日 05:58 至 06:25、11:45 至 14:12 |
+| 巴伊亚对科里蒂巴 | 11 月 21 日 20:30 | 11 月 21 日 05:58 至 06:25、11:45 至 14:12 |
+| 新英格兰革命对费城联合 | 11 月 21 日 19:00 | 11 月 21 日 05:58 至 06:25 |
+
+四场均以官方赛程和乐鱼记录核对主客和开球，并用 `expand_reference_catalog.py` 生成半球盘口绑定。11 月 21 日三场的单轮采集各返回 44 份盘口记录，拜仁场已通过盘口目录映射。6 个采集时段及 6 个回放定时器已启用。每轮间隔 10 秒，单个容器上限为 0.25 CPU 和 128 MiB。回放在各时段结束后 75 秒运行，以 `--preview` 隔离早段和标准时段归档。宿主机重启后按表恢复未过期的临时单元。 [德甲赛程](https://products.bundesliga.com/fixtures) [巴甲赛程](https://credencial.cbf.com.br/competicoes/listar/42/1) [MLS 官方赛程](https://bracket.mlssoccer.com/news/mls-announces-schedule-for-audi-2026-mls-cup-playoffs-round-one-best-of-3-series)
+
+Kalshi 两场挂牌全场大 2.5 的盘口 REST 响应均无原生报价时点，市场详情的 `updated_time` 均停在 11 月 14 日。独立择价仍需第二来源符合原生时间约束，并核实同合同规则与成本。随自然预检回放，逐笔保留价格、可用深度、实际回执以及跟单、达到最低赔率才下单和不下单三种结果。 [帕尔梅拉斯合约](https://kalshi.com/markets/kxbrasileirototal/brasileiro-total/kxbrasileirototal-26nov21palfla) [新英格兰合约](https://kalshi.com/markets/kxmlstotal/mls-total/kxmlstotal-26nov21nephi) [市场详情字段](https://docs.kalshi.com/api-reference/market/get-market)
+
+## 原采样档案
+
 2026 年 11 月 19 日以近期已成交的赛事类型为起点，匹配同日赛程。东南亚球会锦标赛和巴甲各登记一场连续采样，欧女冠登记两场。每场从开球前 3 分钟开始，以 33 秒为轮次间隔，最多 238 轮。采集包括胜平负三项、全场大小、上半场大小和全场让球。奥地利维也纳对拜仁另有 Kalshi 全场大小与让球，巴甲另有 Kalshi 全场大小。 [柴桢对泰港目录](https://gamma-api.polymarket.com/events/slug/aseanc-svr-por-2026-11-19) [奥地利维也纳对拜仁目录](https://gamma-api.polymarket.com/events/slug/uwcl-faw-bm-2026-11-19) [本菲卡对罗马目录](https://gamma-api.polymarket.com/events/slug/uwcl-slb-asr-2026-11-19) [瓦斯科对巴西国际目录](https://gamma-api.polymarket.com/events/slug/bra-vas-int-2026-11-19)
 
 | 比赛 | 采样启动 UTC | 回放启动 UTC |
