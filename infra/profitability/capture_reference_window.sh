@@ -8,9 +8,13 @@ if [[ ${1-} == --stream ]]; then
     script=reference_orderbook_stream.py
     archive_name=public-orderbook-stream-20261119
     shift
+elif [[ ${1-} == --score ]]; then
+    script=reference_basketball_state.py
+    archive_name=public-score-pilot-20261119
+    shift
 fi
 if [[ $# -lt 2 || ! "$1" =~ ^[a-z0-9-]{1,160}$ ]]; then
-    printf '%s\n' 'Usage: capture_reference_window.sh [--stream] <archive-label> <order book arguments>' >&2
+    printf '%s\n' 'Usage: capture_reference_window.sh [--stream|--score] <archive-label> <source arguments>' >&2
     exit 2
 fi
 label=$1

@@ -8,7 +8,8 @@ bindings=fixture-bindings-20261119.json
 interval=33
 last_offset=$((237 * interval))
 
-if [[ ${1-} == --capture ]]; then
+if [[ ${1-} == --capture || ${1-} == --score ]]; then
+    mode=$1
     shift
     begin=$(date -u -d "$1" +%s)
     now=$(date -u +%s)
@@ -18,7 +19,11 @@ if [[ ${1-} == --capture ]]; then
         exit 0
     fi
     shift
-    exec bash "$root/capture_reference_window.sh" "$1" \
+    capture_args=()
+    if [[ "$mode" == --score ]]; then
+        capture_args=(--score)
+    fi
+    exec bash "$root/capture_reference_window.sh" "${capture_args[@]}" "$1" \
         --samples "$((remaining / interval + 1))" --interval-seconds "$interval" "${@:2}"
 fi
 
@@ -33,6 +38,21 @@ fi
 
 unit_active() {
     systemctl is-active --quiet "$1.timer" || systemctl is-active --quiet "$1.service"
+}
+
+restore_score() {
+    local unit="ai-football-profitability-reference-score-$1" begin=$2 label=$3
+    shift 3
+    local begin_epoch earliest capture_at
+    begin_epoch=$(date -u -d "$begin" +%s)
+    earliest=$(($(date -u +%s) + 5))
+    capture_at=$((begin_epoch > earliest ? begin_epoch : earliest))
+    if unit_active "$unit"; then
+        printf '%s\n' "$label score observation is active."
+    elif (( capture_at <= begin_epoch + last_offset )); then
+        register_once "$unit" "$capture_at" 9000s \
+            "$root/restore_reference_pilot.sh" --score "$begin" "$label" "$@"
+    fi
 }
 
 register_once() {
@@ -111,6 +131,11 @@ restore_fixture vienna uwcl-faw-bm-2026-11-19 leyu:5831446 \
 restore_fixture vasco bra-vas-int-2026-11-19 leyu:5816659 \
     2026-11-19T22:27:00Z 2026-11-20T01:02:00Z vas int home \
     --kalshi KXBRASILEIROTOTAL-26NOV19VDGINT-3
+
+restore_score vienna 2026-11-19T17:42:00Z uwcl-faw-bm-2026-11-19 \
+    401916978 VIE MUN --soccer-league uefa.wchampions --kickoff 2026-11-19T17:45:00Z
+restore_score vasco 2026-11-19T22:27:00Z bra-vas-int-2026-11-19 \
+    401841308 VAS INT --soccer-league bra.1 --kickoff 2026-11-19T22:30:00Z
 
 adjacent_unit=ai-football-profitability-reference-vasco-adjacent
 adjacent_begin=2026-11-19T22:27:00Z

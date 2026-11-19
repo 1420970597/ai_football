@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 
 from reference_basketball_state import game_state
 
@@ -35,3 +36,19 @@ class BasketballReferenceStateTests(unittest.TestCase):
         ]
         result = game_state(self.data | {'plays': plays}, '101', 'DEN', 'BOS')
         self.assertEqual(plays, [{k: row[k] for k in value} for row, value in zip(result['plays'], plays)])
+
+    def test_soccer_requires_exact_league_and_kickoff_and_retains_native_event_time(self):
+        self.data['header']['league'] = {'slug': 'bra.1'}
+        self.data['keyEvents'] = [
+            {'id': 'goal-1', 'type': {'type': 'goal'}, 'wallclock': '2026-11-19T02:37:05Z'},
+            {'id': 'card-1', 'type': {'type': 'red-card'}},
+        ]
+        kickoff = datetime.fromisoformat(self.game['date'])
+        result = game_state(self.data, '101', 'DEN', 'BOS', league='bra.1', kickoff=kickoff)
+        self.assertEqual(['goal-1', 'card-1'], [event['id'] for event in result['key_events']])
+        self.assertEqual('2026-11-19T02:37:05Z', result['key_events'][0]['wallclock'])
+        self.assertIsNone(result['key_events'][1]['wallclock'])
+        self.assertNotIn('wallclock', result['status'])
+        for league, start in [('bra.2', kickoff), ('bra.1', kickoff.replace(minute=31))]:
+            with self.subTest(league=league, start=start), self.assertRaises(ValueError):
+                game_state(self.data, '101', 'DEN', 'BOS', league=league, kickoff=start)
