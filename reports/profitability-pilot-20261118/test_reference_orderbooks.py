@@ -3,10 +3,10 @@ from decimal import Decimal
 from http.client import RemoteDisconnected
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from reference_orderbooks import (
-    capture, capture_market, kalshi_book, polymarket_book, polymarket_us_book,
+    CLOB, GAMMA, capture, capture_market, kalshi_book, polymarket_book, polymarket_us_book,
     polymarket_us_sides, replay_kalshi_tickers,
 )
 
@@ -83,10 +83,57 @@ class ReferenceOrderBookTests(unittest.TestCase):
 
     def test_failed_market_does_not_interrupt_the_sample(self):
         observation = {'source': 'kalshi', 'market': 'SECOND'}
-        with patch('reference_orderbooks.capture_market', side_effect=[RemoteDisconnected(), observation]):
+        with patch('reference_orderbooks.get_json', side_effect=RemoteDisconnected()), \
+                patch('reference_orderbooks.capture_market', return_value=observation):
             sample = capture([('polymarket', 'first'), ('kalshi', 'SECOND')])
         self.assertEqual('RemoteDisconnected', sample['markets'][0]['error'])
         self.assertEqual(observation, sample['markets'][1])
+
+    def test_polymarket_batch_matches_books_by_asset_and_condition(self):
+        def market(identifier):
+            return {'slug': identifier, 'conditionId': identifier, 'description': 'Match rules',
+                    'outcomes': '["Yes","No"]', 'acceptingOrders': True,
+                    'clobTokenIds': json.dumps([f'{identifier}-yes', f'{identifier}-no'])}
+
+        def book(identifier, side, timestamp='1795044465721'):
+            return {'market': identifier, 'asset_id': f'{identifier}-{side}', 'timestamp': timestamp,
+                    'bids': [{'price': '0.58', 'size': '6'}], 'asks': [{'price': '0.64', 'size': '8'}]}
+
+        markets = [('polymarket', 'first'), ('polymarket', 'second')]
+        first_yes, first_no = book('first', 'yes'), book('first', 'no', timestamp='1795044465121')
+        second_yes, second_no = book('second', 'yes'), book('second', 'no')
+        received = datetime(2026, 11, 18, 23, 27, 46, tzinfo=timezone.utc)
+        with patch('reference_orderbooks.get_json', side_effect=[
+            market('first'), market('second'), [second_no, first_no, second_yes, first_yes],
+        ]) as request, patch('reference_orderbooks.now', return_value=received):
+            first, second = capture(iter(markets))['markets']
+        request.assert_has_calls([
+            call(f'{GAMMA}/markets/slug/first'), call(f'{GAMMA}/markets/slug/second'),
+            call(f'{CLOB}/books', body=[{'token_id': token} for token in (
+                'first-yes', 'first-no', 'second-yes', 'second-no',
+            )]),
+        ])
+        self.assertEqual(3, request.call_count)
+        self.assertEqual(['first', 'second'], [first['condition_id'], second['condition_id']])
+        self.assertEqual(['Yes', 'No'], [side['outcome'] for side in first['books']])
+        self.assertEqual([0.279, 0.879], [side['quote_age_seconds'] for side in first['books']])
+        self.assertTrue(all(side['received_at'] == received for row in (first, second) for side in row['books']))
+
+        for invalid_first in ([first_yes], [first_yes, first_no, first_yes],
+                              [first_no, first_yes | {'market': 'wrong'}]):
+            with self.subTest(invalid_first=invalid_first), patch('reference_orderbooks.get_json', side_effect=[
+                market('first'), market('second'), [*invalid_first, second_yes, second_no],
+            ]):
+                first, second = capture(markets)['markets']
+            self.assertIn('error', first)
+            self.assertEqual(2, len(second['books']))
+
+        kalshi = {'source': 'kalshi', 'market': 'TICKER'}
+        with patch('reference_orderbooks.get_json', side_effect=[market('first'), RemoteDisconnected()]), \
+                patch('reference_orderbooks.capture_market', return_value=kalshi):
+            first, second = capture([markets[0], ('kalshi', 'TICKER')])['markets']
+        self.assertEqual('RemoteDisconnected', first['error'])
+        self.assertEqual(kalshi, second)
 
     def test_ticker_replay_uses_original_receive_time_and_native_update_time(self):
         frame = {'type': 'ticker', 'sending_ts_ms': 1795044465722, 'msg': {

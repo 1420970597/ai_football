@@ -15,10 +15,15 @@ KALSHI = 'https://api.elections.kalshi.com/trade-api/v2'
 LOOKBACK = timedelta(minutes=10)
 
 
-def get_json(url, **params):
+def get_json(url, *, body=None, **params):
     if params:
         url += '?' + urlencode(params)
-    request = Request(url, headers={'User-Agent': 'ai-football-reference-research/1.0'})
+    headers = {'User-Agent': 'ai-football-reference-research/1.0'}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers['Content-Type'] = 'application/json'
+    request = Request(url, data=data, headers=headers)
     limit = 512 * 1024
     with urlopen(request, timeout=8) as response:
         payload = response.read(limit + 1)

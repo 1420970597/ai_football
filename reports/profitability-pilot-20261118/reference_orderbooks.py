@@ -13,6 +13,7 @@ from time import monotonic, sleep
 from reference_history import CLOB, GAMMA, KALSHI, get_json
 
 POLYMARKET_US = 'https://gateway.polymarket.us'
+READ_ERRORS = (ArithmeticError, HTTPException, OSError, ValueError, KeyError, TypeError)
 
 
 def now():
@@ -138,30 +139,77 @@ def replay_kalshi_tickers(records, tickers):
             yield {'source': 'kalshi', 'error': 'invalid_ticker_observation'}
 
 
-def capture_market(source, identifier):
+def failed_market(source, identifier, error):
+    return {'source': source, 'market': identifier, 'error': type(error).__name__,
+            'http_status': getattr(error, 'code', None), 'observed_at': now()}
+
+
+def polymarket_metadata(identifier):
     start = now()
+    market = get_json(f'{GAMMA}/markets/slug/{identifier}')
+    labels = json.loads(market['outcomes'])
+    tokens = json.loads(market['clobTokenIds'])
+    if (market['slug'] != identifier or len(labels) != 2 or len(tokens) != 2
+            or len(set(labels)) != 2 or len(set(tokens)) != 2):
+        raise ValueError('unexpected market identity or outcome set')
+    return {
+        'source': 'polymarket', 'market': identifier, 'market_metadata_requested_at': start,
+        'rules_sha256': hashlib.sha256(market['description'].encode()).hexdigest(),
+        'market_type': market.get('sportsMarketType'), 'line': market.get('line'),
+        'scheduled_start': market.get('gameStartTime'), 'accepting_orders': market['acceptingOrders'],
+        'condition_id': market['conditionId'],
+    }, tuple(zip(labels, tokens))
+
+
+def capture_polymarket(identifiers):
+    results, metadata, expected = {}, {}, {}
+    for identifier in identifiers:
+        try:
+            entry, sides = polymarket_metadata(identifier)
+            condition = entry['condition_id']
+            if any(token in expected and expected[token] != condition for _, token in sides):
+                raise ValueError('market metadata assigns a token to multiple conditions')
+            expected.update((token, condition) for _, token in sides)
+            metadata[identifier] = entry, sides
+        except READ_ERRORS as error:
+            results[identifier] = failed_market('polymarket', identifier, error)
+    if not expected:
+        return results
+
+    try:
+        response = get_json(f'{CLOB}/books', body=[{'token_id': token} for token in expected])
+        received_at = now()
+        if not isinstance(response, list):
+            raise ValueError('invalid batch order book response')
+        indexed = {}
+        for book in response:
+            token = book['asset_id']
+            if token not in expected:
+                raise ValueError('unexpected batch order book token')
+            indexed[token] = None if token in indexed else book
+    except READ_ERRORS as error:
+        results.update((identifier, failed_market('polymarket', identifier, error)) for identifier in metadata)
+        return results
+
+    for identifier, (entry, sides) in metadata.items():
+        try:
+            books = [
+                polymarket_book(indexed[token] or {}, entry['condition_id'], token, received_at)
+                | {'outcome': label, 'received_at': received_at}
+                for label, token in sides
+            ]
+            results[identifier] = entry | {'books': books}
+        except READ_ERRORS as error:
+            results[identifier] = failed_market('polymarket', identifier, error)
+    return results
+
+
+def capture_market(source, identifier):
     if source == 'polymarket':
-        market = get_json(f'{GAMMA}/markets/slug/{identifier}')
-        condition = market['conditionId']
-        labels = json.loads(market['outcomes'])
-        tokens = json.loads(market['clobTokenIds'])
-        if (market['slug'] != identifier or len(labels) != 2 or len(tokens) != 2
-                or len(set(labels)) != 2 or len(set(tokens)) != 2):
-            raise ValueError('unexpected market identity or outcome set')
-        books = []
-        for label, token in zip(labels, tokens):
-            raw = get_json(f'{CLOB}/book', token_id=token)
-            received_at = now()
-            books.append(polymarket_book(raw, condition, token, received_at) | {
-                'outcome': label, 'received_at': received_at
-            })
-        metadata = {
-            'market_type': market.get('sportsMarketType'), 'line': market.get('line'),
-            'scheduled_start': market.get('gameStartTime'), 'accepting_orders': market['acceptingOrders'],
-            'condition_id': condition,
-        }
-        rules = market['description']
-    elif source == 'polymarket_us':
+        return capture_polymarket([identifier])[identifier]
+
+    start = now()
+    if source == 'polymarket_us':
         market = get_json(f'{POLYMARKET_US}/v1/market/slug/{identifier}')['market']
         if market['slug'] != identifier:
             raise ValueError('market identity mismatch')
@@ -193,13 +241,15 @@ def capture_market(source, identifier):
 
 
 def capture(markets):
+    markets = tuple(markets)
     recorded = []
+    polymarket = capture_polymarket(identifier for source, identifier in markets if source == 'polymarket')
     for source, identifier in markets:
         try:
-            recorded.append(capture_market(source, identifier))
-        except (ArithmeticError, HTTPException, OSError, ValueError, KeyError, TypeError) as exc:
-            recorded.append({'source': source, 'market': identifier, 'error': type(exc).__name__,
-                             'http_status': getattr(exc, 'code', None), 'observed_at': now()})
+            observation = polymarket[identifier] if source == 'polymarket' else capture_market(source, identifier)
+            recorded.append(observation)
+        except READ_ERRORS as error:
+            recorded.append(failed_market(source, identifier, error))
     return {'purpose': 'market_data_observation', 'captured_at': now(), 'markets': recorded}
 
 
