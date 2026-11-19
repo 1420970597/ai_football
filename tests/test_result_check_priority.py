@@ -2,6 +2,7 @@ import asyncio
 from datetime import timedelta
 import os
 import unittest
+import uuid
 
 from app.result_check_queue import claim_due_results
 import test_result_ledger as support
@@ -142,3 +143,47 @@ class ResultCheckPriorityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(['missing1', 'missing2', 'missing3', 'missing4'],
                          [r['fixture_id'] for r in await self.claim()])
         self.assertEqual(['missing5'], [r['fixture_id'] for r in await self.claim()])
+
+    async def test_repeated_empty_final_details_get_longer_backoff(self):
+        await self.add('cooldown', final='confirmed', due_minutes=200)
+        await self.add('eligible', final='confirmed', due_minutes=190)
+        await self.add('first-errors', final='confirmed', due_minutes=180)
+        await self.add('transport', final='confirmed', due_minutes=170)
+        await self.pool.execute("""
+            UPDATE v2_result_checks
+            SET failures=CASE WHEN fixture_id='first-errors' THEN 4 ELSE 5 END,
+                last_reason=CASE WHEN fixture_id='transport' THEN 'upstream_timeout'
+                                 ELSE 'result_detail_unavailable' END,
+                last_checked_at=CASE WHEN fixture_id='eligible' THEN now()-interval '4 hours'
+                                     ELSE now()-interval '1 hour' END
+            """)
+        self.assertEqual(['eligible', 'first-errors', 'transport'],
+                         [row['fixture_id'] for row in await self.claim()])
+
+    async def test_recovery_slot_prefers_a_fixture_with_an_accepted_order(self):
+        await self.add('old-recovery', due_minutes=90)
+        await self.add('with-order', due_minutes=10)
+        await self.pool.execute("""
+            UPDATE v2_result_checks SET failures=5,last_reason='result_detail_unavailable'
+            """)
+        for name in ('first-one', 'first-two', 'first-three'):
+            await self.add(name)
+        await self.add('correction', final='confirmed')
+        user_id = uuid.uuid4()
+        signal_id = uuid.uuid4()
+        await self.pool.execute("""
+            INSERT INTO v2_users(id,email,display_name,password_hash,role)
+            VALUES($1,'fixture@example.invalid','Test user','fixture-hash','user')
+            """, user_id)
+        await self.pool.execute("""
+            INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,
+                                          market_kind,period,line,selection,recommendation_price,quote_time,confidence)
+            VALUES($1,$2,$3,'with-order','scheduled','2','Total','total','full_time',2.5,'over',2,now(),0.8)
+            """, signal_id, self.message, self.expert)
+        await self.pool.execute("""
+            INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,provider_order_no)
+            VALUES($1,$2,$3,'order-fixture','accepted',5,2,'native-fixture')
+            """, uuid.uuid4(), user_id, signal_id)
+        self.assertEqual(['first-one', 'first-three', 'with-order', 'correction'],
+                         [row['fixture_id'] for row in await self.claim()])
+        self.assertEqual(['first-two', 'old-recovery'], [row['fixture_id'] for row in await self.claim()])

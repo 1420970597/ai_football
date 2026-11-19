@@ -6,7 +6,7 @@ import uuid
 
 async def claim_due_results(conn, limit: int):
     # Rank within each lane before locking. The final selection locks real check
-    # rows, skips competing owners and rechecks due/lease predicates. Extra
+    # rows, skips competing owners and rechecks due/lease predicates.
     # New finals must not wait behind an older missing-detail backlog. Keep a
     # recovery slot and correction capacity; spare slots still fill each cycle.
     return await conn.fetch(
@@ -25,13 +25,22 @@ async def claim_due_results(conn, limit: int):
               AND (f.phase='finished' OR f.kickoff_at<=now()-interval '100 minutes')
               AND NOT COALESCE(r.status='confirmed'
                   AND r.received_at<now()-interval '7 days',false)
+              AND NOT COALESCE(r.status IN ('confirmed','void')
+                  AND c.failures>=5 AND c.last_reason='result_detail_unavailable'
+                  AND c.last_checked_at>now()-interval '4 hours',false)
         ), classified AS (
             SELECT *,NOT has_final AND failures>0 AND last_reason IN (
                 'result_detail_unavailable','result_fixture_mismatch'
             ) AS needs_recovery FROM due
         ), ranked AS (
             SELECT *,row_number() OVER (
-                PARTITION BY has_final,needs_recovery ORDER BY next_check_at,fixture_id
+                PARTITION BY has_final,needs_recovery ORDER BY
+                    CASE WHEN needs_recovery THEN EXISTS (
+                        SELECT 1 FROM v2_expert_signals s JOIN v2_bet_orders o ON o.signal_id=s.id
+                        WHERE s.fixture_id=classified.fixture_id AND o.provider_order_no IS NOT NULL
+                          AND o.state IN ('accepted','settled')
+                    ) ELSE false END DESC,
+                    next_check_at,fixture_id
             ) AS lane_position,bool_or(needs_recovery) OVER () AS has_recovery
             FROM classified
         ), scheduled AS (
