@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from reference_lines import adjacent_lines
+from reference_stream_replay import compare_rest, read_segment, stream_quote
 
 REFERENCE_SIDES = {'winner': {'home', 'draw', 'away'}, 'handicap': {'home', 'away'},
                    'total': {'over', 'under'}, 'team_total': {'over', 'under'}}
@@ -233,7 +234,7 @@ def adjacent_groups(contract, lookup, quote, max_skew):
 
 
 def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjacent_skew_seconds=5,
-            *, score_records=(), score_bindings=None, score_max_age_seconds=45):
+            *, score_records=(), score_bindings=None, score_max_age_seconds=45, stream_segments=None):
     archive_by_market = {}
     for batch in archive:
         for observation in batch['markets']:
@@ -258,7 +259,12 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
 
         def quote(binding):
             records = archive_by_market.get((binding['source'], binding['market']), [])
-            return quote_at(binding, records, cutoff, earliest, outcomes)
+            reference = quote_at(binding, records, cutoff, earliest, outcomes)
+            if stream_segments is not None and binding['source'] == 'polymarket':
+                stream = stream_quote(binding, stream_segments, cutoff, max_age_seconds)
+                compare_rest(stream, reference)
+                reference['stream'] = stream
+            return reference
 
         sources = [quote(binding) for binding in by_contract.get(contract, [])]
         row = {'preflight': preflight, 'references': sources,
@@ -297,6 +303,7 @@ def main():
     parser.add_argument('--outcomes', type=Path)
     parser.add_argument('--score-bindings', type=Path)
     parser.add_argument('--score-archive', action='append', type=Path, default=[])
+    parser.add_argument('--stream-archive', action='append', type=Path, default=[])
     args = parser.parse_args()
     if not 1 <= args.max_age_seconds <= 120:
         parser.error('max age must be 1-120 seconds')
@@ -313,11 +320,23 @@ def main():
         scores, interrupted_scores = read_archive(args.score_archive)
         if not archive:
             raise ValueError('no captured order book rounds')
+        cutoffs = sorted({instant(row['captured_at']) for row in preflights})
+        stream_segments, stream_summaries = [], []
+        for path in args.stream_archive:
+            try:
+                segment = read_segment(path, cutoffs)
+            except (OSError, KeyError, TypeError, ValueError, InvalidOperation) as error:
+                stream_summaries.append({'archive': path.name, 'error': type(error).__name__})
+            else:
+                stream_segments.append(segment)
+                stream_summaries.append(segment[2])
         matches = compare(preflights, bindings, archive, args.max_age_seconds, outcomes,
-                          score_records=scores, score_bindings=score_bindings)
+                          score_records=scores, score_bindings=score_bindings,
+                          stream_segments=stream_segments if args.stream_archive else None)
         print(json.dumps({'capture_rounds': len(archive), 'max_age_seconds': args.max_age_seconds,
                           'archives_with_incomplete_tail': interrupted,
                           'score_capture_rounds': len(scores), 'score_archives_with_incomplete_tail': interrupted_scores,
+                          'stream_segments': stream_summaries,
                           'preflights': matches}))
     except (OSError, KeyError, TypeError, ValueError, InvalidOperation) as error:
         parser.exit(1, f'Invalid preflight evidence ({type(error).__name__})\n')
