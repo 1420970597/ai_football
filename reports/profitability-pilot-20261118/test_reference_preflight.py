@@ -145,6 +145,23 @@ class ReferencePreflightTests(unittest.TestCase):
         bindings[1]['source'] = 'polymarket_us'
         self.assertFalse(any(group['status'] == 'paired' for group in replay(markets)['source_groups'].values()))
 
+    def test_timely_book_does_not_prove_the_preflight_settlement_scope(self):
+        base = self.preflight | {'sport': 'football', 'kind': 'handicap', 'line_basis': 'provider_home'}
+        binding = self.binding | {'kind': 'handicap'}
+        batch = {'captured_at': base['captured_at'], 'markets': [self.market]}
+        cases = [
+            ('scheduled', 'full_period', 'scheduled_rule_review_required'),
+            ('live', 'remaining_period', 'remaining_period_reference_missing'),
+            ('live', 'full_period', 'independent_live_state_missing'),
+            ('live', 'unknown', 'score_basis_unverified'),
+        ]
+        for phase, basis, expected in cases:
+            with self.subTest(phase=phase, basis=basis):
+                preflight = base | {'phase': phase, 'effective_score_basis': basis}
+                row, = compare([preflight], [binding], [batch], 30)
+                self.assertEqual('timed_depth', row['references'][0]['status'])
+                self.assertEqual(expected, row['settlement_comparison'])
+
     def test_team_total_requires_explicit_matching_team_direction(self):
         offered = self.preflight | {'kind': 'team_total'}
         binding = self.binding | {'kind': 'team_total'}

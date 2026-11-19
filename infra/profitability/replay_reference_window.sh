@@ -31,10 +31,26 @@ trap 'rm -f -- "$draft"' EXIT
 database_rows=$(docker exec -i ai-football-v2-api-1 python -c '
 import asyncio
 from datetime import datetime, timedelta, timezone
+import json
 import sys
 
 import asyncpg
 from app.config import database_url
+from app.handicap_lines import line_basis
+from app.score_rules import settlement_rule
+from app.team_totals import team_total_terms
+
+def contract_evidence(row):
+    signal = dict(row, market_kind=row["kind"])
+    fixture = {"id": row["fixture_id"], "sport": row["sport"]}
+    rule = settlement_rule(fixture, signal)
+    basis = row["score_basis"] or "unknown"
+    if rule:
+        basis = rule["score_basis"]
+    elif basis == "unknown" and row["sport"] == "football" and row["phase"] == "scheduled":
+        basis = "full_period"
+    return dict(row, effective_score_basis=basis, settlement_rule=rule["reference"] if rule else None,
+                line_basis=line_basis(signal)) | team_total_terms(signal, fixture["id"])
 
 async def read():
     sql = sys.stdin.read()
@@ -48,7 +64,7 @@ async def read():
             rows = await conn.fetchval(sql, sys.argv[1], begin, end)
             if rows is None:
                 raise ValueError("preflight account or fixture scope unavailable")
-            print(rows)
+            print(json.dumps([contract_evidence(row) for row in json.loads(rows)]))
     finally:
         await conn.close()
 

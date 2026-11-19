@@ -26,6 +26,25 @@ def contract_key(row):
     return row['fixture_id'], kind, row['period'], side, Decimal(str(line)) if line is not None else None
 
 
+def settlement_comparison(preflight):
+    if preflight.get('sport') != 'football':
+        return 'sport_unverified'
+    kind = preflight['kind']
+    if ((kind == 'handicap' and preflight.get('line_basis') != 'provider_home')
+            or (kind == 'team_total' and preflight.get('team_side') not in {'home', 'away'})):
+        return 'line_orientation_unverified'
+    basis = preflight.get('effective_score_basis')
+    if basis == 'remaining_period':
+        return 'remaining_period_reference_missing'
+    if basis != 'full_period':
+        return 'score_basis_unverified'
+    if preflight.get('phase') == 'live':
+        return 'independent_live_state_missing'
+    if preflight.get('phase') == 'scheduled':
+        return 'scheduled_rule_review_required'
+    return 'phase_unverified'
+
+
 def native_book_times(observation, cutoff):
     books = observation.get('books', [])
     if not books or any(b.get('status') != 'two_sided' for b in books):
@@ -199,7 +218,8 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
             return quote_at(binding, records, cutoff, earliest, outcomes)
 
         sources = [quote(binding) for binding in by_contract.get(contract, [])]
-        row = {'preflight': preflight, 'references': sources}
+        row = {'preflight': preflight, 'references': sources,
+               'settlement_comparison': settlement_comparison(preflight)}
         if outcomes is not None:
             row['source_groups'] = source_groups(sources, preflight['kind'])
             adjacent = adjacent_groups(contract, by_contract, quote, min(adjacent_skew_seconds, max_age_seconds))

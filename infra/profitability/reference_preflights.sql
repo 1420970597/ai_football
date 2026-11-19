@@ -5,7 +5,7 @@ WITH ledger AS (
            count(*) FILTER (WHERE account_id IS NULL OR provider_identity_hash IS NULL) AS missing_identity
     FROM v2_bet_orders WHERE provider_order_no IS NOT NULL
 ), attempts AS (
-    SELECT q.fixture_id, q.evidence->>'market_kind' AS kind, q.period, q.line::text AS line,
+    SELECT q.fixture_id, f.sport, q.market_id, q.evidence->>'market_kind' AS kind, q.period, q.line::text AS line,
            q.selection, q.captured_at, q.source_updated_at, q.price::text AS price,
            q.evidence->>'phase' AS phase, q.evidence->>'score_basis' AS score_basis,
            q.evidence->'score_baseline' AS score_baseline,
@@ -15,6 +15,7 @@ WITH ledger AS (
     JOIN v2_expert_signals s ON s.id=o.signal_id AND q.evidence->>'signal_id'=s.id::text
       AND (q.fixture_id,q.market_id,q.period,q.selection)=(s.fixture_id,s.market_id,s.period,s.selection)
       AND q.line IS NOT DISTINCT FROM s.line
+    JOIN v2_fixtures f ON f.id=q.fixture_id
     CROSS JOIN ledger l
     WHERE l.bindings=1 AND l.missing_identity=0
       AND EXISTS (SELECT 1 FROM v2_bet_orders filled
