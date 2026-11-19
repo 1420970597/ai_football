@@ -185,7 +185,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,$2,'专家昵称')",expert,str(expert))
         await self.pool.execute('INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2)',source,expert)
         await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,'1','大2.5',now())",message,source,expert)
-        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,source_updated_at) VALUES($1,$1,'football','联赛','甲','乙',now(),'live',now())",fixture)
+        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,source_updated_at,home_score,away_score) VALUES($1,$1,'football','联赛','甲','乙',now(),'live',now(),0,0)",fixture)
         await self.pool.execute("INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,period,market_kind,status,play_id,market_instance_id,selection_id) "
                                 "VALUES($1,$2,'2','全场大小',2.5,'over',1.95,now(),'full_time','total','active','2','market','option')",quote,fixture)
         await self.pool.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,line,selection,recommendation_price,quote_time,confidence,period,market_kind,score_baseline) "
@@ -842,7 +842,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path==BET_PATH:
                 body=json.loads(request.content)['seriesOrders'][0]['orderDetailList'][0]
                 self.assertEqual(('option-current','2.35','235000'),(body['playOptionsId'],body['oddFinally'],body['odds']))
-                self.assertEqual('', body['scoreBenchmark'])
+                self.assertEqual('0:0', body['scoreBenchmark'])
                 return httpx.Response(200,json={'code':0,'data':{'orderDetailRespList':[{'orderNo':'LIVE-PRICE','orderStatusCode':1}]}})
             raise AssertionError(request.url.path)
         executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',live_orders_enabled=True,
@@ -857,30 +857,45 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(['2.35','2.35'],[item['evidence']['price'] for item in evidence])
         self.assertTrue(all(item['evidence']['odds_change_policy']=='accept_current_provider_quote' for item in evidence))
         for item in evidence:
-            self.assertEqual({'home': None, 'away': None}, item['evidence']['score_baseline'])
+            self.assertEqual({'home': 0, 'away': 0}, item['evidence']['score_baseline'])
             self.assertEqual({'received_at': fixture_received_at.astimezone(timezone.utc).isoformat(),
                               'source_updated_at': None, 'source_time_quality': 'unknown'},
                              item['evidence']['fixture_projection'])
         self.assertEqual(1,sum(request.url.path==BET_PATH for request in calls))
 
-    async def test_live_total_reserves_current_fixture_score(self):
+    async def test_live_total_requires_known_matching_scores_through_authorization(self):
         await self.healthy()
         fixture = 'leyu:234567'
         signal, expert, _, _ = await self.signal(fixture=fixture)
         await self.enable([expert])
         await self.pool.execute('UPDATE v2_expert_signals SET score_baseline=$2 WHERE id=$1', signal, {'home': 1, 'away': 0})
-        await self.pool.execute('UPDATE v2_fixtures SET home_score=2,away_score=0 WHERE id=$1', fixture)
-
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=NULL WHERE id=$1', fixture)
+        with self.assertRaisesRegex(HTTPException, '推荐比分缺失或已经变化'):
+            await self.reserve(signal)
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=2 WHERE id=$1', fixture)
+        with self.assertRaisesRegex(HTTPException, '推荐比分缺失或已经变化'):
+            await self.reserve(signal)
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=1 WHERE id=$1', fixture)
         order = await self.reserve(signal)
-        self.assertEqual('2:0', order['quote_snapshot']['score_benchmark'])
+        self.assertEqual('1:0', order['quote_snapshot']['score_benchmark'])
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                legacy_snapshot = dict(order['quote_snapshot'])
+                del legacy_snapshot['score_benchmark']
+                legacy_order = dict(order, quote_snapshot=legacy_snapshot)
+                with self.assertRaisesRegex(HTTPException, '预留比分缺失或已经变化'):
+                    await orders.recheck_order(connection, legacy_order, self.settings)
         work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
         self.assertEqual('order', work['kind'])
+        for changed in (None, 2):
+            await self.pool.execute('UPDATE v2_fixtures SET home_score=$2 WHERE id=$1', fixture, changed)
+            async with self.pool.acquire() as connection:
+                async with connection.transaction():
+                    with self.assertRaisesRegex(HTTPException, '推荐比分缺失或已经变化'):
+                        await orders.recheck_order(connection, order, self.settings)
         await self.executor().order_job(work)
-
-        submission, = [request for request in self.native_requests if request.url.path == BET_PATH]
-        detail = json.loads(submission.content)['seriesOrders'][0]['orderDetailList'][0]
-        self.assertEqual('2:0', detail['scoreBenchmark'])
-        self.assertEqual('accepted', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
+        self.assertEqual('cancelled', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
 
     async def test_unknown_mock_submission_not_requeued_or_released(self):
         await self.healthy()

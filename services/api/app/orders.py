@@ -151,16 +151,26 @@ async def exposure_totals(conn, user_id, daily_timezone: str, at: datetime | Non
     )
 
 
-def remaining_period_benchmark(signal):
-    if signal["phase"] != "live" or signal["period"] != "full_time":
+def checked_score_benchmark(signal, *, manual):
+    if signal["phase"] != "live":
         return None
     rule = settlement_rule({"id": signal["fixture_id"], "sport": signal["sport"]}, dict(signal))
-    if signal["score_basis"] != "remaining_period" and (rule or {}).get("score_basis") != "remaining_period":
+    remaining = signal["period"] == "full_time" and "remaining_period" in (
+        signal["score_basis"], (rule or {}).get("score_basis"),
+    )
+    if manual and not remaining:
         return None
-    baseline = signal["score_baseline"] or {}
+    baseline = signal["score_baseline"]
+    if not isinstance(baseline, dict):
+        baseline = {}
     home, away = signal["home_score"], signal["away_score"]
-    if home is None or away is None or (baseline.get("home"), baseline.get("away")) != (home, away):
-        raise OrderEligibilityError(409, "滚球剩余时间盘口的推荐比分缺失或已经变化", "score_benchmark_changed")
+    scores = (baseline.get("home"), baseline.get("away"))
+    if not remaining:
+        scores = (baseline.get("home", baseline.get("home_score")),
+                  baseline.get("away", baseline.get("away_score")))
+    if scores != (home, away) or any(type(score) is not int or score < 0 for score in scores):
+        detail = "滚球剩余时间盘口的推荐比分缺失或已经变化" if remaining else "滚球自动单的推荐比分缺失或已经变化"
+        raise OrderEligibilityError(409, detail, "score_benchmark_changed")
     return f"{home}:{away}"
 
 
@@ -235,7 +245,7 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
     score = ""
     if signal["current_phase"] == "live" and signal["home_score"] is not None and signal["away_score"] is not None:
         score = f"{signal['home_score']}:{signal['away_score']}"
-    score = remaining_period_benchmark(signal) or score
+    score = checked_score_benchmark(signal, manual=manual) or score
     snapshot = {"match_id": signal["fixture_id"].split(":", 1)[-1], "market_instance_id": signal["market_instance_id"],
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
                 "selection_code": {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"]),
@@ -292,9 +302,9 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
         if order["stake"] > policy["max_per_order"]:
             raise HTTPException(409, "推荐或单笔许可已失效")
     current = order["quote_snapshot"]
-    benchmark = remaining_period_benchmark(signal)
-    if benchmark is not None and current["score_benchmark"] != benchmark:
-        raise HTTPException(409, "滚球剩余时间盘口的预留比分已经变化")
+    benchmark = checked_score_benchmark(signal, manual=manual)
+    if benchmark is not None and current.get("score_benchmark") != benchmark:
+        raise OrderEligibilityError(409, "滚球订单的预留比分缺失或已经变化", "score_benchmark_changed")
     if current["phase"] != signal["current_phase"] or current["sport_id"] != native_sport_id(signal["sport"]):
         raise HTTPException(409, "比赛阶段或体育项目已经变化")
     if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id")):
