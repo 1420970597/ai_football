@@ -8,6 +8,12 @@ WITH RECURSIVE bounds AS (
            CASE WHEN num_nulls(s.market_id, s.market_kind, s.phase, s.period, s.score_basis, s.selection)=0
                 THEN jsonb_build_array(s.market_id, s.market_kind, s.phase, s.period, s.score_basis, s.selection)
            END AS same_side_key,
+           CASE WHEN s.line IS NOT NULL AND s.selection IS NOT NULL
+                  AND s.fixture_id ~ '^leyu:[0-9]+$' AND f.sport='football' AND s.market_kind='total'
+                  AND (s.market_id,s.period) IN (('2','full_time'),('18','first_half'))
+                  AND s.phase IN ('scheduled','live') AND s.score_basis IN ('unknown','full_period')
+                THEN jsonb_build_array(s.market_id, s.market_kind, s.period, 'full_period', s.selection, s.line)
+           END AS verified_period_total_key,
            o.provider_placed_at AS placed_at, o.provider_stake AS stake,
            first_receipt.observed_at AS closed_at, confirmation.observed_at AS accepted_at,
            CASE WHEN pg_input_is_valid(latest.payload->>'net_profit', 'numeric')
@@ -15,6 +21,7 @@ WITH RECURSIVE bounds AS (
            latest.payload->>'currency' AS currency, latest.payload->>'fees' IS NOT NULL AS has_fee
     FROM v2_bet_orders o
     LEFT JOIN v2_expert_signals s ON s.id = o.signal_id
+    LEFT JOIN v2_fixtures f ON f.id = s.fixture_id
     CROSS JOIN bounds b
     LEFT JOIN LATERAL (
         SELECT min(e.observed_at) FILTER (WHERE e.payload->>'state' = 'settled') AS observed_at
@@ -53,10 +60,11 @@ WITH RECURSIVE bounds AS (
            row_number() OVER (PARTITION BY fixture_id, scope, risk_group ORDER BY placed_at, accepted_at, id) AS step,
            count(*) OVER (PARTITION BY fixture_id, scope, risk_group, placed_at, accepted_at) AS tied
     FROM fills f CROSS JOIN coverage c
-    CROSS JOIN LATERAL (VALUES ('fixture', 'null'::jsonb), ('same_side', same_side_key)) AS groups(scope, risk_group)
+    CROSS JOIN LATERAL (VALUES ('fixture', 'null'::jsonb), ('same_side', same_side_key),
+        ('verified_period_total', verified_period_total_key)) AS groups(scope, risk_group)
     WHERE c.invalid_fills = 0 AND c.account_bindings = 1 AND c.known_currencies <= 1
 ), policies (scope, cap) AS (
-    VALUES ('fixture', 0), ('fixture', 1), ('fixture', 2), ('same_side', 1)
+    VALUES ('fixture', 0), ('fixture', 1), ('fixture', 2), ('same_side', 1), ('verified_period_total', 1)
 ), replay AS (
     SELECT f.fixture_id, f.scope, f.risk_group, p.cap, 0::bigint AS step,
            ARRAY[]::timestamptz[] AS open_until, true AS retained
@@ -80,6 +88,7 @@ WITH RECURSIVE bounds AS (
     SELECT CASE WHEN s.placed_at < b.split_at THEN 'early' ELSE 'late' END AS period,
            r.scope, r.cap, count(*) AS opportunities,
            count(*) FILTER (WHERE s.same_side_key IS NULL) AS fills_without_side_key,
+           count(*) FILTER (WHERE s.risk_group IS NULL) AS fills_without_group_key,
            count(*) FILTER (WHERE s.tied > 1) AS ambiguous_sequence,
            count(*) FILTER (WHERE NOT r.retained) AS removed,
            count(DISTINCT s.fixture_id) FILTER (WHERE NOT r.retained) AS fixtures_with_removals,
@@ -112,10 +121,12 @@ WITH RECURSIVE bounds AS (
     GROUP BY period, phase
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
-    'comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - ARRAY['scope','fills_without_side_key'] ORDER BY period, cap)
+    'comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - ARRAY['scope','fills_without_side_key','fills_without_group_key'] ORDER BY period, cap)
         FROM comparison p WHERE scope='fixture'), '[]'::jsonb),
-    'same_side_comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - 'scope' ORDER BY period, cap)
+    'same_side_comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - ARRAY['scope','fills_without_group_key'] ORDER BY period, cap)
         FROM comparison p WHERE scope='same_side'), '[]'::jsonb),
+    'verified_period_total_comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - ARRAY['scope','fills_without_side_key'] ORDER BY period, cap)
+        FROM comparison p WHERE scope='verified_period_total'), '[]'::jsonb),
     'fixture_sensitivity', coalesce((SELECT jsonb_agg(to_jsonb(f) ORDER BY period, phase)
         FROM fixture_sensitivity f), '[]'::jsonb))
 FROM bounds b CROSS JOIN coverage c;
