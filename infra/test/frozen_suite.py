@@ -41,7 +41,11 @@ def main() -> int:
     started = time.monotonic()
     # Emit one flushed progress line per test; Docker/CI can buffer the
     # newline-free dot stream until the entire suite finishes or times out.
-    result = unittest.TextTestRunner(verbosity=2, resultclass=StartLoggedResult).run(unittest.defaultTestLoader.discover("tests"))
+    suite = unittest.TestSuite(
+        unittest.TestLoader().discover(directory)
+        for directory in ("tests", "reports/profitability-pilot-20261118")
+    )
+    result = unittest.TextTestRunner(verbosity=2, resultclass=StartLoggedResult).run(suite)
     report = {"source_parent_commit": os.environ.get("SOURCE_COMMIT", "unknown"),
               "committed_source_verified": os.environ.get("SOURCE_IS_CLEAN") == "true", "tests": result.testsRun,
               "failures": len(result.failures), "errors": len(result.errors),
