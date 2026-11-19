@@ -26,6 +26,14 @@
     "bra-vas-int-2026-11-19-first-half-total-1pt5": {"rules_sha256": "08d0da385a01a397a76cd0ea55077177914e39964145852ccbae8871313f22f9", "labels": {"Over": "over", "Under": "under"}},
     "bra-vas-int-2026-11-19-spread-home-1pt5": {"rules_sha256": "6ef91a1f2e1d72f35e2fb48700195846754e4e5b7dfef7ed529cb06a2a8bf653", "labels": {"CR Vasco da Gama": "home", "SC Internacional": "away"}}
   },
+  "polymarket_us": {
+    "atc-uwcl-slb-asr-2026-11-19-slb": {"fixture_id": "leyu:5831469", "rules_sha256": "4b3987cf3c27e147d944f42f21b3662064df58ef2cd7bd0e3f57dbf109701969", "selection": "home", "labels": {"Yes": "yes"}},
+    "atc-uwcl-slb-asr-2026-11-19-draw": {"fixture_id": "leyu:5831469", "rules_sha256": "4b3987cf3c27e147d944f42f21b3662064df58ef2cd7bd0e3f57dbf109701969", "selection": "draw", "labels": {"Yes": "yes"}},
+    "atc-uwcl-slb-asr-2026-11-19-asr": {"fixture_id": "leyu:5831469", "rules_sha256": "4b3987cf3c27e147d944f42f21b3662064df58ef2cd7bd0e3f57dbf109701969", "selection": "away", "labels": {"Yes": "yes"}},
+    "atc-bra-vas-int-2026-11-19-vas": {"fixture_id": "leyu:5816659", "rules_sha256": "bbb930ade5737c174db69736ec2a328ea3f2db66486acc3bf2d239f0d007c25e", "selection": "home", "labels": {"Yes": "yes"}},
+    "atc-bra-vas-int-2026-11-19-draw": {"fixture_id": "leyu:5816659", "rules_sha256": "bbb930ade5737c174db69736ec2a328ea3f2db66486acc3bf2d239f0d007c25e", "selection": "draw", "labels": {"Yes": "yes"}},
+    "atc-bra-vas-int-2026-11-19-int": {"fixture_id": "leyu:5816659", "rules_sha256": "bbb930ade5737c174db69736ec2a328ea3f2db66486acc3bf2d239f0d007c25e", "selection": "away", "labels": {"Yes": "yes"}}
+  },
   "kalshi": {
     "KXUCLWTOTAL-26NOV19FAKBMU-3": {"rules_sha256": "f7aaac40fc57cc702029de0d65870c506f54629254e9cb6389a6cc76a9ebfb88", "labels": {"yes": "over"}},
     "KXUCLWSPREAD-26NOV19FAKBMU-BMU2": {"rules_sha256": "2ff595f06d6a17b6b0a8ec5205a0c0b142d54825d3196b8ddb1dec22aa1fde4e", "labels": {"yes": "away"}},

@@ -198,18 +198,19 @@ def bind_outcomes(reference, orientation, kind, binary_winner=False):
         return 'mapping_invalid'
     selection = orientation.get('selection')
     expected = REFERENCE_SIDES.get(kind, set())
+    yes_only = reference.get('source') == 'polymarket_us' and kind == 'winner' and not binary_winner
     if binary_winner:
         if selection is not None or sides != {'home', 'away'}:
             return 'mapping_invalid'
     elif kind == 'winner':
-        if selection not in expected or sides != {'yes', 'no'}:
+        if selection not in expected or sides != ({'yes'} if yes_only else {'yes', 'no'}):
             return 'mapping_invalid'
         reference['proposition'] = selection
     elif selection is not None or not sides <= expected:
         return 'mapping_invalid'
     for book in reference['books']:
         book['canonical_outcome'] = labels[book['outcome']]
-    return 'mapped'
+    return 'mapped_yes_only' if yes_only else 'mapped'
 
 
 def source_groups(references, kind, binary_winner=False):
@@ -218,8 +219,10 @@ def source_groups(references, kind, binary_winner=False):
         markets = {}
         duplicates = set()
         expected = {'home', 'away'} if binary_winner else REFERENCE_SIDES.get(kind, set())
+        mapped_status = ('mapped_yes_only' if source == 'polymarket_us' and kind == 'winner' and not binary_winner
+                         else 'mapped')
         for reference in references:
-            if reference['source'] != source or reference.get('outcome_status') != 'mapped':
+            if reference['source'] != source or reference.get('outcome_status') != mapped_status:
                 continue
             sides = ([reference['proposition']] if kind == 'winner' and not binary_winner
                      else [book['canonical_outcome'] for book in reference['books']])
@@ -231,6 +234,8 @@ def source_groups(references, kind, binary_winner=False):
         missing = expected - markets.keys()
         split_binary = (kind != 'winner' or binary_winner) and len(set(markets.values())) > 1
         status = 'ambiguous' if duplicates or split_binary else 'incomplete' if missing or not markets else 'complete'
+        if status == 'complete' and mapped_status == 'mapped_yes_only':
+            status = 'complete_yes_books_only'
         groups[source] = {'status': status, 'markets': markets, 'missing': sorted(missing),
                           'duplicates': sorted(duplicates)}
     return groups
@@ -412,6 +417,13 @@ def main():
         outcomes = json.loads(args.outcomes.read_text()) if args.outcomes else None
         if args.outcomes and not isinstance(outcomes, dict):
             raise ValueError('invalid outcome manifest')
+        existing = {(binding['source'], binding['market']) for binding in bindings}
+        fixture_ids = {entry['fixture_id'] for entry in bindings}
+        for market, orientation in (outcomes or {}).get('polymarket_us', {}).items():
+            if orientation['fixture_id'] in fixture_ids and ('polymarket_us', market) not in existing:
+                bindings.append({'source': 'polymarket_us', 'market': market, 'kind': 'winner',
+                                 'period': 'full_time', 'line': None, 'fixture_id': orientation['fixture_id'],
+                                 'rules_sha256': orientation['rules_sha256']})
         if args.catalog_expansion:
             supplement = json.loads(args.catalog_expansion.read_bytes())
             supplemental_outcomes = supplement['outcomes']['polymarket']

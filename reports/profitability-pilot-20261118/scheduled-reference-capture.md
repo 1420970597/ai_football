@@ -13,6 +13,8 @@
 
 固定生产只读样本为 11 月 17 日 16:54:53 至 19 日 16:54:53 UTC，按预检时间筛选实际受理自动订单。48 笔赛前成交、33 场，开球前 3 分钟内 0 笔，前 3 至 60 分钟 3 笔，前 60 至 150 分钟 5 笔，更早 40 笔。中位 322.14 分钟，P90 为 1,589.04 分钟。分布仅衡量时间覆盖。三场的真实同合同、双来源时点、深度、成本和费后结果由正式回放逐笔定性。 [生产预检查询](../../infra/profitability/reference_preflights.sql)
 
+17:38 UTC，本菲卡和瓦斯科增加 Polymarket US 的三项正常时间胜平负观察。本人订单仍只读。官方赛事、对阵、开球、选项问题和规则摘要逐份对齐，六份订单簿都返回有效双边深度和原生 `transactTime`。本菲卡主盘、扩展盘按原定于 17:30 UTC 启动，美国市场补充采集于 17:36:03 UTC 启动，并已登记两场赛前及开球后的恢复任务。取本菲卡美国市场两轮真实采样完成时点各加一毫秒做诊断，其中一轮美国市场三项都有 30 秒内双边报价，国际市场两轮均未配齐。该诊断不等同于真实预检。17:37 UTC 生产预览实际读取 57 轮、自然预检 0。回放按已核验规则摘要记录独立的原生 YES 买卖盘覆盖，保留深度与时点，也保留来源独立性及异常赛果条款的验证缺口。 [本菲卡赛事](https://gateway.polymarket.us/v1/events/slug/uwcl-slb-asr-2026-11-19) [瓦斯科赛事](https://gateway.polymarket.us/v1/events/slug/bra-vas-int-2026-11-19) [美国盘口接口](https://docs.polymarket.us/api-reference/markets/get-market-book)
+
 13:48 UTC，近 48 小时实际订单中，东南亚球会锦标赛、巴甲、欧女冠分别有 14、13、10 笔。欧女冠新增一场，采样时段与已有三场错开。生产赛事、欧足联赛程、ESPN 赛况和 Polymarket 原生开球时间相符。单轮线上试采读取六个市场的 12 份订单簿，规则摘要均与采样映射和私有赛事绑定一致。ESPN 试读取回正确的主客标识和赛前状态。已登记 19:57 UTC 报价及比分采样、20:00 UTC 盘口公开流和 22:32 UTC 回放。恢复依赖宿主取证目录中的原始赛事绑定，其中已加入该场六个来源绑定。 [欧足联赛程](https://www.uefa.com/womenschampionsleague/news/02ab-220ff9af21a9-748c51d8b995-1000--women-s-champions-league-matchday-5-preview-chelsea-vs-pa/) [ESPN 赛况](https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.wchampions/summary?event=401916974) [方向映射](reference-outcomes-20261119.json)
 
 14:35 UTC，柴桢对泰港的 238 轮外部档案与一笔自然预检进入独立价格规则。13:29:07.703435 UTC 的实际预检为滚球全场大 3.5、赔率 1.58，已受理并结算，场馆回执 +2.90，费用和币种仍缺。同期档案的全场大小只覆盖 2.5。公开目录有 3.5，赛后页面和成交数据无法证明预检时的双边可成交深度。本场也无完整的独立现场状态。结果为现行策略 1 笔、价格规则 0 笔、观望 0 笔，三组没有可比的费后净额。真实订单和既定账户许可保持原有流程。 [场馆目录](https://polymarket.com/sports/aseanc-games/aseanc-svr-por-2026-11-19) [价格规则](preflight_price_decision.py)

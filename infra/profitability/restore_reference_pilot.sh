@@ -86,6 +86,28 @@ restore_score() {
     fi
 }
 
+restore_us_winner() {
+    local name=$1 label=$2 begin=$3 home=$4 away=$5
+    local unit="ai-football-profitability-reference-us-$name"
+    local begin_epoch earliest live_at prematch_begin prematch_at
+    begin_epoch=$(date -u -d "$begin" +%s)
+    earliest=$(($(date -u +%s) + 5))
+    live_at=$((begin_epoch > earliest ? begin_epoch : earliest))
+    prematch_begin=$((begin_epoch - prematch_offset))
+    prematch_at=$((prematch_begin > earliest ? prematch_begin : earliest))
+    local markets=(--polymarket-us "atc-$label-$home" --polymarket-us "atc-$label-draw"
+                   --polymarket-us "atc-$label-$away")
+    if (( prematch_at < begin_epoch )) && ! unit_active "$unit-prematch"; then
+        register_once "$unit-prematch" "$prematch_at" 9000s \
+            "$root/restore_reference_pilot.sh" --capture "$(date -u -d "@$prematch_begin" +%FT%TZ)" \
+            --before "$begin" "$label-us-prematch" "${markets[@]}"
+    fi
+    if (( live_at <= begin_epoch + last_offset )) && ! unit_active "$unit"; then
+        register_once "$unit" "$live_at" 9000s \
+            "$root/restore_reference_pilot.sh" --capture "$begin" "$label-us" "${markets[@]}"
+    fi
+}
+
 register_once() {
     local unit=$1 epoch=$2 timeout=$3
     shift 3
@@ -217,6 +239,9 @@ restore_fixture benfica uwcl-slb-asr-2026-11-19 leyu:5831469 \
 restore_fixture vasco bra-vas-int-2026-11-19 leyu:5816659 \
     2026-11-19T22:27:00Z 2026-11-20T01:02:00Z vas int home \
     --kalshi KXBRASILEIROTOTAL-26NOV19VDGINT-3
+
+restore_us_winner benfica uwcl-slb-asr-2026-11-19 2026-11-19T19:57:00Z slb asr
+restore_us_winner vasco bra-vas-int-2026-11-19 2026-11-19T22:27:00Z vas int
 
 restore_score vienna 2026-11-19T17:42:00Z uwcl-faw-bm-2026-11-19 \
     401916978 VIE MUN --soccer-league uefa.wchampions --kickoff 2026-11-19T17:45:00Z

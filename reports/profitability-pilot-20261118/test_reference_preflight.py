@@ -138,6 +138,28 @@ class ReferencePreflightTests(unittest.TestCase):
         self.assertEqual('ambiguous', group['status'])
         self.assertEqual(['home'], group['duplicates'])
 
+    def test_native_us_yes_books_cover_three_propositions_without_entering_price_rule(self):
+        preflight = self.preflight | {'kind': 'winner', 'period': 'full_time', 'line': None}
+        sides = ('home', 'draw', 'away')
+        bindings = [preflight | {'source': 'polymarket_us', 'market': side, 'rules_sha256': 'rules'}
+                    for side in sides]
+        markets = [binding | {'books': [self.book | {'outcome': 'Yes', 'market_state': 'MARKET_STATE_OPEN'}]}
+                   for binding in bindings]
+        outcomes = {'polymarket_us': {side: {'selection': side, 'rules_sha256': 'rules', 'labels': {'Yes': 'yes'}}
+                                      for side in sides}}
+        row, = compare([preflight], bindings, [{'captured_at': preflight['captured_at'], 'markets': markets}],
+                       30, outcomes)
+        self.assertEqual('complete_yes_books_only', row['source_groups']['polymarket_us']['status'])
+        for reference, side in zip(row['references'], sides):
+            self.assertEqual(side, reference['proposition'])
+            self.assertEqual('mapped_yes_only', reference['outcome_status'])
+            self.assertEqual(['yes'], [book['canonical_outcome'] for book in reference['books']])
+        markets[0]['books'][0]['quote_time'] = '2026-11-19T12:02:29Z'
+        row, = compare([preflight], bindings, [{'captured_at': preflight['captured_at'], 'markets': markets}],
+                       30, outcomes)
+        self.assertEqual('incomplete', row['source_groups']['polymarket_us']['status'])
+        self.assertEqual(['home'], row['source_groups']['polymarket_us']['missing'])
+
     def test_adjacent_totals_require_two_timely_lines_from_the_same_source(self):
         preflight = self.preflight | {'kind': 'total', 'period': 'full_time', 'line': '2.75'}
         bindings = [self.binding | preflight | {'line': line, 'market': market}

@@ -116,6 +116,13 @@ fi
         self.assertIn('--on-calendar=2026-11-19 22:32:00 UTC', replay)
         self.assertEqual([label, 'leyu:5831469', '2026-11-19T19:57:00Z', '2026-11-19T22:32:00Z',
                           self.bindings.name], replay[-5:])
+        us = units[prefix + 'us-benfica']
+        us_prematch = units[prefix + 'us-benfica-prematch']
+        self.assertIn('--on-calendar=2026-11-19 19:57:00 UTC', us)
+        self.assertIn('--on-calendar=2026-11-19 17:30:00 UTC', us_prematch)
+        self.assertEqual(['--polymarket-us', f'atc-{label}-slb', '--polymarket-us', f'atc-{label}-draw',
+                          '--polymarket-us', f'atc-{label}-asr'], us_prematch[-6:])
+        self.assertEqual(us[-6:], us_prematch[-6:])
 
     def test_expansion_has_the_original_window_and_preserves_active_timer(self):
         label = 'uwcl-slb-asr-2026-11-19'
