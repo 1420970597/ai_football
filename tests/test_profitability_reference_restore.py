@@ -199,6 +199,7 @@ fi
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(units)
         capture.write_text('{}\n')
+        (self.archive / f'{SVAY_LABEL}-preview-2026-11-19T12:36:00Z.json').write_text('{}\n')
         result, units = self.invoke(now)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({SVAY_REPLAY}, set(units))

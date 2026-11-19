@@ -2,8 +2,13 @@
 set -euo pipefail
 umask 077
 
+archive_kind=replay
+if [[ ${1-} == --preview ]]; then
+    archive_kind=preview
+    shift
+fi
 if [[ $# != 5 || ! "$1" =~ ^[a-z0-9-]{1,160}$ || ! "$2" =~ ^leyu:[0-9]+$ ]]; then
-    printf '%s\n' 'Usage: replay_reference_window.sh <archive-label> <fixture-id> <UTC begin> <UTC end> <archive bindings filename>' >&2
+    printf '%s\n' 'Usage: replay_reference_window.sh [--preview] <archive-label> <fixture-id> <UTC begin> <UTC end> <archive bindings filename>' >&2
     exit 2
 fi
 label=$1
@@ -123,6 +128,6 @@ printf '%s\n' "$database_rows" | docker run --rm -i --user 0:0 --network none --
     ai-football-verifier:v2.0.0-dev /research/reference_preflight.py \
     /dev/stdin "/evidence/$bindings" "${reference_files[@]}" "${outcomes[@]}" "${pricing_args[@]}" \
     "${catalog_args[@]}" "${score_args[@]}" "${stream_args[@]}" > "$draft"
-target="$archive/$label-replay-$(date -u +%FT%TZ).json"
+target="$archive/$label-$archive_kind-$(date -u +%FT%TZ).json"
 ln -T -- "$draft" "$target"
 printf 'Archived preflight replay in %s\n' "$(basename -- "$target")"
