@@ -50,6 +50,16 @@ def quote_time(quoted_at, received_at, oldest, cutoff):
     return quoted
 
 
+def book_times(sample, sides, oldest, cutoff):
+    books = [sample['order_book'][side] for side in sides]
+    keys = {'quoted_at', 'received_at'}
+    if not any(keys.intersection(book) for book in books):
+        return [quote_time(sample['quoted_at'], sample['received_at'], oldest, cutoff)]
+    if any(not keys <= book.keys() for book in books):
+        raise ValueError('each side requires both order book timestamps')
+    return [quote_time(book['quoted_at'], book['received_at'], oldest, cutoff) for book in books]
+
+
 def market_terms(contract):
     sport, kind, period, phase = (contract[key] for key in ('sport', 'kind', 'period', 'phase'))
     basis = contract['score_basis']
@@ -192,7 +202,10 @@ def price_from_verified_references(document):
             if outcome is None:
                 if ref_line not in required_lines or ref_line in verified:
                     raise ValueError('reference contract differs from the required lines')
-                quoted_times.append(quote_time(sample['quoted_at'], sample['received_at'], oldest, cutoff))
+                if reference_mode in {'adjacent_half_lines', 'same_line_books'}:
+                    quoted_times.extend(book_times(sample, sides, oldest, cutoff))
+                else:
+                    quoted_times.append(quote_time(sample['quoted_at'], sample['received_at'], oldest, cutoff))
                 verified[ref_line] = sample
             else:
                 books = sample['order_book']

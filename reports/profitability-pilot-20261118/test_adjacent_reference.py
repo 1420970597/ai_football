@@ -82,6 +82,29 @@ class AdjacentReferenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, reason):
                     price_from_verified_references(data)
 
+    def test_individual_book_times_apply_to_same_and_adjacent_lines(self):
+        for mode in ('same_line_books', 'adjacent_half_lines'):
+            with self.subTest(mode=mode):
+                data = request('2.5' if mode == 'same_line_books' else '2.75')
+                data['reference_mode'] = mode
+                reference = data['references']['a']
+                if mode == 'same_line_books':
+                    for quote in data['references'].values():
+                        quote.update(quote.pop('adjacent_quotes')[0])
+                    sample = reference
+                else:
+                    sample = reference['adjacent_quotes'][0]
+                books = sample['order_book']
+                times = {'quoted_at': '2026-11-18T11:48:30Z', 'received_at': '2026-11-18T11:48:32Z'}
+                books['over'].update(times)
+                with self.assertRaisesRegex(ValueError, 'each side requires'):
+                    price_from_verified_references(data)
+                books['under'].update(times)
+                price_from_verified_references(data)
+                books['under']['quoted_at'] = '2026-11-18T11:48:27Z'
+                with self.assertRaisesRegex(ValueError, 'allowed skew'):
+                    price_from_verified_references(data)
+
     def test_integer_and_quarters_price_adverse_compatible_endpoints(self):
         for line, side, expected_win, expected_loss, active_floor in (
             ('3', 'over', '0.43', '0.37', '0.76'),
