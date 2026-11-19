@@ -27,6 +27,7 @@ class PreflightPriceDecisionTests(unittest.TestCase):
                              'rules': {f'{name}-total': digest}}
         self.row = {
             'preflight': contract | {'selection': 'over', 'effective_score_basis': 'full_period', 'price': '1.80',
+                                     'line_basis': 'selection',
                                      'captured_at': '2026-11-19T11:59:25Z',
                                      'provider_quote_checked_at': '2026-11-19T11:59:23Z',
                                      'source_updated_at': '2026-11-19T11:58:45Z'},

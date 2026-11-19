@@ -68,6 +68,10 @@ def evaluate(row, approvals, max_age_seconds):
         'score_basis': preflight.get('effective_score_basis'),
         'selection': preflight.get('selection'),
     }
+    if offer['kind'] != 'handicap':
+        offer['line_basis'] = None
+    if offer['kind'] != 'team_total':
+        offer['team_side'] = None
     if offer['sport'] == 'football':
         offer['settlement_scope'] = 'regulation'
     try:
