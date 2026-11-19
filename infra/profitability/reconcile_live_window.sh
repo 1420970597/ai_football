@@ -50,7 +50,8 @@ async def read_window():
                 SELECT provider_order_no AS order_no, provider_stake AS stake, provider_payout AS payout,
                        settled_net AS net_profit, provider_fees AS fees, provider_currency AS currency,
                        settled_at, coalesce(settled_at, receipt_observed_at) AS booked_at,
-                       provider_placed_at AS placed_at,
+                       provider_placed_at AS placed_at, receipt_observed_at,
+                       pnl_basis, result_payload->'provider_settlement_codes' AS settlement_codes,
                        encode(sha256(convert_to(jsonb_build_array(
                            o.account_id, o.provider_identity_hash, o.provider_order_no,
                            o.provider_stake, o.provider_payout, o.settled_net, o.provider_fees, o.provider_currency, o.pnl_basis,

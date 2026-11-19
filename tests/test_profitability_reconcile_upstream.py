@@ -79,6 +79,24 @@ class SettlementStreakEvidenceTests(unittest.TestCase):
                 self.assertEqual([4], report['rolling_four_windows']['unverified_windows'])
                 self.assertFalse(report['rolling_four_windows']['verified'])
 
+    def test_newer_complete_reconciliation_supersedes_an_older_verified_digest(self):
+        window = self.snapshot['windows'][4]
+        end = datetime.fromisoformat(window['until'])
+        self.write_scan(4, observed_at=(end + timedelta(seconds=10)).isoformat())
+        folder = self.root / 'reconciliations'
+        original, = json.loads((folder / '4.json').read_text())
+        old = folder / f"4.receipt-{window['local_receipt_digest'][3:]}.json"
+        old.write_text(json.dumps([original]))
+        corrected = original | {'observed_at': (end + timedelta(seconds=15)).isoformat(),
+                                'order_receipt_fields_reconciled': False}
+        (folder / '4.late-1.json').write_text(json.dumps([corrected]))
+        self.assertFalse(summarize(self.root, self.snapshot)['rolling_four_windows']['verified'])
+        incomplete = corrected | {'observed_at': (end + timedelta(seconds=20)).isoformat(), 'complete_page': False}
+        (folder / '4.late-2.json').write_text(json.dumps([incomplete]))
+        scan = summarize(self.root, self.snapshot)['windows'][4]['reconciliation']
+        self.assertEqual('4.late-1.json', scan['file'])
+        self.assertEqual(corrected['observed_at'], scan['observed_at'])
+
     def test_archive_replays_captured_files_and_detects_changes(self):
         state = self.root / 'state'
         state.mkdir()
@@ -128,6 +146,31 @@ class ReconcileUpstreamTests(unittest.TestCase):
         self.assertEqual(output['matched'], 1)
         self.assertEqual(output['local_only'], 0)
         self.assertEqual(output['issues'], {'placed_before_window': 1, 'missing_currency': 1, 'missing_fees': 1})
+
+    def test_receipt_correction_retains_delta_codes_and_original_window(self):
+        self.upstream.update(payout='5', net_profit='0', settled_at=(START + timedelta(minutes=20)).isoformat(),
+                             provider_settlement_codes={'cancelType': 12, 'betStatus': 3}, pnl_basis='provider_reported_net')
+        self.local.update(receipt_observed_at=(START + timedelta(minutes=2)).isoformat(),
+                          settlement_codes='{"cancelType": 0, "betStatus": 1}', pnl_basis='provider_reported_net')
+        output = reconcile_window(self.page, [self.local], START, END)
+        self.assertEqual({'local_receipt_net': '2.44', 'upstream_receipt_net': '0', 'upstream_minus_local': '-2.44',
+                          'currency': None}, output['receipt_amounts'])
+        change, = output['settlement_discrepancies']
+        self.assertEqual({'payout': '-2.44', 'net_profit': '-2.44'}, change['amount_delta'])
+        self.assertEqual({'cancelType': 0, 'betStatus': 1}, change['before_codes'])
+        self.assertEqual({'cancelType': 12, 'betStatus': 3}, change['after_codes'])
+        self.assertTrue(change['same_native_placement'])
+        self.assertTrue(change['upstream_full_principal_return'])
+        self.assertTrue(change['upstream_settlement_after_local_observation'])
+        self.assertTrue(change['both_settlements_in_window'])
+        self.assertNotIn(self.local['order_no'], change)
+        self.assertFalse(output['order_receipt_fields_reconciled'])
+        self.assertIsNone(reconcile_window(self.page, [self.local | {'currency': 'USD'}], START, END)
+                          ['receipt_amounts']['currency'])
+        self.upstream['currency'] = 'CNY'
+        self.assertIsNone(reconcile_window(self.page, [self.local | {'currency': 'USD'}], START, END)['receipt_amounts'])
+        self.page['has_more'] = True
+        self.assertIsNone(reconcile_window(self.page, [self.local], START, END)['receipt_amounts'])
 
     def test_matched_placement_and_first_settled_receipt_bound_missing_native_time(self):
         placed = START + timedelta(hours=2)

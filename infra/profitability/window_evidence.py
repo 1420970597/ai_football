@@ -43,6 +43,8 @@ def reconciliation(reports, window, begin, end, *, read=load_report, late_paths=
         paths = [reports / f'{stem}.retry.json', reports / f'{stem}.json', *paths]
     fallback = None
     fallback_rank = (-1, -1)
+    verified = None
+    latest = None
     for path in paths:
         scan = read(path)
         if not isinstance(scan, list) or len(scan) != 1 or not matches_window(scan[0], 'begin', 'end', begin, end):
@@ -64,13 +66,25 @@ def reconciliation(reports, window, begin, end, *, read=load_report, late_paths=
             'current_receipt_fields_reconciled': count_matches and ledger_matches is True
             and report.get('order_receipt_fields_reconciled') is True,
         }
-        if result['current_receipt_fields_reconciled']:
-            return result
+        if count_matches and ledger_matches is True:
+            for key in ('settlement_discrepancies', 'receipt_amounts'):
+                if key in report:
+                    result[key] = report[key]
+            try:
+                observed = datetime.fromisoformat(report['observed_at'])
+                if observed.utcoffset() is not None and observed >= end:
+                    rank = (observed, not result['current_receipt_fields_reconciled'])
+                    if latest is None or rank > latest[0]:
+                        latest = (rank, result | {'observed_at': report['observed_at']})
+            except (KeyError, TypeError, ValueError):
+                pass
+        if result['current_receipt_fields_reconciled'] and verified is None:
+            verified = result
         rank = (ledger_matches is True, count_matches)
         if rank > fallback_rank:
             fallback = result
             fallback_rank = rank
-    return fallback
+    return latest[1] if latest is not None else verified or fallback
 
 
 def valid_digest(value):

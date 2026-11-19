@@ -216,6 +216,13 @@ def render(report):
                              f"净释放本金 {value(wallet['net_principal_released'])}，"
                              f"累计绝对差额 {value(wallet['absolute_cash_flow_difference'])}，"
                              f"采样断点 {value(wallet['sampling_gaps'])}。")
+            scan = item['reconciliation'] or {}
+            amounts = scan.get('receipt_amounts')
+            differences = scan.get('settlement_discrepancies') or []
+            if differences and amounts:
+                lines.append(f"- `{item['begin']}` · 场馆补查有 {len(differences)} 笔结算字段变化。"
+                             f"本地原回执合计 {amounts['local_receipt_net']}，"
+                             f"场馆补查合计 {amounts['upstream_receipt_net']}，差额 {amounts['upstream_minus_local']}。")
     else:
         lines.append(f"结算观测不可用（`{ledger['status']}`）。")
 

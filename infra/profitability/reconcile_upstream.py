@@ -34,11 +34,70 @@ def index_orders(rows):
     return by_order
 
 
+def revision_details(order, prior, at, placed, begin, end):
+    prior_at = instant(prior['settled_at']) if prior.get('settled_at') else None
+    amount_delta = {}
+    for field in ('stake', 'payout', 'net_profit'):
+        if order.get(field) is not None and prior.get(field) is not None:
+            delta = Decimal(order[field]) - Decimal(prior[field])
+            if delta.is_finite() and delta:
+                amount_delta[field] = str(delta)
+    time_changed = at is not None and prior_at is not None and at != prior_at
+    if not amount_delta and not time_changed:
+        return None
+    observed = instant(prior['receipt_observed_at']) if prior.get('receipt_observed_at') else None
+    local_placed = instant(prior['placed_at']) if prior.get('placed_at') else None
+    local_codes = prior.get('settlement_codes') or {}
+    if isinstance(local_codes, str):
+        local_codes = json.loads(local_codes)
+    codes = order.get('provider_settlement_codes') or {}
+    code_fields = ('betResult', 'betStatus', 'orderStatus', 'cancelType')
+    stake, payout, net = (order.get(key) for key in ('stake', 'payout', 'net_profit'))
+    refunded = (stake is not None and payout is not None and net is not None
+                and Decimal(stake) > 0 and Decimal(stake) == Decimal(payout) and Decimal(net) == 0
+                and 'stake' not in amount_delta and prior.get('stake') is not None
+                and amount_delta.get('net_profit') is not None)
+    return {
+        'amount_delta': amount_delta,
+        'upstream_full_principal_return': refunded,
+        'same_native_placement': placed is not None and placed == local_placed,
+        'settlement_time_changed': time_changed,
+        'upstream_settlement_after_local_observation': at is not None and observed is not None and at > observed,
+        'both_settlements_in_window': at is not None and prior_at is not None and begin <= min(at, prior_at)
+        and max(at, prior_at) < end,
+        'before_codes': {field: local_codes[field] for field in code_fields if field in local_codes},
+        'after_codes': {field: codes[field] for field in code_fields if field in codes},
+        'upstream_net_basis': order.get('pnl_basis'),
+        'local_net_basis': prior.get('pnl_basis'),
+        'currency': order.get('currency'),
+    }
+
+
+def comparable_amounts(expected, upstream, complete, currencies):
+    currencies = currencies | {row['currency'] for row in expected.values() if row.get('currency') is not None}
+    if not complete or len(currencies) > 1:
+        return None
+    totals = []
+    for rows in (expected.values(), upstream.values()):
+        amounts = [Decimal(row['net_profit']) for row in rows if row['net_profit'] is not None]
+        if len(amounts) != len(rows) or not all(value.is_finite() for value in amounts):
+            return None
+        totals.append(sum(amounts, Decimal(0)))
+    local_net, upstream_net = totals
+    return {
+        'local_receipt_net': str(local_net), 'upstream_receipt_net': str(upstream_net),
+        'upstream_minus_local': str(upstream_net - local_net),
+        'currency': next(iter(currencies)) if currencies and all(
+            row.get('currency') is not None for row in (*expected.values(), *upstream.values())) else None,
+    }
+
+
 def reconcile_window(page, local, begin, end):
     expected = index_orders(row for row in local if begin <= instant(row['booked_at']) < end)
     orders = [row for row in page['items'] if row['identifier_kind'] == 'order' and row['state'] == 'settled']
     upstream = index_orders(orders)
     counts = Counter()
+    revisions = []
     bounded_without_upstream_time = 0
     currencies = {order['currency'] for order in orders if order['currency'] is not None}
     if len(currencies) > 1:
@@ -64,6 +123,9 @@ def reconcile_window(page, local, begin, end):
         if number not in expected:
             continue
         prior = expected[number]
+        detail = revision_details(order, prior, at, placed, begin, end)
+        if detail is not None:
+            revisions.append(detail)
         local_placement = instant(prior['placed_at']) if prior.get('placed_at') else None
         if placed is not None:
             if local_placement is None:
@@ -112,7 +174,8 @@ def reconcile_window(page, local, begin, end):
         'local_settled': len(expected), 'upstream_settled': len(upstream),
         'local_receipt_digest': digest,
         'matched': len(expected.keys() & upstream.keys()), 'local_only': len(missing),
-        'upstream_only': len(extra), 'issues': dict(counts),
+        'upstream_only': len(extra), 'issues': dict(counts), 'settlement_discrepancies': revisions,
+        'receipt_amounts': comparable_amounts(expected, upstream, matched_complete_page, currencies),
     }
 
 
@@ -160,7 +223,8 @@ async def collect(client, start, local, window_count=4):
         end = begin + timedelta(hours=12)
         scan = await scan_window(client, begin, end)
         result = reconcile_window(scan, local, begin, end)
-        result.update(pages_read=scan['pages_read'], scan_issue=scan['scan_issue'])
+        result.update(pages_read=scan['pages_read'], scan_issue=scan['scan_issue'],
+                      observed_at=datetime.now(timezone.utc).isoformat())
         windows.append(result)
         if scan['pages_read'] == 0:
             break
