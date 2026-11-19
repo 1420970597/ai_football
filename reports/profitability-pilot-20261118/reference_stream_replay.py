@@ -1,4 +1,4 @@
-"""Recover observed top-of-book prices at preflight cutoffs within a connection."""
+"""Recover top-of-book prices and depth at preflight cutoffs within a connection."""
 
 from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
@@ -15,14 +15,56 @@ def quote_entries(row):
     if kind in {'initial_book', 'book_update'}:
         bid = top_level(((level['price'], level['size']) for level in event['bids']), bid=True)
         ask = top_level(((level['price'], level['size']) for level in event['asks']), bid=False)
-        yield event['asset_id'], bid[0] if bid else None, ask[0] if ask else None
+        yield event, bid[0] if bid else None, ask[0] if ask else None
     elif kind in {'price_change', 'best_bid_ask'}:
         for entry in event['price_changes'] if kind == 'price_change' else [event]:
-            yield entry['asset_id'], entry.get('best_bid'), entry.get('best_ask')
+            yield entry, entry.get('best_bid'), entry.get('best_ask')
+
+
+def book_depth(books, kind, entry, bid, ask):
+    asset = entry['asset_id']
+    if kind in {'initial_book', 'book_update'}:
+        levels = {
+            side: {Decimal(level['price']): Decimal(level['size']) for level in entry[field]}
+            for side, field in (('BUY', 'bids'), ('SELL', 'asks'))
+        }
+        if len(levels['BUY']) != len(entry['bids']) or len(levels['SELL']) != len(entry['asks']):
+            books.pop(asset, None)
+            return None
+        books[asset] = levels
+    if asset not in books:
+        return None
+    levels = books[asset]
+    try:
+        if kind == 'price_change':
+            side = levels[entry['side']]
+            price, size = Decimal(entry['price']), Decimal(entry['size'])
+            if not (price.is_finite() and size.is_finite() and 0 < price < 1 and size >= 0):
+                raise ValueError('invalid price change')
+            if size:
+                side[price] = size
+            else:
+                side.pop(price, None)
+        if (not levels['BUY'] or not levels['SELL']
+                or max(levels['BUY']) != Decimal(bid) or min(levels['SELL']) != Decimal(ask)):
+            raise ValueError('reconstructed best prices do not match the feed')
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        del books[asset]
+        return None
+    if kind != 'best_bid_ask':
+        return levels['BUY'][Decimal(bid)], levels['SELL'][Decimal(ask)]
+    return None
+
+
+def invalidate_depth(books, latest, asset):
+    books.pop(asset, None)
+    if asset in latest:
+        latest[asset] = (*latest[asset][:4], None)
 
 
 def read_segment(path, cutoffs):
     markets, tokens, latest, frames = {}, {}, {}, {}
+    books = {}
     first = last = None
     next_cutoff = 0
     count = 0
@@ -73,11 +115,19 @@ def read_segment(path, cutoffs):
             quoted = datetime.fromtimestamp(millis // 1000, timezone.utc) + timedelta(milliseconds=millis % 1000)
             if quoted > received:
                 raise ValueError('future stream source timestamp')
-            for asset, bid, ask in quote_entries(row):
+            if kind in {'last_trade_price', 'tick_size_change'}:
+                asset = event['asset_id']
+                if tokens[asset][0] != event['market']:
+                    raise ValueError('stream token does not match subscription')
+                invalidate_depth(books, latest, asset)
+            for entry, bid, ask in quote_entries(row):
+                asset = entry['asset_id']
                 if tokens[asset][0] != event['market']:
                     raise ValueError('stream token does not match subscription')
                 if asset not in latest or quoted >= latest[asset][0]:
-                    latest[asset] = quoted, received, bid, ask
+                    latest[asset] = quoted, received, bid, ask, book_depth(books, kind, entry, bid, ask)
+                else:
+                    invalidate_depth(books, latest, asset)
     summary = {'archive': path.name, 'events': count, 'complete': complete and not truncated,
                'first_received_at': first.isoformat() if first else None,
                'last_received_at': last.isoformat() if last else None}
@@ -97,7 +147,7 @@ def stream_quote(binding, segments, cutoff, max_age_seconds):
     for outcome, token in subscription['assets'].items():
         if token not in snapshot:
             return result | {'status': 'missing_stream_side'}
-        quoted, received, bid, ask = snapshot[token]
+        quoted, received, bid, ask, depth = snapshot[token]
         if cutoff - quoted > timedelta(seconds=max_age_seconds):
             return result | {'status': 'stale_stream_quote'}
         try:
@@ -106,8 +156,11 @@ def stream_quote(binding, segments, cutoff, max_age_seconds):
                 raise ValueError
         except (TypeError, ValueError, InvalidOperation):
             return result | {'status': 'invalid_stream_quote'}
-        books.append({'outcome': outcome, 'bid': str(bid), 'ask': str(ask),
-                      'quoted_at': quoted.isoformat(), 'received_at': received.isoformat()})
+        book = {'outcome': outcome, 'bid': str(bid), 'ask': str(ask),
+                'quoted_at': quoted.isoformat(), 'received_at': received.isoformat()}
+        if depth is not None:
+            book.update(bid_size=str(depth[0]), ask_size=str(depth[1]))
+        books.append(book)
     return result | {'status': 'observed_top_of_book', 'books': books}
 
 
@@ -120,3 +173,15 @@ def compare_rest(stream, reference):
         return
     stream['rest_comparison'] = ('same_prices' if book_prices(stream['books']) == book_prices(reference['books'])
                                  else 'different_prices')
+    rest_by_outcome = {book['outcome']: book for book in reference['books']}
+    depth_results = {}
+    for book in stream['books']:
+        rest = rest_by_outcome.get(book['outcome'])
+        if ('bid_size' in book and rest and 'bid_size' in rest
+                and datetime.fromisoformat(book['quoted_at']) == datetime.fromisoformat(rest['quoted_at'])):
+            fields = ('bid', 'ask', 'bid_size', 'ask_size')
+            depth_results[book['outcome']] = (
+                'same_depth' if all(Decimal(book[key]) == Decimal(rest[key]) for key in fields) else 'different_depth'
+            )
+    if depth_results:
+        stream['rest_depth_at_same_source_time'] = depth_results
