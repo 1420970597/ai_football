@@ -68,3 +68,15 @@ docker run --rm --network host --cpus .25 --memory 128m --entrypoint python \
 当前订单簿可用同一挂载，改用 `/research/reference_orderbooks.py`，分别通过 `--polymarket` 和 `--kalshi` 传入已核验的公开市场编号。每轮输出一行 JSON。用 `--samples 5 --interval-seconds 20` 可复跑相同的有限采样窗口。
 
 美国站使用 `--polymarket-us atc-bra-vas-int-2026-11-19-vas` 传入公开市场标识。对应国际站传入 `--polymarket bra-vas-int-2026-11-19-vas`。平局和客胜分别使用赛事目录给出的 `-draw` 与 `-int` 标识。每轮最多查询八个市场。 [美国站市场标识文档](https://docs.polymarket.us/api-reference/markets/get-market-by-slug)
+
+## 同盘口线的双边报价
+
+`same_line_books` 比较可核验的二元无走盘盘口。足球的半球让球、进球大小和球队大小，以及赛前篮球的半分让分、大小和计加时胜负可按相同方式输入。每个独立来源必须在同一场次、期间、盘口线及计分口径上提供双方买卖档和数量，连同乐鱼候选价分别提供原生和接收时点。滚球仍须匹配当前赛况。整数或四分之一盘口用相邻盘口或明确走盘规则定价。
+
+每源用正向买卖区间与反向补集的交集估计隐含胜率。按所选方向取最小胜率，代入报价、逐单成本及要求的净收益门槛，再取全部来源中最不利的结果。与同场双边赔率去水的比较可测出买卖差价对最低赔率的影响。档位规模表明该档存在，真实可成交量还需盘口和预检证据。 [离线定价器](market_reference.py) [跨盘口和错误输入测试](test_adjacent_reference.py)
+
+现有雷默对沙佩科人全场 2.5 三轮归档给出单源大球概率区间，依次为 0.89–0.90、0.89–0.91、0.89–0.90，报价均在原有赛前成交数小时之后取得。完整入口三轮均拒绝单源输入。44 项 Docker 隔离测试通过。
+
+## 独立滚球赛况取证
+
+11 月 19 日 01:00:33 UTC，通过 Kalshi 的公开赛事节点读取弗拉门戈与克鲁塞罗两场的最新比赛状态。比分分别为 2 比 1 和 0 比 1，均为下半场 68 分钟。01:01:09 UTC 只读查询的乐鱼投影比分一致，分钟分别为 68 和 69。本次读取也显示进球、黄牌的事件类型及比赛内分钟，响应体未提供 UTC 赛况时点、完整红牌确认或 VAR 状态。可作当前比分交叉核验，仍缺按原生时点复核报价先后所需的证据。按事件编号直接读实时数据在这三场返回 404，节点列表查到两场。 [Kalshi 节点查询](https://docs.kalshi.com/api-reference/milestone/get-milestones) [Kalshi 节点实时数据](https://docs.kalshi.com/api-reference/live-data/get-live-data)

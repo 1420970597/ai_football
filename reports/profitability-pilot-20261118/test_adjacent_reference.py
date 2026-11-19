@@ -35,6 +35,53 @@ def request(line='2.75', selection='over', *, lines=('2.5', '3.5'), exact=False,
 
 
 class AdjacentReferenceTests(unittest.TestCase):
+    def test_same_line_books_use_the_adverse_side_across_contracts(self):
+        for sport, kind, line, selection, fields in (
+            ('football', 'total', '2.5', 'under', {}),
+            ('football', 'team_total', '2.5', 'under', {'team_side': 'away'}),
+            ('football', 'handicap', '-0.5', 'away', {'line_basis': 'provider_home'}),
+            ('basketball', 'total', '209.5', 'under', {'settlement_scope': 'including_overtime'}),
+            ('basketball', 'winner', None, 'away', {'settlement_scope': 'including_overtime'}),
+        ):
+            with self.subTest(sport=sport, kind=kind):
+                data = request(line, selection, lines=(line, line), sport=sport, kind=kind, **fields)
+                data['reference_mode'] = 'same_line_books'
+                for reference in data['references'].values():
+                    sample = reference.pop('adjacent_quotes')[0]
+                    if kind == 'winner':
+                        sample['order_book'] = order_book(('home', 'away'), ('0.63', '0.67'))
+                    reference.update(sample)
+                output = price_from_verified_references(data)
+                self.assertEqual(output['reference_mode'], 'same_line_books')
+                self.assertEqual(output['scenarios']['a']['expected_win_fraction'], Decimal('0.33'))
+                self.assertEqual(output['scenarios']['a']['expected_loss_fraction'], Decimal('0.67'))
+                self.assertEqual(output['minimum_odds'], Decimal('1.03') / Decimal('0.33'))
+                self.assertEqual(output['worst_net_at_offered_odds'], Decimal('-0.35'))
+                self.assertFalse(output['passes_price_test'])
+
+    def test_same_line_books_reject_incompatible_depth_time_and_push(self):
+        for failure, reason in (
+            ('push', 'two outcomes without a push'),
+            ('skew', 'allowed skew'),
+            ('one_side', 'positive depth'),
+            ('line', 'required lines'),
+        ):
+            with self.subTest(failure=failure):
+                line = '2.75' if failure == 'push' else '2.5'
+                data = request(line, lines=(line, line))
+                data['reference_mode'] = 'same_line_books'
+                for reference in data['references'].values():
+                    reference.update(reference.pop('adjacent_quotes')[0])
+                quote = data['references']['b']
+                if failure == 'skew':
+                    quote['quoted_at'] = '2026-11-18T11:48:27Z'
+                elif failure == 'one_side':
+                    quote['order_book']['under']['ask_size'] = '0'
+                elif failure == 'line':
+                    quote['contract']['line'] = '3.5'
+                with self.assertRaisesRegex(ValueError, reason):
+                    price_from_verified_references(data)
+
     def test_integer_and_quarters_price_adverse_compatible_endpoints(self):
         for line, side, expected_win, expected_loss, active_floor in (
             ('3', 'over', '0.43', '0.37', '0.76'),

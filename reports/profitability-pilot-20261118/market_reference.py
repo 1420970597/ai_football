@@ -124,12 +124,15 @@ def price_from_verified_references(document):
     if not isinstance(references, dict) or len(references) < 2:
         raise ValueError('two independent reference sources are required')
     reference_mode = document.get('reference_mode', 'same_line')
-    if reference_mode not in {'same_line', 'adjacent_half_lines', 'three_way_books'}:
+    if reference_mode not in {'same_line', 'same_line_books', 'adjacent_half_lines', 'three_way_books'}:
         raise ValueError('unknown reference mode')
     source_contract = contract
     required_lines = (line,)
     if reference_mode == 'adjacent_half_lines':
         required_lines, offset = adjacent_lines(contract['kind'], line)
+    elif reference_mode == 'same_line_books':
+        if len(sides) != 2 or (line is not None and abs(line) % 1 != Decimal('0.5')):
+            raise ValueError('same-line books require two outcomes without a push')
     elif reference_mode == 'three_way_books':
         if (contract['sport'], contract['period'], contract['score_basis'], contract.get('settlement_scope')) != (
                 'football', 'full_time', 'full_period', 'regulation') or (contract['kind'], line) not in {
@@ -151,7 +154,7 @@ def price_from_verified_references(document):
         (contract['phase'], contract['sport'], contract['kind']) == ('scheduled', 'football', 'total')
         and line % 1 == Decimal('0.5')
     )
-    if not legacy_scheduled_total or any(key in document for key in offer_keys):
+    if reference_mode != 'same_line' or not legacy_scheduled_total or any(key in document for key in offer_keys):
         if document['offer_status'] != 'active':
             raise ValueError('offered quote is not active')
         quoted_times.append(quote_time(document['offer_quoted_at'], document['offer_received_at'], oldest, cutoff))
@@ -205,6 +208,8 @@ def price_from_verified_references(document):
             book_ranges[source] = tuple(book_probability(verified[required], sides) for required in required_lines)
         elif reference_mode == 'three_way_books':
             book_ranges[source] = verified
+        elif reference_mode == 'same_line_books':
+            book_ranges[source] = book_probability(verified[line], sides)
 
     if state is not None and min(quoted_times) < latest_confirmation:
         raise ValueError('quote predates the latest confirmed live state')
@@ -222,6 +227,13 @@ def price_from_verified_references(document):
         return price_three_way_books(document, book_ranges, sides)
     if reference_mode == 'adjacent_half_lines':
         return price_adjacent_market(document, book_ranges, sides, offset)
+    if reference_mode == 'same_line_books':
+        selection = contract['selection']
+        terms = pricing_terms(document, sides, selection)
+        return price_by_win_share(terms, Decimal(1), {
+            source: lower if selection == sides[0] else 1 - upper
+            for source, (lower, upper) in book_ranges.items()
+        }) | {'reference_mode': reference_mode}
     return price_reference_market(document, sides, contract['selection'], line)
 
 
@@ -314,8 +326,6 @@ def price_reference_market(document, sides, selection, line):
     references = document['references']
     if not isinstance(references, dict) or len(references) < 2:
         raise ValueError('two independent reference sources are required')
-    cost, margin, offer = pricing_terms(document, sides, selection)
-
     if line is None or abs(line) % 1 == Decimal('0.5'):
         active_floor = Decimal(1)
     elif line % 1:
@@ -325,7 +335,8 @@ def price_reference_market(document, sides, selection, line):
         if not 0 <= active_floor <= 1:
             raise ValueError('active stake lower bound must be between zero and one')
 
-    scenarios = {}
+    terms = pricing_terms(document, sides, selection)
+    win_shares = {}
     for source, quote in references.items():
         prices = {side: decimal(quote[side]) for side in sides}
         if min(prices.values()) <= 1:
@@ -333,9 +344,16 @@ def price_reference_market(document, sides, selection, line):
         # Proportional de-vig estimates the win share of active stake, including split lines.
         if len(sides) == 2:
             opposite, = (price for side, price in prices.items() if side != selection)
-            win_share = opposite / (prices[selection] + opposite)
+            win_shares[source] = opposite / (prices[selection] + opposite)
         else:
-            win_share = 1 / sum(prices[selection] / price for price in prices.values())
+            win_shares[source] = 1 / sum(prices[selection] / price for price in prices.values())
+    return price_by_win_share(terms, active_floor, win_shares)
+
+
+def price_by_win_share(terms, active_floor, win_shares):
+    cost, margin, offer = terms
+    scenarios = {}
+    for source, win_share in win_shares.items():
         action_edge = win_share * offer - 1
         # A negative edge is worst when all stake is active.
         active = active_floor if action_edge >= 0 else Decimal(1)
