@@ -100,6 +100,8 @@ try {
       await save.click();
       await state.getByText(/版本 5 · 已生效/).waitFor();
       assert.equal(await actual(), "v1:fixture-same-address");
+      assert.equal((await requestChat()).headers.get("x-hermes-connection-revision"), "5");
+      assert.ok((await requestChat("hermes-agent", "openai")).status >= 400);
       assert.equal(await actual("fixture-same-address", "custom:cline"), "v1:fixture-same-address");
     }
     const response = await page.request.get(endpoint);

@@ -2,7 +2,8 @@
 
 import asyncio
 import base64
-from dataclasses import asdict, dataclass, replace
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import hmac
 import json
@@ -16,6 +17,21 @@ import httpx
 
 STORAGE = "http://api:8080/internal/hermes-connection/storage"
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}")
+MANAGED_REQUEST = ContextVar("managed_hermes_connection", default=None)
+MANAGED_PROVIDERS = (None, "", "custom", "custom:cline")
+INFERENCE_PATHS = {"/v1/chat/completions", "/v1/responses", "/v1/runs", "/api/sessions/{session_id}/chat",
+                   "/api/sessions/{session_id}/chat/stream"}
+
+
+def audit_token(token):
+    return hmac.digest(token.encode(), b"hermes-audit-snapshot-v1", "sha256").hex()
+
+
+def connection_cipher(storage_key):
+    key = bytes.fromhex(storage_key)
+    if len(key) != 32:
+        raise ValueError("Hermes connection storage key must be 32-byte hex")
+    return Fernet(base64.urlsafe_b64encode(key))
 
 
 @dataclass(frozen=True)
@@ -23,7 +39,7 @@ class Connection:
     revision: int
     base_url: str
     model: str
-    api_key: str | None
+    api_key: str | None = field(repr=False)
     updated_at: str | None = None
     verified_at: str | None = None
 
@@ -33,6 +49,17 @@ class Connection:
             "key_configured": bool(self.api_key), "updated_at": self.updated_at, "verified_at": self.verified_at,
             "application_state": "unconfigured" if not self.api_key else "applied",
         }
+
+    def runtime(self):
+        if not self.api_key:
+            raise ValueError("Hermes connection API key is not configured")
+        return {"provider": "custom", "requested_provider": "custom", "api_mode": "chat_completions",
+                "api_key": self.api_key, "base_url": self.base_url, "credential_pool": None,
+                "capabilities": {"vision": True}}
+
+
+def open_connection(cipher, sealed):
+    return Connection(**json.loads(cipher.decrypt(sealed.encode())))
 
 
 def base_url(value, baseline):
@@ -83,13 +110,12 @@ async def probe(config):
 class ConnectionSettings:
     def __init__(self, token, storage_key):
         try:
-            key = bytes.fromhex(storage_key)
-            if len(key) != 32:
-                raise ValueError
+            self.cipher = connection_cipher(storage_key)
         except ValueError:
             raise RuntimeError("Hermes connection storage key must be 32-byte hex") from None
-        self.cipher = Fernet(base64.urlsafe_b64encode(key))
         self.token = token
+        self.audit_token = audit_token(token)
+        self.audit_cipher = connection_cipher(self.audit_token)
         self.baseline = Connection(0, os.environ["HERMES_PROVIDER_BASE_URL"].rstrip("/"),
                                    os.environ["HERMES_MODEL"], os.environ.get("HERMES_PROVIDER_API_KEY"))
         self.current = self.baseline
@@ -106,8 +132,27 @@ class ConnectionSettings:
         data = await self.storage("GET")
         sealed = data["sealed"]
         if sealed != self.sealed:
-            self.current = Connection(**json.loads(self.cipher.decrypt(sealed.encode()))) if sealed else self.baseline
+            self.current = open_connection(self.cipher, sealed) if sealed else self.baseline
             self.sealed = sealed
+
+    async def online(self):
+        async with self.lock:
+            await self.refresh()
+            return self.current
+
+    async def audit_snapshot(self, request):
+        supplied = request.headers.get("X-Hermes-Audit-Token", "")
+        if not hmac.compare_digest(supplied.encode(), self.audit_token.encode()):
+            return web.json_response({"detail": "invalid audit credential"}, status=401)
+        try:
+            async with self.lock:
+                await self.refresh()
+                if not self.sealed or not self.current.api_key:
+                    return web.json_response({"detail": "managed connection is unavailable"}, status=503)
+                snapshot = self.audit_cipher.encrypt(json.dumps(asdict(self.current)).encode()).decode()
+                return web.json_response({"sealed": snapshot}, headers={"Cache-Control": "no-store"})
+        except (httpx.HTTPError, TimeoutError, InvalidToken, ValueError):
+            return web.json_response({"detail": "managed connection is unavailable"}, status=503)
 
     def candidate(self, data):
         if not isinstance(data, dict) or set(data) - {"revision", "base_url", "model", "api_key", "clear_key"}:
@@ -178,6 +223,7 @@ def install():
     if not re.fullmatch(r"[0-9a-f]{64}", token):
         raise RuntimeError("Hermes connection token must be 32-byte hex")
     from gateway.platforms.api_server import APIServerAdapter, _ProviderAuthResolutionError
+    from gateway import run as gateway_run
 
     storage_key = os.environ.get("HERMES_CONNECTION_STORAGE_KEY", "")
     if token == storage_key or token == os.environ.get("API_SERVER_KEY"):
@@ -186,41 +232,75 @@ def install():
     routes = APIServerAdapter._http_route_table
     connect = APIServerAdapter.connect
     select = APIServerAdapter._select_agent_runtime
+    create_agent = APIServerAdapter._create_agent
+    resolve = gateway_run._resolve_runtime_agent_kwargs
+
+    def managed_runtime():
+        active = MANAGED_REQUEST.get()
+        return active.runtime() | {"model": active.model} if active else resolve()
+
+    def create_with_settings(adapter, *args, **kwargs):
+        if MANAGED_REQUEST.get() is not None:
+            kwargs["confirmed_runtime_lock"] = True
+        return create_agent(adapter, *args, **kwargs)
 
     def route_table(adapter):
-        async def chat(request):
-            active = settings.current
-            if active.revision and not active.api_key:
+        def managed_inference(handler):
+            async def inference(request):
                 denied = adapter._check_auth(request)
                 if denied is not None:
                     return denied
-                return web.json_response({"error": {"message": "Hermes connection API key is not configured",
-                                                     "type": "configuration_error"}}, status=503)
-            return await adapter._handle_chat_completions(request)
+                try:
+                    active = await settings.online()
+                    if active.revision and not active.api_key:
+                        raise ValueError("managed connection key is unavailable")
+                except (httpx.HTTPError, TimeoutError, InvalidToken, ValueError):
+                    return web.json_response({"error": {"message": "Hermes connection is unavailable",
+                                                         "type": "configuration_error"}}, status=503)
+                if active.revision and request.can_read_body:
+                    try:
+                        body = await request.json()
+                    except (ValueError, UnicodeError):
+                        body = None
+                    if isinstance(body, dict) and body.get("provider") not in MANAGED_PROVIDERS:
+                        return web.json_response({"error": {"message": "Hermes provider is managed",
+                                                             "type": "invalid_request_error"}}, status=400)
+                context = MANAGED_REQUEST.set(active if active.revision else None)
+                try:
+                    response = await handler(request)
+                    if not response.prepared:
+                        response.headers["X-Hermes-Connection-Revision"] = str(active.revision)
+                    return response
+                finally:
+                    MANAGED_REQUEST.reset(context)
+
+            return inference
 
         return [
-            (method, path, chat if (method, path) == ("POST", "/v1/chat/completions") else handler)
+            (method, path, managed_inference(handler)
+             if method == "POST" and path in INFERENCE_PATHS else handler)
             for method, path, handler in routes(adapter)
-        ] + [(method, "/project/connection", settings.handle) for method in ("GET", "PUT")]
+        ] + [(method, "/project/connection", settings.handle) for method in ("GET", "PUT")] + [
+            ("GET", "/project/connection/audit-snapshot", settings.audit_snapshot),
+        ]
 
     async def connect_with_settings(adapter, **kwargs):
         await settings.refresh()
         return await connect(adapter, **kwargs)
 
     def select_with_settings(adapter, runtime_kwargs, model, **kwargs):
-        active = settings.current
-        if not active.revision:
+        active = MANAGED_REQUEST.get()
+        if active is None:
             return select(adapter, runtime_kwargs, model, **kwargs)
-        result = select(adapter, runtime_kwargs, active.model, **kwargs)
-        if runtime_kwargs.get("provider") == "custom":
-            if not active.api_key:
-                raise _ProviderAuthResolutionError("Hermes connection API key is not configured")
-            # A named provider reloads key_env at turn start and would restore the
-            # bootstrap key if the administrator rotates it at the same address.
-            runtime_kwargs.update(api_key=active.api_key, base_url=active.base_url,
-                                  requested_provider="custom", credential_pool=None)
-        return result
+        requested_provider = kwargs.get("requested_provider")
+        if requested_provider not in MANAGED_PROVIDERS:
+            raise _ProviderAuthResolutionError("Hermes provider is controlled by the administrator")
+        requested_model = kwargs.get("requested_model")
+        model = requested_model if requested_model and requested_model != "hermes-agent" else active.model
+        return model, None, requested_model, requested_provider
 
     APIServerAdapter._http_route_table = route_table
     APIServerAdapter.connect = connect_with_settings
+    APIServerAdapter._create_agent = create_with_settings
     APIServerAdapter._select_agent_runtime = select_with_settings
+    gateway_run._resolve_runtime_agent_kwargs = managed_runtime

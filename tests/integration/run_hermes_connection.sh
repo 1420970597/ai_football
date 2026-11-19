@@ -16,7 +16,7 @@ cleanup() {
   for service in web hermes provider api pg; do
     docker logs "$name-$service" > "$frozen/$service.log" 2>&1 || true
   done
-  docker rm -f "$name-web" "$name-hermes" "$name-provider" "$name-api" "$name-pg" >/dev/null 2>&1 || true
+  docker rm -f "$name-web" "$name-hermes" "$name-audit" "$name-provider" "$name-api" "$name-pg" >/dev/null 2>&1 || true
   docker network rm "$name" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -69,6 +69,35 @@ checks() {
 }
 wait_http http://web/healthz
 checks 0
+audit_read_token=$(docker exec "$name-hermes" /opt/hermes/.venv/bin/python -c \
+  'from connection import audit_token; import os; print(audit_token(os.environ["HERMES_CONNECTION_TOKEN"]))')
+docker run --rm -i --name "$name-audit" --network "$name" --cpus=.30 --memory=768m \
+  --user 10000:10000 --tmpfs /opt/data/.hermes:rw,uid=10000,gid=10000,mode=0700,size=32m \
+  -v "$frozen/integrations/hermes:/workspace:ro" -w /workspace \
+  -e HERMES_HOME=/opt/data/.hermes -e HERMES_AUDIT_SNAPSHOT_TOKEN="$audit_read_token" \
+  -e PYTHONDONTWRITEBYTECODE=1 --entrypoint /opt/hermes/.venv/bin/python "$hermes" - <<'PY'
+import os
+
+import httpx
+
+from audit_connection import runtime, SNAPSHOT_URL
+from run_agent import AIAgent
+
+assert httpx.get(SNAPSHOT_URL, timeout=5, trust_env=False).status_code == 401
+assert 'HERMES_PROVIDER_API_KEY' not in os.environ and 'HERMES_CONNECTION_STORAGE_KEY' not in os.environ
+assert httpx.put(SNAPSHOT_URL.removesuffix('/audit-snapshot'), json={}, timeout=5, trust_env=False,
+                 headers={'X-Hermes-Connection-Token': os.environ['HERMES_AUDIT_SNAPSHOT_TOKEN']}).status_code == 401
+model, kwargs, revision = runtime()
+assert revision == 5 and model == 'fixture-same-address'
+agent = AIAgent(model=model, **kwargs, enabled_toolsets=[], disabled_toolsets=['all'],
+                skip_memory=True, skip_context_files=True, max_iterations=1, quiet_mode=True)
+try:
+    response = agent.run_conversation('Return the fixture label.')
+    assert response['final_response'] == 'v1:fixture-same-address'
+finally:
+    agent.close()
+print('isolated audit uses the persisted connection for actual inference')
+PY
 docker exec "$name-pg" psql -v ON_ERROR_STOP=1 -U postgres -d v2_hermes_connection -tAc \
   "SELECT (SELECT count(*) FROM v2_audit_log WHERE action='hermes_connection_updated')=5
     AND (SELECT encrypted_value NOT LIKE '%fixture-key%' FROM v2_admin_settings WHERE setting_key='_hermes_connection_v1')" |
