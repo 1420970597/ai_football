@@ -15,10 +15,11 @@ class ReferencePreflightTests(unittest.TestCase):
                           'line': '1.500', 'captured_at': '2026-11-19T12:03:00Z'}
         self.binding = self.preflight | {'source': 'polymarket', 'market': 'match-half-1pt5',
                                          'line': '1.5', 'rules_sha256': 'rules'}
-        self.book = {'status': 'two_sided', 'quote_time': '2026-11-19T12:02:50Z',
+        self.book = {'outcome': 'Over', 'status': 'two_sided', 'quote_time': '2026-11-19T12:02:50Z',
+                     'bid': '0.60', 'ask': '0.61', 'bid_size': '1.250', 'ask_size': '2.125',
                      'received_at': '2026-11-19T12:02:52Z'}
         self.market = {'source': 'polymarket', 'market': 'match-half-1pt5', 'rules_sha256': 'rules',
-                       'accepting_orders': True, 'books': [self.book, self.book.copy()]}
+                       'accepting_orders': True, 'books': [self.book, self.book | {'outcome': 'Under'}]}
 
     def compare(self, *markets):
         # A later market in the same round may complete after this preflight.
@@ -27,10 +28,26 @@ class ReferencePreflightTests(unittest.TestCase):
         return row['references']
 
     def test_market_must_be_available_before_preflight_with_native_times(self):
-        self.assertEqual('timed_depth', self.compare(self.market)[0]['status'])
-        self.assertEqual(10, self.compare(self.market)[0]['oldest_quote_age_seconds'])
+        match, = self.compare(self.market)
+        self.assertEqual('timed_depth', match['status'])
+        self.assertEqual(10, match['oldest_quote_age_seconds'])
+        self.assertEqual(['Over', 'Under'], [row['outcome'] for row in match['books']])
+        self.assertEqual({'outcome': 'Over', 'bid': '0.60', 'ask': '0.61', 'bid_size': '1.250',
+                          'ask_size': '2.125', 'quoted_at': self.book['quote_time'],
+                          'received_at': self.book['received_at']}, match['books'][0])
+        self.assertEqual('rules', match['rules_sha256'])
         self.market['books'][1]['received_at'] = '2026-11-19T12:03:01Z'
         self.assertEqual('no_observation_before_preflight', self.compare(self.market)[0]['status'])
+
+    def test_invalid_depth_evidence_does_not_expose_price(self):
+        for broken in ({'ask': '0.59'}, {'bid': 'NaN'}, {'bid_size': '0'}, {'outcome': 'Over'}, {'outcome': None}):
+            with self.subTest(broken=broken):
+                market = self.market | {'books': [self.book, self.market['books'][1] | broken]}
+                match, = self.compare(market)
+                self.assertEqual('invalid_depth_evidence', match['status'])
+                self.assertNotIn('books', match)
+        match, = self.compare(self.market | {'books': [self.book]})
+        self.assertEqual('invalid_depth_evidence', match['status'])
 
     def test_preflight_never_reverts_to_previous_open_book(self):
         shut = deepcopy(self.market)

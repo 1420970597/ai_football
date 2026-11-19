@@ -40,6 +40,26 @@ def native_book_times(observation, cutoff):
     return 'timed_depth', native
 
 
+def replay_books(observation):
+    books = observation['books']
+    expected = {'polymarket': 2, 'polymarket_us': 1, 'kalshi': 1}.get(observation['source'])
+    labels = [book.get('outcome') for book in books]
+    if (len(labels) != expected or any(not isinstance(label, str) or not label.strip() for label in labels)
+            or len(set(labels)) != len(labels)):
+        raise ValueError('missing or ambiguous book outcome')
+
+    rows = []
+    for book in books:
+        bid, ask, bid_size, ask_size = (Decimal(str(book[key])) for key in ('bid', 'ask', 'bid_size', 'ask_size'))
+        if (not all(value.is_finite() for value in (bid, ask, bid_size, ask_size))
+                or not 0 < bid < ask < 1 or min(bid_size, ask_size) <= 0):
+            raise ValueError('invalid order book depth')
+        rows.append({'outcome': book['outcome'], 'bid': str(bid), 'ask': str(ask),
+                     'bid_size': str(bid_size), 'ask_size': str(ask_size),
+                     'quoted_at': book['quote_time'], 'received_at': book['received_at']})
+    return rows
+
+
 def compare(preflights, bindings, archive, max_age_seconds):
     archive_by_market = {}
     for batch in archive:
@@ -74,11 +94,17 @@ def compare(preflights, bindings, archive, max_age_seconds):
                 status, timestamps = native_book_times(observation, cutoff)
                 if timestamps and min(timestamps) < earliest:
                     status = 'stale_before_preflight'
-            source['status'] = status
             if status == 'timed_depth':
-                first, last = min(timestamps), max(timestamps)
-                source |= {'oldest_quote_age_seconds': (cutoff - first).total_seconds(),
-                           'within_market_skew_seconds': (last - first).total_seconds()}
+                try:
+                    books = replay_books(observation)
+                except (InvalidOperation, KeyError, TypeError, ValueError):
+                    status = 'invalid_depth_evidence'
+                else:
+                    first, last = min(timestamps), max(timestamps)
+                    source |= {'oldest_quote_age_seconds': (cutoff - first).total_seconds(),
+                               'within_market_skew_seconds': (last - first).total_seconds(),
+                               'rules_sha256': observation['rules_sha256'], 'books': books}
+            source['status'] = status
             sources.append(source)
         rows.append({'preflight': preflight, 'references': sources})
     return rows
