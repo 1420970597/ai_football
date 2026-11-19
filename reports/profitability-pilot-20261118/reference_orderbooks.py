@@ -82,6 +82,20 @@ def polymarket_us_book(book, slug, received_at):
     }
 
 
+def polymarket_us_sides(market):
+    labels = json.loads(market['outcomes'])
+    sides = market['marketSides']
+    if (not isinstance(labels, list) or not isinstance(sides, list)
+            or len(labels) != 2 or len(sides) != 2
+            or any(not isinstance(label, str) or not label.strip() for label in labels)
+            or len(set(labels)) != 2
+            or any(type(side['long']) is not bool or str(side['marketId']) != str(market['id']) for side in sides)
+            or {side['long'] for side in sides} != {False, True}
+            or {side['description'] for side in sides} != set(labels)):
+        raise ValueError('unexpected Polymarket US outcomes or market sides')
+    return {side['long']: side['description'] for side in sides}
+
+
 def kalshi_book(book):
     # A NO bid at p is a YES ask at 1-p, with the same displayed size.
     levels = book['orderbook_fp']
@@ -149,14 +163,16 @@ def capture_market(source, identifier):
         rules = market['description']
     elif source == 'polymarket_us':
         market = get_json(f'{POLYMARKET_US}/v1/market/slug/{identifier}')['market']
-        if market['slug'] != identifier or json.loads(market['outcomes']) != ['Yes', 'No']:
-            raise ValueError('unexpected market identity or outcome set')
+        if market['slug'] != identifier:
+            raise ValueError('market identity mismatch')
+        sides = polymarket_us_sides(market)
         raw = get_json(f'{POLYMARKET_US}/v1/markets/{identifier}/book')['marketData']
         received_at = now()
-        books = [polymarket_us_book(raw, identifier, received_at) | {'outcome': 'Yes', 'received_at': received_at}]
+        books = [polymarket_us_book(raw, identifier, received_at) | {'outcome': sides[True], 'received_at': received_at}]
         metadata = {
             'market_id': market['id'], 'market_type': market.get('sportsMarketType'), 'line': market.get('line'),
             'scheduled_start': market.get('gameStartTime'), 'active': market['active'], 'closed': market['closed'],
+            'long_outcome': sides[True], 'short_outcome': sides[False],
         }
         rules = market['description']
     else:

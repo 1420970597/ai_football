@@ -5,7 +5,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from reference_orderbooks import capture, capture_market, kalshi_book, polymarket_book, polymarket_us_book, replay_kalshi_tickers
+from reference_orderbooks import (
+    capture, capture_market, kalshi_book, polymarket_book, polymarket_us_book,
+    polymarket_us_sides, replay_kalshi_tickers,
+)
 
 
 class ReferenceOrderBookTests(unittest.TestCase):
@@ -41,7 +44,9 @@ class ReferenceOrderBookTests(unittest.TestCase):
         received = datetime(2026, 11, 18, 23, 27, 46, tzinfo=timezone.utc)
         book_time = '2026-11-18T23:27:45.721064983Z'
         market = {'slug': slug, 'id': '123', 'outcomes': '["Yes","No"]', 'active': True, 'closed': False,
-                  'description': 'Regulation play', 'sportsMarketType': 'soccer_team_full_time_winner'}
+                  'description': 'Regulation play', 'sportsMarketType': 'soccer_team_full_time_winner',
+                  'marketSides': [{'description': 'Yes', 'marketId': 123, 'long': True},
+                                  {'description': 'No', 'marketId': 123, 'long': False}]}
         book = {
             'marketSlug': slug, 'transactTime': book_time, 'state': 'MARKET_STATE_OPEN',
             'bids': [{'px': {'value': '0.58', 'currency': 'USD'}, 'qty': '7.25'}],
@@ -52,6 +57,7 @@ class ReferenceOrderBookTests(unittest.TestCase):
             observation = capture_market('polymarket_us', slug)
         quote, = observation['books']
         self.assertEqual('123', observation['market_id'])
+        self.assertEqual('Yes', quote['outcome'])
         self.assertEqual('two_sided', quote['status'])
         self.assertEqual(book_time, quote['native_transact_time'])
         self.assertEqual(0.278936, quote['quote_age_seconds'])
@@ -65,6 +71,15 @@ class ReferenceOrderBookTests(unittest.TestCase):
         self.assertEqual('market_not_open', suspended['status'])
         self.assertNotIn('bid', suspended)
         self.assertEqual('missing_side', polymarket_us_book(book | {'bids': []}, slug, received)['status'])
+
+    def test_polymarket_us_uses_native_direction_for_named_outcomes(self):
+        home = {'description': 'Nuggets', 'marketId': 123, 'long': False}
+        away = {'description': 'Celtics', 'marketId': 123, 'long': True}
+        market = {'id': '123', 'outcomes': '["Nuggets","Celtics"]', 'marketSides': [home, away]}
+        self.assertEqual({True: 'Celtics', False: 'Nuggets'}, polymarket_us_sides(market))
+        for change in ({'long': False}, {'description': 'Other'}, {'marketId': 456}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                polymarket_us_sides(market | {'marketSides': [home, away | change]})
 
     def test_failed_market_does_not_interrupt_the_sample(self):
         observation = {'source': 'kalshi', 'market': 'SECOND'}
