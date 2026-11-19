@@ -37,11 +37,11 @@ def permitted(method: str, target: str, authorization: str, tokens: dict[str, st
         return False
     allowed_query = (method == 'GET' and parsed.path == '/internal/telegram/pending'
                      and re.fullmatch(r'limit=([1-9]|[1-9][0-9]|100)', parsed.query))
-    # Default deployment remains non-trading. An explicit bridge gate permits
-    # only the executor's exact live claim query; role checks still apply.
+    # The receipt-recheck capability does not grant permission to claim orders.
     allowed_query = allowed_query or (method == 'POST' and parsed.path == '/internal/executor/claim'
-                                      and (parsed.query == 'live_capable=false' or
-                                           live_orders_enabled is True and parsed.query == 'live_capable=true'))
+                                      and (parsed.query in ('live_capable=false', 'live_capable=false&settled_recheck=true')
+                                           or live_orders_enabled is True and parsed.query in (
+                                               'live_capable=true', 'live_capable=true&settled_recheck=true')))
     if parsed.query and not allowed_query:
         return False
     for role, routes in (('collector', COLLECTOR_ROUTES), ('executor', EXECUTOR_ROUTES)):

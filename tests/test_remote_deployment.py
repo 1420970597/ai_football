@@ -195,10 +195,14 @@ class RemoteTransportTests(unittest.TestCase):
         self.assertEqual([],self.upstream.calls)
     def test_explicit_live_gate_allows_only_authenticated_executor_claim(self):
         path = '/internal/executor/claim?live_capable=true'
+        recheck_path = path + '&settled_recheck=true'
         self.assertEqual(403, self.request('POST', path, token='executor'))
+        self.assertEqual(403, self.request('POST', recheck_path, token='executor'))
         self.assertEqual([], self.upstream.calls)
         self.bridge.live_orders_enabled = True
         self.assertEqual(200, self.request('POST', path, token='executor'))
+        self.assertEqual(200, self.request('POST', recheck_path, token='executor'))
+        self.assertEqual(403, self.request('POST', recheck_path, token='collector'))
         self.assertEqual(403, self.request('POST', path, token='collector'))
         for query in ('live_capable=1', 'live_capable=True', 'live_capable=true&extra=1', 'live_capable=true&live_capable=false'):
             self.assertEqual(403, self.request('POST', '/internal/executor/claim?'+query, token='executor'))
@@ -240,7 +244,9 @@ class RemoteTransportTests(unittest.TestCase):
         self.assertEqual(200,self.request('POST','/internal/telegram/observed/ack'))
         self.assertEqual(200,self.request('POST','/internal/executor/dispatch',token='executor'))
         self.assertEqual(200,self.request('POST','/internal/executor/claim?live_capable=false',token='executor'))
-        for query in ('live_capable=true','live_capable=false&live_capable=true','live_capable=0','arbitrary=false'):
+        self.assertEqual(200,self.request('POST','/internal/executor/claim?live_capable=false&settled_recheck=true',token='executor'))
+        for query in ('live_capable=true','live_capable=false&live_capable=true','live_capable=0','arbitrary=false',
+                      'live_capable=false&settled_recheck=false', 'live_capable=false&settled_recheck=true&extra=1'):
             self.assertEqual(403,self.request('POST','/internal/executor/claim?'+query,token='executor'))
     def test_result_worker_routes_pass_real_bridge_and_stay_collector_scoped(self):
         for action in ('claim','observations','finish'):
@@ -374,13 +380,20 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
             await backend.save_session('synthetic',{});await backend.media_orphans('owner')
             await backend.acknowledge_media_orphans('owner',[])
             stop=asyncio.Event()
+            claim_failures=[]
             async def stop_after_claim(request):
-                result=await handle(request)
-                if request.url.path.endswith('/claim'):stop.set()
-                return result
+                if request.url.path.endswith('/claim'):
+                    stop.set()
+                try:
+                    return await handle(request)
+                except AssertionError as failure:
+                    claim_failures.append(failure)
+                    raise
             async with httpx.AsyncClient(transport=httpx.MockTransport(stop_after_claim)) as execution:
                 runner=Executor(execution,root+'/executor')
-                await runner.run(stop)
+                await asyncio.wait_for(runner.run(stop), timeout=5)
+            if claim_failures:
+                raise claim_failures[0]
             executor=Executor(client,root+'/executor')
             for method,path in [('POST','/jobs/11111111-1111-1111-1111-111111111111/renewal/claim'),
                                 ('PUT','/jobs/11111111-1111-1111-1111-111111111111/session'),
@@ -389,7 +402,7 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
                                 ('POST','/orders/11111111-1111-1111-1111-111111111111/authorize'),
                                 ('POST','/orders/11111111-1111-1111-1111-111111111111/finish')]:
                 await executor.rpc(method,path,json={})
-        self.assertIn(('POST','/internal/executor/claim?live_capable=false'),calls)
+        self.assertIn(('POST','/internal/executor/claim?live_capable=false&settled_recheck=true'),calls)
         self.assertGreaterEqual(len(calls),25)
 
 
