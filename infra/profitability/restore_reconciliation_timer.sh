@@ -42,6 +42,10 @@ restore_timer ai-football-profitability-window-evidence '*-*-* 02,14:27,47:00 UT
     /usr/bin/bash "$root/collect_window_evidence.sh" "$state_dir/.."
 printf '%s\n' 'Settlement verification archive timer is active.'
 
+restore_timer ai-football-profitability-analysis '*-*-* *:55:00 UTC' 1s 120s \
+    /usr/bin/bash "$root/collect_analysis.sh" "$state_dir/.."
+printf '%s\n' 'Comprehensive profitability analysis timer is active.'
+
 if [[ $# == 1 ]]; then
     preflight_dir="$project_root/.runtime/profitability-watch/preflight-cohorts-20261118T1600Z"
     if [[ ! -s "$preflight_dir/final.json" ]]; then

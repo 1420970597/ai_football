@@ -309,6 +309,12 @@ printf '%s\n' '--unit=ai-football-profitability-window-evidence' '--collect' '--
     '--property=Type=oneshot' '--property=TimeoutStartSec=45s' /usr/bin/bash \
     "$test_dir/infra/profitability/collect_window_evidence.sh" "$state_path/.." > expected_arguments
 cmp ai-football-profitability-window-evidence.arguments expected_arguments
+test -e ai-football-profitability-analysis.timer.active
+printf '%s\n' '--unit=ai-football-profitability-analysis' '--collect' '--on-active=15s' \
+    '--on-calendar=*-*-* *:55:00 UTC' '--timer-property=AccuracySec=1s' \
+    '--property=Type=oneshot' '--property=TimeoutStartSec=120s' '/usr/bin/bash' \
+    "$PWD/infra/profitability/collect_analysis.sh" "$PWD/.runtime/profitability-watch/reconciliations/.." > expected_arguments
+cmp ai-football-profitability-analysis.arguments expected_arguments
 
 rm timer_arguments
 export restore_anchor=invalid
