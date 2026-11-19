@@ -45,8 +45,8 @@ wait_http() {
   "${run[@]}" --rm --cpus=.15 --memory=96m "$verifier" python -c \
     'import sys,time,httpx; exec("for _ in range(60):\n try:\n  if httpx.get(sys.argv[1],timeout=1).status_code==200: break\n except httpx.HTTPError: pass\n time.sleep(.5)\nelse: raise RuntimeError(sys.argv[1])")' "$1"
 }
-wait_http http://api:8080/readyz
-docker run -d --name "$name-hermes" --network "$name" --network-alias hermes --network-alias hermes-connection \
+start_hermes() {
+  docker run -d --name "$name-hermes" --network "$name" --network-alias hermes --network-alias hermes-connection \
   --init --cpus=.55 --memory=900m --user 10000:10000 --entrypoint /opt/hermes/.venv/bin/python \
   --tmpfs /opt/data/.hermes:rw,uid=10000,gid=10000,mode=0700,size=128m \
   -v "$frozen/integrations/hermes:/workspace:ro" \
@@ -54,9 +54,12 @@ docker run -d --name "$name-hermes" --network "$name" --network-alias hermes --n
   -e PYTHONDONTWRITEBYTECODE=1 -e HERMES_HOME=/opt/data/.hermes -e API_SERVER_ENABLED=true \
   -e API_SERVER_HOST=0.0.0.0 -e API_SERVER_PORT=8642 -e API_SERVER_KEY=isolated-hermes-gateway-token-xyz-890 \
   -e HERMES_MODEL=fixture-baseline -e HERMES_PROVIDER_BASE_URL=http://provider-fixture:8999/v1 \
-  -e HERMES_PROVIDER_API_KEY=fixture-key-one -e HERMES_CONNECTION_TOKEN="$token" \
+  "$@" -e HERMES_CONNECTION_TOKEN="$token" \
   -e HERMES_CONNECTION_STORAGE_KEY="$storage_key" -e HERMES_GATEWAY_NO_SUPERVISE=1 -e HERMES_STREAM_RETRIES=0 \
   -e EXPERT_MCP_TOKEN=fixture-mcp "$hermes" /workspace/runner.py gateway run --no-supervise >/dev/null
+}
+wait_http http://api:8080/readyz
+start_hermes -e HERMES_PROVIDER_API_KEY=fixture-key-one
 wait_http http://hermes:8642/health
 docker run -d --name "$name-web" --network "$name" --network-alias web --cpus=.2 --memory=128m \
   -v "$frozen/web/app/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
@@ -102,6 +105,45 @@ docker exec "$name-pg" psql -v ON_ERROR_STOP=1 -U postgres -d v2_hermes_connecti
   "SELECT (SELECT count(*) FROM v2_audit_log WHERE action='hermes_connection_updated')=5
     AND (SELECT encrypted_value NOT LIKE '%fixture-key%' FROM v2_admin_settings WHERE setting_key='_hermes_connection_v1')" |
   rg -qx 't'
-docker restart "$name-hermes" >/dev/null
+fixture_actor=$(docker exec "$name-pg" psql -v ON_ERROR_STOP=1 -U postgres -d v2_hermes_connection -Atc \
+  "SELECT actor_id FROM v2_audit_log WHERE action='hermes_connection_updated' LIMIT 1")
+docker exec -i -e FIXTURE_HERMES_ACTOR="$fixture_actor" "$name-hermes" /opt/hermes/.venv/bin/python - <<'PY'
+import asyncio
+import os
+from dataclasses import asdict, replace
+import json
+
+import httpx
+from connection import ConnectionSettings
+
+async def main():
+    settings = ConnectionSettings(os.environ["HERMES_CONNECTION_TOKEN"],
+                                  os.environ["HERMES_CONNECTION_STORAGE_KEY"])
+    active = await settings.online()
+    prior = settings.cipher.encrypt(json.dumps(asdict(replace(active, revision=4))).encode()).decode()
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        def inference():
+            return client.post("http://127.0.0.1:8642/v1/chat/completions",
+                headers={"Authorization": "Bearer " + os.environ["API_SERVER_KEY"]},
+                json={"model": "hermes-agent", "messages": [{"role": "user", "content": "Return the fixture label."}]})
+        # Restore the committed state using the test harness's storage credential.
+        try:
+            await settings.storage("PUT", json={"previous": settings.sealed, "sealed": prior, "revision": 4,
+                "actor": os.environ["FIXTURE_HERMES_ACTOR"]})
+            assert (await inference()).status_code == 503
+        finally:
+            await settings.storage("PUT", json={"previous": prior, "sealed": settings.sealed, "revision": 5,
+                "actor": os.environ["FIXTURE_HERMES_ACTOR"]})
+        assert (await inference()).headers["X-Hermes-Connection-Revision"] == "5"
+asyncio.run(main())
+PY
+docker exec "$name-pg" psql -v ON_ERROR_STOP=1 -U postgres -d v2_hermes_connection -qAc \
+  "UPDATE v2_admin_settings SET setting_key='_hermes_connection_fixture' WHERE setting_key='_hermes_connection_v1'"
+checks missing
+docker rm -f "$name-hermes" >/dev/null
+start_hermes
 wait_http http://hermes:8642/health
+checks missing
+docker exec "$name-pg" psql -v ON_ERROR_STOP=1 -U postgres -d v2_hermes_connection -qAc \
+  "UPDATE v2_admin_settings SET setting_key='_hermes_connection_v1' WHERE setting_key='_hermes_connection_fixture'"
 checks 1

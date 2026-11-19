@@ -18,9 +18,14 @@ const actual = async (...args) => {
   return payload.choices[0].message.content;
 };
 
+if (process.env.VERIFY_RESTART === "missing") {
+  assert.equal((await requestChat()).status, 503);
+  console.log("missing connection blocks upstream inference");
+  process.exit(0);
+}
 if (process.env.VERIFY_RESTART === "1") {
   assert.equal(await actual(), "v1:fixture-same-address");
-  console.log("persisted connection restored after Hermes restart");
+  console.log("persisted connection restored in a new Hermes container without a bootstrap key");
   process.exit(0);
 }
 

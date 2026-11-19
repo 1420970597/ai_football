@@ -62,6 +62,10 @@ def open_connection(cipher, sealed):
     return Connection(**json.loads(cipher.decrypt(sealed.encode())))
 
 
+class ConnectionStateError(Exception):
+    pass
+
+
 def base_url(value, baseline):
     if not isinstance(value, str) or not value or len(value) > 1024 or not value.isascii() or any(
         ord(c) <= 32 or ord(c) == 127 or c in "\\?#" for c in value
@@ -117,7 +121,7 @@ class ConnectionSettings:
         self.audit_token = audit_token(token)
         self.audit_cipher = connection_cipher(self.audit_token)
         self.baseline = Connection(0, os.environ["HERMES_PROVIDER_BASE_URL"].rstrip("/"),
-                                   os.environ["HERMES_MODEL"], os.environ.get("HERMES_PROVIDER_API_KEY"))
+                                   os.environ["HERMES_MODEL"], os.environ.get("HERMES_PROVIDER_API_KEY") or None)
         self.current = self.baseline
         self.sealed = None
         self.lock = asyncio.Lock()
@@ -132,8 +136,10 @@ class ConnectionSettings:
         data = await self.storage("GET")
         sealed = data["sealed"]
         if sealed != self.sealed:
-            self.current = open_connection(self.cipher, sealed) if sealed else self.baseline
-            self.sealed = sealed
+            stored = open_connection(self.cipher, sealed) if sealed else self.baseline
+            if stored.revision <= self.current.revision:
+                raise ConnectionStateError("stored Hermes connection did not advance")
+            self.current, self.sealed = stored, sealed
 
     async def online(self):
         async with self.lock:
@@ -151,7 +157,7 @@ class ConnectionSettings:
                     return web.json_response({"detail": "managed connection is unavailable"}, status=503)
                 snapshot = self.audit_cipher.encrypt(json.dumps(asdict(self.current)).encode()).decode()
                 return web.json_response({"sealed": snapshot}, headers={"Cache-Control": "no-store"})
-        except (httpx.HTTPError, TimeoutError, InvalidToken, ValueError):
+        except (httpx.HTTPError, TimeoutError, InvalidToken, ValueError, ConnectionStateError):
             return web.json_response({"detail": "managed connection is unavailable"}, status=503)
 
     def candidate(self, data):
@@ -212,7 +218,7 @@ class ConnectionSettings:
         except ValueError as exc:
             detail = "连接配置格式无效" if isinstance(exc, json.JSONDecodeError) else str(exc)
             return web.json_response({"detail": detail}, status=422)
-        except (httpx.HTTPError, TimeoutError, InvalidToken):
+        except (httpx.HTTPError, TimeoutError, InvalidToken, ConnectionStateError):
             return web.json_response({"detail": "暂时无法读取或保存连接配置"}, status=503)
 
 
@@ -252,9 +258,9 @@ def install():
                     return denied
                 try:
                     active = await settings.online()
-                    if active.revision and not active.api_key:
-                        raise ValueError("managed connection key is unavailable")
-                except (httpx.HTTPError, TimeoutError, InvalidToken, ValueError):
+                    if not active.api_key:
+                        raise ConnectionStateError("Hermes connection key is unavailable")
+                except (httpx.HTTPError, TimeoutError, InvalidToken, ValueError, ConnectionStateError):
                     return web.json_response({"error": {"message": "Hermes connection is unavailable",
                                                          "type": "configuration_error"}}, status=503)
                 if active.revision and request.can_read_body:
