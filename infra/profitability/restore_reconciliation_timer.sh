@@ -38,6 +38,10 @@ if ! systemctl is-active --quiet "$unit.timer"; then
 fi
 printf '%s\n' 'Rolling reconciliation timer is active.'
 
+restore_timer ai-football-profitability-window-evidence '*-*-* 02,14:27,47:00 UTC' 1s 45s \
+    /usr/bin/bash "$root/collect_window_evidence.sh" "$state_dir/.."
+printf '%s\n' 'Settlement verification archive timer is active.'
+
 if [[ $# == 1 ]]; then
     preflight_dir="$project_root/.runtime/profitability-watch/preflight-cohorts-20261118T1600Z"
     if [[ ! -s "$preflight_dir/final.json" ]]; then

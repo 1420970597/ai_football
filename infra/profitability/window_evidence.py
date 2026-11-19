@@ -1,7 +1,7 @@
 """Summarize local settlement, reconciliation and wallet evidence for fixed windows."""
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -139,8 +139,16 @@ def summarize(root, snapshot):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('monitor_dir', type=Path)
+    parser.add_argument('--max-snapshot-age-seconds', type=int)
     arguments = parser.parse_args()
+    if arguments.max_snapshot_age_seconds is not None and arguments.max_snapshot_age_seconds <= 0:
+        parser.error('maximum snapshot age must be positive')
     snapshot = load_report(arguments.monitor_dir / 'state/latest.json')
     if not isinstance(snapshot, dict):
         parser.error('a readable current monitor snapshot is required')
-    print(json.dumps(summarize(arguments.monitor_dir, snapshot), default=str, ensure_ascii=False))
+    report = summarize(arguments.monitor_dir, snapshot)
+    if arguments.max_snapshot_age_seconds is not None:
+        age = (datetime.now(timezone.utc) - report['observed_at']).total_seconds()
+        if not 0 <= age <= arguments.max_snapshot_age_seconds:
+            parser.error('monitor snapshot is stale or dated in the future')
+    print(json.dumps(report, default=str, ensure_ascii=False))
