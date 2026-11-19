@@ -55,6 +55,25 @@ class ReferencePreflightTests(unittest.TestCase):
         shut['books'][0]['received_at'] = '2026-11-19T12:02:55Z'
         self.assertEqual('market_not_open', self.compare(shut, self.market)[0]['status'])
 
+    def test_out_of_order_archives_keep_latest_before_each_cutoff(self):
+        first = self.preflight | {'captured_at': '2026-11-19T12:02:54Z'}
+        next_order = self.preflight | {'captured_at': '2026-11-19T12:02:59Z'}
+        shut = deepcopy(self.market)
+        shut['accepting_orders'] = False
+        for book in shut['books']:
+            book['received_at'] = '2026-11-19T12:02:55Z'
+        reopened = shut | {'accepting_orders': True}
+        later = {'source': 'polymarket', 'market': self.binding['market'], 'error': 'TimeoutError'}
+        archive = iter([
+            {'captured_at': '2026-11-19T12:03:01Z', 'markets': [later]},
+            {'captured_at': '2026-11-19T12:02:55Z', 'markets': [shut]},
+            {'captured_at': '2026-11-19T12:02:52Z', 'markets': [self.market]},
+            {'captured_at': '2026-11-19T12:02:55Z', 'markets': [reopened]},
+        ])
+        rows = compare([next_order, first], [self.binding], archive, 30)
+        self.assertEqual(['market_not_open', 'timed_depth'],
+                         [row['references'][0]['status'] for row in rows])
+
     def test_missing_stale_and_inconsistent_source_time_remain_visible(self):
         for quoted, expected in (
             (None, 'missing_native_time'),

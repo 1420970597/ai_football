@@ -1,6 +1,7 @@
 """Measure quote coverage at genuine preflight cutoffs from private archives."""
 
 import argparse
+from bisect import bisect_left
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -293,17 +294,31 @@ def adjacent_groups(contract, lookup, quote, max_skew):
             'source_groups': sources, 'max_native_skew_seconds': max_skew}
 
 
-def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjacent_skew_seconds=5,
-            *, score_records=(), score_bindings=None, score_max_age_seconds=45, stream_segments=None):
-    archive_by_market = {}
+def index_observations(archive, cutoffs):
+    by_market = {}
     for batch in archive:
-        for observation in batch['markets']:
+        observations = batch['markets']
+        if not cutoffs:
+            continue
+        for observation in observations:
             key = observation['source'], observation['market']
             observed = max((instant(book['received_at']) for book in observation.get('books', [])),
                            default=instant(observation.get('observed_at') or batch['captured_at']))
-            archive_by_market.setdefault(key, []).append((observed, observation))
-    for records in archive_by_market.values():
-        records.sort(key=lambda record: record[0], reverse=True)
+            bucket = bisect_left(cutoffs, observed)
+            if bucket == len(cutoffs):
+                continue
+            records = by_market.setdefault(key, {})
+            prior = records.get(bucket)
+            if prior is None or observed > prior[0]:
+                records[bucket] = (observed, observation)
+    return {key: [record for _, record in sorted(records.items(), reverse=True)]
+            for key, records in by_market.items()}
+
+
+def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjacent_skew_seconds=5,
+            *, score_records=(), score_bindings=None, score_max_age_seconds=45, stream_segments=None):
+    cutoffs = sorted({instant(row['captured_at']) for row in preflights})
+    archive_by_market = index_observations(archive, cutoffs)
     by_contract = {}
     for binding in bindings:
         contract = contract_key(binding)
@@ -359,17 +374,21 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
     return rows
 
 
-def read_archive(paths):
-    archive = []
-    interrupted = 0
+def archive_records(paths, stats):
     for path in paths:
         with path.open('rb') as records:
             for line in records:
                 if not line.endswith(b'\n'):
-                    interrupted += 1
+                    stats['interrupted'] += 1
                     break
-                archive.append(json.loads(line))
-    return archive, interrupted
+                record = json.loads(line)
+                stats['rounds'] += 1
+                yield record
+
+
+def read_archive(paths):
+    stats = dict(rounds=0, interrupted=0)
+    return list(archive_records(paths, stats)), stats['interrupted']
 
 
 def main():
@@ -413,10 +432,8 @@ def main():
         score_bindings = json.loads(args.score_bindings.read_text()) if args.score_bindings else {}
         if not isinstance(score_bindings, dict) or (args.score_archive and not score_bindings):
             raise ValueError('invalid score bindings')
-        archive, interrupted = read_archive(args.archive)
+        order_book_stats = dict(rounds=0, interrupted=0)
         scores, interrupted_scores = read_archive(args.score_archive)
-        if not archive:
-            raise ValueError('no captured order book rounds')
         cutoffs = sorted({instant(row['captured_at']) for row in preflights})
         stream_segments, stream_summaries = [], []
         for path in args.stream_archive:
@@ -427,13 +444,15 @@ def main():
             else:
                 stream_segments.append(segment)
                 stream_summaries.append(segment[2])
-        matches = compare(preflights, bindings, archive, args.max_age_seconds, outcomes,
+        matches = compare(preflights, bindings, archive_records(args.archive, order_book_stats), args.max_age_seconds, outcomes,
                           score_records=scores, score_bindings=score_bindings,
                           stream_segments=stream_segments if args.stream_archive else None)
+        if not order_book_stats['rounds']:
+            raise ValueError('no captured order book rounds')
         for row in matches:
             row['price_decision'] = evaluate(row, approvals, args.max_age_seconds)
-        print(json.dumps({'capture_rounds': len(archive), 'max_age_seconds': args.max_age_seconds,
-                          'archives_with_incomplete_tail': interrupted,
+        print(json.dumps({'capture_rounds': order_book_stats['rounds'], 'max_age_seconds': args.max_age_seconds,
+                          'archives_with_incomplete_tail': order_book_stats['interrupted'],
                           'score_capture_rounds': len(scores), 'score_archives_with_incomplete_tail': interrupted_scores,
                           'pricing_approvals_sha256': (
                               sha256(approvals_raw).hexdigest() if approvals_raw is not None else None),

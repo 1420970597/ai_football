@@ -20,11 +20,22 @@ if [[ ${1-} == --capture || ${1-} == --score ]]; then
     fi
     shift
     capture_args=()
+    poll_interval=$interval
+    deadline_args=()
     if [[ "$mode" == --score ]]; then
         capture_args=(--score)
+    else
+        for argument in "${@:2}"; do
+            if [[ "$argument" == --polymarket-event ]]; then
+                poll_interval=5
+                deadline_args=(--end-at "$((begin + last_offset))")
+                break
+            fi
+        done
     fi
     exec bash "$root/capture_reference_window.sh" "${capture_args[@]}" "$1" \
-        --samples "$((remaining / interval + 1))" --interval-seconds "$interval" "${@:2}"
+        --samples "$((remaining / poll_interval + 1))" --interval-seconds "$poll_interval" \
+        "${deadline_args[@]}" "${@:2}"
 fi
 
 if (( $# != 0 )); then

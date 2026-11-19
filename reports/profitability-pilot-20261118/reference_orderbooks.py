@@ -291,6 +291,7 @@ def main():
                         help='read newline-delimited captured ticker frames with their original receive times on stdin')
     parser.add_argument('--samples', type=int, default=1)
     parser.add_argument('--interval-seconds', type=int, default=30)
+    parser.add_argument('--end-at', type=int, help='absolute UTC epoch cutoff for starting a capture round')
     args = parser.parse_args()
     markets = (
         [('polymarket', slug) for slug in args.polymarket]
@@ -306,8 +307,11 @@ def main():
             or any(not re.fullmatch(r'[a-z0-9-]{1,160}', slug) for slug in args.polymarket + args.polymarket_us)
             or any(not re.fullmatch(r'[A-Z0-9-]{1,160}', ticker) for ticker in args.kalshi)):
         parser.error(f'provide one to {max_markets} distinct public market IDs')
-    if not 1 <= args.samples <= 240 or not 20 <= args.interval_seconds <= 300:
-        parser.error('samples must be 1-240 and interval must be 20-300 seconds')
+    catalog_only = args.polymarket_event and not (args.polymarket_us or args.kalshi)
+    max_samples = 2160 if catalog_only else 240
+    min_interval = 5 if catalog_only else 20
+    if not 1 <= args.samples <= max_samples or not min_interval <= args.interval_seconds <= 300:
+        parser.error(f'samples must be 1-{max_samples} and interval must be {min_interval}-300 seconds')
     if (args.samples - 1) * args.interval_seconds > 3 * 60 * 60:
         parser.error('one capture can span at most three hours')
     if args.replay_kalshi_tickers:
@@ -317,10 +321,15 @@ def main():
             print(json.dumps(ticker, default=str), flush=True)
         return
     for index in range(args.samples):
+        if args.end_at is not None and now().timestamp() >= args.end_at:
+            break
         start = monotonic()
         print(json.dumps(capture(markets, args.polymarket_event), default=str), flush=True)
         if index + 1 < args.samples:
-            sleep(max(0, args.interval_seconds - (monotonic() - start)))
+            wait = args.interval_seconds - (monotonic() - start)
+            if args.end_at is not None:
+                wait = min(wait, args.end_at - now().timestamp())
+            sleep(max(0, wait))
 
 
 if __name__ == '__main__':

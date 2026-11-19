@@ -132,6 +132,19 @@ fi
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn(unit, units)
 
+    def test_expanded_capture_uses_five_seconds_and_an_absolute_deadline(self):
+        begin = '2026-11-19T19:57:00Z'
+        label = 'uwcl-slb-asr-2026-11-19'
+        extra = ['--polymarket-event', f'{label}-more-markets', '--polymarket', f'{label}-total-3pt5']
+        call = ('--capture', begin, f'{label}-catalog', *extra)
+        result, _ = self.invoke('2026-11-19T19:58:00+00:00', *call)
+        self.assertEqual(0, result.returncode, result.stderr)
+        end = int(datetime.fromisoformat('2026-11-19T22:07:21Z').timestamp())
+        self.assertEqual([f'{label}-catalog', '--samples', '1553', '--interval-seconds', '5',
+                          '--end-at', str(end), *extra], result.stdout.splitlines())
+        after, _ = self.invoke('2026-11-19T22:07:22+00:00', *call)
+        self.assertNotIn('--samples', after.stdout)
+
     def test_interrupted_stream_resumes_until_fixed_end_and_running_stream_is_preserved(self):
         now = '2026-11-19T12:09:00+00:00'
         result, units = self.invoke(now)
