@@ -226,7 +226,7 @@ fi
     def test_elapsed_windows_replay_only_when_usable_archive_exists(self):
         capture = self.archive / f'{SVAY_LABEL}-2026-11-19T11:57:00Z.jsonl'
         capture.touch()
-        now = '2026-11-20T02:00:00+00:00'
+        now = '2026-11-20T06:00:00+00:00'
         result, units = self.invoke(now)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(units)
@@ -235,15 +235,24 @@ fi
         result, units = self.invoke(now)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({SVAY_REPLAY}, set(units))
-        self.assertIn('--on-calendar=2026-11-20 02:00:05 UTC', units[SVAY_REPLAY])
+        self.assertIn('--on-calendar=2026-11-20 06:00:05 UTC', units[SVAY_REPLAY])
         self.assertEqual(
             [SVAY_LABEL, 'leyu:5860873', '2026-11-19T11:57:00Z', '2026-11-19T14:32:00Z', self.bindings.name],
             units[SVAY_REPLAY][-5:],
         )
-        (self.archive / f'{SVAY_LABEL}-replay-2026-11-20T02:00:05Z.json').write_text('{}\n')
+        (self.archive / f'{SVAY_LABEL}-replay-2026-11-20T06:00:05Z.json').write_text('{}\n')
         result, units = self.invoke(now)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(units)
+
+    def test_mls_score_windows_keep_the_verified_schedule(self):
+        result, units = self.invoke('2026-11-19T23:30:00Z')
+        self.assertEqual(0, result.returncode, result.stderr)
+        orlando = units['ai-football-profitability-reference-score-orlando']
+        seattle = units['ai-football-profitability-reference-score-seattle']
+        self.assertIn('--on-calendar=2026-11-20 00:27:00 UTC', orlando)
+        self.assertIn('--on-calendar=2026-11-20 02:57:00 UTC', seattle)
+        self.assertEqual(['--kalshi-milestone', '57142069-94b7-53cb-ba17-d2165114ac34'], orlando[-2:])
 
     def test_missing_bindings_prevents_registration(self):
         self.bindings.unlink()
