@@ -679,6 +679,45 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('cancelled', Decimal('0'), 'duplicate_economic_order'),
                          (stored['state'], stored['reserved_stake'], stored['result_payload']['reason']))
 
+    async def test_live_handicap_matches_final_margin_across_phase_and_score_changes(self):
+        await self.healthy()
+        fixture = 'leyu:887767'
+        scheduled, expert, _, first_quote = await self.signal(fixture=fixture)
+        same_at_zero, expert_zero = await self.followup_signal(scheduled)
+        same_after_goal, expert_goal = await self.followup_signal(scheduled, line='0.25', selection='home')
+        different_after_goal, expert_other = await self.followup_signal(scheduled, line='-1.25', selection='home')
+        await self.enable([expert, expert_zero, expert_goal, expert_other], daily='12', exposure='12')
+        await self.pool.execute("UPDATE v2_fixtures SET phase='scheduled' WHERE id=$1", fixture)
+        await self.pool.execute(
+            "UPDATE v2_expert_signals SET phase='scheduled',selection='home',line=-0.75 WHERE id=$1", scheduled)
+        await self.pool.execute(
+            "UPDATE v2_expert_signals SET selection='home',line=-0.75,score_baseline=$2 WHERE id=$1",
+            same_at_zero, {'home': 0, 'away': 0})
+        await self.pool.execute(
+            "UPDATE v2_expert_signals SET score_baseline=$2 WHERE id=ANY($1::uuid[])",
+            [same_after_goal, different_after_goal], {'home': 1, 'away': 0})
+        await self.pool.execute(
+            "UPDATE v2_expert_signals SET market_id='4',market_kind='handicap' WHERE fixture_id=$1", fixture)
+        await self.pool.execute(
+            "UPDATE v2_current_quotes SET line=-0.75,selection='home' WHERE id=$1", first_quote)
+        await self.pool.execute(
+            "UPDATE v2_current_quotes SET market_id='4',market_kind='handicap',play_id='4' WHERE fixture_id=$1", fixture)
+        first = await self.reserve(scheduled)
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='accepted',provider_order_no='original-handicap' WHERE id=$1",
+            first['id'])
+        await self.pool.execute("UPDATE v2_fixtures SET phase='live' WHERE id=$1", fixture)
+        with self.assertRaises(orders.OrderEligibilityError) as duplicate:
+            await self.reserve(same_at_zero)
+        self.assertEqual('duplicate_economic_order', duplicate.exception.reason)
+        await self.pool.execute("UPDATE v2_fixtures SET home_score=1 WHERE id=$1", fixture)
+        with self.assertRaises(orders.OrderEligibilityError) as shifted:
+            await self.reserve(same_after_goal)
+        self.assertEqual('duplicate_economic_order', shifted.exception.reason)
+        distinct = await self.reserve(different_after_goal)
+        self.assertEqual(different_after_goal, distinct['signal_id'])
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
     async def test_many_distinct_recommendations_never_exceed_limits_and_stop_is_available(self):
         await self.healthy()
         signals, experts = [], []

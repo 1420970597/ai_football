@@ -186,6 +186,23 @@ def order_score_scope(signal, sport):
     return phase, basis, scores if all(type(score) is int and score >= 0 for score in scores) else None
 
 
+def full_match_handicap_line(signal, sport, scope):
+    fixture_id = signal["fixture_id"]
+    line = signal["line"]
+    if (sport != "football" or not fixture_id.startswith("leyu:") or not fixture_id[5:].isascii()
+            or not fixture_id[5:].isdigit() or signal["market_id"] != "4"
+            or signal["market_kind"] != "handicap" or signal["period"] != "full_time"
+            or line is None or not line.is_finite() or (line * 4) % 1 != 0):
+        return None
+    if signal["phase"] == "scheduled" and scope == ("full_period",):
+        return line
+    if scope[:2] == ("live", "remaining_period") and scope[2] is not None:
+        home, away = scope[2]
+        # Both selections share the native home-view line.
+        return line - (home - away)
+    return None
+
+
 async def prevent_overlapping_order(conn, user_id, account, signal, *, manual, order=None):
     candidates = await conn.fetch(
         "SELECT s.fixture_id,s.phase,s.market_id,s.market_kind,s.period,s.score_basis,s.score_baseline,s.line,o.state "
@@ -201,6 +218,7 @@ async def prevent_overlapping_order(conn, user_id, account, signal, *, manual, o
     )
     sport, kind, line = signal["sport"], signal["market_kind"], signal["line"]
     scope = order_score_scope(signal, sport)
+    final_line = None if manual else full_match_handicap_line(signal, sport, scope)
     for prior in candidates:
         prior_scope = order_score_scope(prior, sport)
         other_line = prior["line"]
@@ -210,6 +228,8 @@ async def prevent_overlapping_order(conn, user_id, account, signal, *, manual, o
                             and None in (scope[-1], prior_scope[-1]))
         if exact and (scope == prior_scope or unknown_baseline):
             raise OrderEligibilityError(409, "本账户已有同场同盘口同方向的订单", "duplicate_economic_order")
+        if final_line is not None and final_line == full_match_handicap_line(prior, sport, prior_scope):
+            raise OrderEligibilityError(409, "本账户已有同场同方向的等价全场让球订单", "duplicate_economic_order")
         if (not manual and kind in {"total", "handicap"} and prior["state"] != "settled"
                 and scope == prior_scope and not unknown_baseline and line is not None and other_line is not None
                 and line.is_finite() and other_line.is_finite()
