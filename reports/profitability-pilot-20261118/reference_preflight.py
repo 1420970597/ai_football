@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
+import re
 
 from reference_lines import adjacent_lines
 
@@ -43,6 +44,45 @@ def settlement_comparison(preflight):
     if preflight.get('phase') == 'scheduled':
         return 'scheduled_rule_review_required'
     return 'phase_unverified'
+
+
+def match_scores(preflight, binding, records, cutoff, max_age_seconds):
+    if not binding:
+        return {'status': 'fixture_not_bound'}
+    sample = next((row for received, row in records if received <= cutoff and row['event'] == binding['event']), None)
+    if sample is None:
+        return {'status': 'no_score_observation_before_preflight'}
+    received = instant(sample['received_at'])
+    result = {'event': sample['event'], 'received_at': sample['received_at'],
+              'age_seconds': (cutoff - received).total_seconds()}
+    if sample.get('error'):
+        return result | {'status': 'score_source_read_failed'}
+    if instant(sample['requested_at']) > received:
+        return result | {'status': 'invalid_score_observation_time'}
+    teams = sample['teams']
+    if (sample['league'] != binding['league']
+            or instant(sample['scheduled_start']) != instant(binding['scheduled_start'])
+            or any(teams[side][0] != binding[side] for side in ('home', 'away'))):
+        return result | {'status': 'score_fixture_mismatch'}
+    if result['age_seconds'] > max_age_seconds:
+        return result | {'status': 'stale_score_observation'}
+    status = sample['status']
+    if status.get('type', {}).get('state') != 'in':
+        return result | {'status': 'score_phase_mismatch'}
+    native_times = [instant(event['wallclock']) for event in sample['key_events'] if event.get('wallclock')]
+    if any(stamp > received for stamp in native_times):
+        return result | {'status': 'invalid_score_event_time'}
+    baseline = preflight.get('score_baseline') or {}
+    observed = [teams[side][1] for side in ('home', 'away')]
+    wanted = [baseline.get(side) for side in ('home', 'away')]
+    result |= {'period': status.get('period'), 'display_clock': status.get('displayClock'),
+               'latest_native_event_at': max(native_times).isoformat() if native_times else None}
+    if not all(type(value) is int and value >= 0 for value in wanted):
+        return result | {'status': 'preflight_score_missing'}
+    if not all(type(value) in (str, int) and re.fullmatch(r'[0-9]{1,3}', str(value)) for value in observed):
+        return result | {'status': 'reference_score_missing'}
+    actual = list(map(int, observed))
+    return result | {'score': actual, 'status': 'observed_score_matches' if actual == wanted else 'score_mismatch'}
 
 
 def native_book_times(observation, cutoff):
@@ -192,7 +232,8 @@ def adjacent_groups(contract, lookup, quote, max_skew):
             'source_groups': sources, 'max_native_skew_seconds': max_skew}
 
 
-def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjacent_skew_seconds=5):
+def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjacent_skew_seconds=5,
+            *, score_records=(), score_bindings=None, score_max_age_seconds=45):
     archive_by_market = {}
     for batch in archive:
         for observation in batch['markets']:
@@ -207,6 +248,8 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
         contract = contract_key(binding)
         if binding['kind'] != 'team_total' or contract[3] in {'home', 'away'}:
             by_contract.setdefault(contract, []).append(binding)
+    score_records = sorted(((instant(row['received_at']), row) for row in score_records),
+                           key=lambda item: item[0], reverse=True)
     rows = []
     for preflight in preflights:
         cutoff = instant(preflight['captured_at'])
@@ -220,6 +263,9 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
         sources = [quote(binding) for binding in by_contract.get(contract, [])]
         row = {'preflight': preflight, 'references': sources,
                'settlement_comparison': settlement_comparison(preflight)}
+        if preflight.get('sport') == 'football' and preflight.get('phase') == 'live':
+            row['score_comparison'] = match_scores(preflight, (score_bindings or {}).get(preflight['fixture_id']),
+                                                   score_records, cutoff, score_max_age_seconds)
         if outcomes is not None:
             row['source_groups'] = source_groups(sources, preflight['kind'])
             adjacent = adjacent_groups(contract, by_contract, quote, min(adjacent_skew_seconds, max_age_seconds))
@@ -229,6 +275,19 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
     return rows
 
 
+def read_archive(paths):
+    archive = []
+    interrupted = 0
+    for path in paths:
+        with path.open('rb') as records:
+            for line in records:
+                if not line.endswith(b'\n'):
+                    interrupted += 1
+                    break
+                archive.append(json.loads(line))
+    return archive, interrupted
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('preflights', type=Path)
@@ -236,6 +295,8 @@ def main():
     parser.add_argument('archive', nargs='+', type=Path)
     parser.add_argument('--max-age-seconds', type=int, default=30)
     parser.add_argument('--outcomes', type=Path)
+    parser.add_argument('--score-bindings', type=Path)
+    parser.add_argument('--score-archive', action='append', type=Path, default=[])
     args = parser.parse_args()
     if not 1 <= args.max_age_seconds <= 120:
         parser.error('max age must be 1-120 seconds')
@@ -245,20 +306,18 @@ def main():
         outcomes = json.loads(args.outcomes.read_text()) if args.outcomes else None
         if args.outcomes and not isinstance(outcomes, dict):
             raise ValueError('invalid outcome manifest')
-        archive = []
-        interrupted = 0
-        for path in args.archive:
-            with path.open('rb') as records:
-                for line in records:
-                    if not line.endswith(b'\n'):
-                        interrupted += 1
-                        break
-                    archive.append(json.loads(line))
+        score_bindings = json.loads(args.score_bindings.read_text()) if args.score_bindings else {}
+        if not isinstance(score_bindings, dict) or (args.score_archive and not score_bindings):
+            raise ValueError('invalid score bindings')
+        archive, interrupted = read_archive(args.archive)
+        scores, interrupted_scores = read_archive(args.score_archive)
         if not archive:
             raise ValueError('no captured order book rounds')
-        matches = compare(preflights, bindings, archive, args.max_age_seconds, outcomes)
+        matches = compare(preflights, bindings, archive, args.max_age_seconds, outcomes,
+                          score_records=scores, score_bindings=score_bindings)
         print(json.dumps({'capture_rounds': len(archive), 'max_age_seconds': args.max_age_seconds,
                           'archives_with_incomplete_tail': interrupted,
+                          'score_capture_rounds': len(scores), 'score_archives_with_incomplete_tail': interrupted_scores,
                           'preflights': matches}))
     except (OSError, KeyError, TypeError, ValueError, InvalidOperation) as error:
         parser.exit(1, f'Invalid preflight evidence ({type(error).__name__})\n')

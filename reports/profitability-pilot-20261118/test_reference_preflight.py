@@ -162,6 +162,48 @@ class ReferencePreflightTests(unittest.TestCase):
                 self.assertEqual('timed_depth', row['references'][0]['status'])
                 self.assertEqual(expected, row['settlement_comparison'])
 
+    def test_score_replay_uses_only_the_latest_eligible_observation(self):
+        preflight = self.preflight | {'sport': 'football', 'phase': 'live', 'effective_score_basis': 'full_period',
+                                      'score_baseline': {'home': 1, 'away': 0}}
+        binding = {'event': '101', 'league': 'bra.1', 'scheduled_start': '2026-11-19T12:00:00Z',
+                   'home': 'VAS', 'away': 'INT'}
+        observation = {
+            'event': '101', 'league': 'bra.1', 'scheduled_start': '2026-11-19T12:00Z',
+            'requested_at': '2026-11-19T12:02:48Z', 'received_at': '2026-11-19T12:02:50Z',
+            'teams': {'home': ['VAS', '1'], 'away': ['INT', '0']},
+            'status': {'period': 1, 'displayClock': "3'", 'type': {'state': 'in'}},
+            'key_events': [{'wallclock': '2026-11-19T12:01:10Z'}],
+        }
+
+        def replay(*samples):
+            row, = compare([preflight], [], [], 30, score_bindings={'leyu:123': binding},
+                           score_records=samples)
+            self.assertEqual('independent_live_state_missing', row['settlement_comparison'])
+            return row['score_comparison']
+
+        future = observation | {'received_at': '2026-11-19T12:03:01Z', 'error': 'TimeoutError'}
+        compared = replay(future, observation)
+        self.assertEqual('observed_score_matches', compared['status'])
+        self.assertEqual([1, 0], compared['score'])
+        self.assertEqual(10, compared['age_seconds'])
+        self.assertEqual('2026-11-19T12:01:10+00:00', compared['latest_native_event_at'])
+        self.assertEqual('no_score_observation_before_preflight', replay(future)['status'])
+        cases = [
+            ({'received_at': '2026-11-19T12:02:59Z', 'error': 'TimeoutError'}, 'score_source_read_failed'),
+            ({'received_at': '2026-11-19T12:02:14Z', 'requested_at': '2026-11-19T12:02:12Z'},
+             'stale_score_observation'),
+            ({'league': 'bra.2'}, 'score_fixture_mismatch'),
+            ({'requested_at': '2026-11-19T12:02:51Z'}, 'invalid_score_observation_time'),
+            ({'key_events': [{'wallclock': '2026-11-19T12:02:51Z'}]}, 'invalid_score_event_time'),
+            ({'status': {'type': {'state': 'pre'}}}, 'score_phase_mismatch'),
+            ({'teams': {'home': ['VAS', '2'], 'away': ['INT', '0']}}, 'score_mismatch'),
+            ({'teams': {'home': ['VAS', None], 'away': ['INT', '0']}}, 'reference_score_missing'),
+        ]
+        for patch, status in cases:
+            with self.subTest(status=status):
+                self.assertEqual(status, replay(observation | patch)['status'])
+        self.assertEqual('score_source_read_failed', replay(observation, observation | cases[0][0])['status'])
+
     def test_team_total_requires_explicit_matching_team_direction(self):
         offered = self.preflight | {'kind': 'team_total'}
         binding = self.binding | {'kind': 'team_total'}
