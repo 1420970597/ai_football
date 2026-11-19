@@ -13,6 +13,7 @@ from .membership import has_entitlement
 from .score_rules import settlement_rule
 from .security import decrypt_secret
 from .expert_profitability import require_expert_permission
+from .settlement import settle
 
 
 class OrderEligibilityError(HTTPException):
@@ -55,7 +56,7 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None):
     row = await conn.fetchrow(
         "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,m.posted_at AS message_posted_at,"
         "e.enabled AS expert_enabled,src.enabled AS source_enabled,se.enabled AS trusted,f.phase AS current_phase,"
-        "f.sport,f.home_score,f.away_score,f.received_at AS fixture_received_at,"
+        "f.sport,f.home_score,f.away_score,f.half_home_score,f.half_away_score,f.received_at AS fixture_received_at,"
         "f.source_updated_at AS fixture_source_updated_at,f.source_time_quality AS fixture_source_time_quality,"
         "q.id AS quote_id,q.price AS current_price,q.source_updated_at,"
         "q.status,q.play_id,q.market_instance_id,q.selection_id,q.market_kind AS current_kind,q.score_basis AS current_basis "
@@ -171,7 +172,24 @@ def checked_score_benchmark(signal, *, manual):
     if scores != (home, away) or any(type(score) is not int or score < 0 for score in scores):
         detail = "滚球剩余时间盘口的推荐比分缺失或已经变化" if remaining else "滚球自动单的推荐比分缺失或已经变化"
         raise OrderEligibilityError(409, detail, "score_benchmark_changed")
+    if not manual and cannot_win_live_under(signal):
+        raise OrderEligibilityError(409, "当前比分下该滚球小球订单已无获利可能", "live_under_cannot_win")
     return f"{home}:{away}"
+
+
+def cannot_win_live_under(signal):
+    if (signal['selection'] != 'under' or signal['market_kind'] != 'total'
+            or any(signal[key] not in ('unknown', 'full_period') for key in ('score_basis', 'current_basis'))):
+        return False
+    rule = settlement_rule({'id': signal['fixture_id'], 'sport': signal['sport']},
+                           dict(signal, score_basis='unknown'))
+    if not rule or rule['score_basis'] != 'full_period':
+        return False
+    # Ending at the current score is the best normal result for an under bet.
+    result = {'status': 'confirmed', 'home': signal['home_score'], 'away': signal['away_score'],
+              'half_home': signal['half_home_score'], 'half_away': signal['half_away_score']}
+    decision = settle(dict(signal, kind='total', score_basis='full_period', price=Decimal(2)), result)
+    return decision.outcome in {'loss', 'half_loss', 'push'}
 
 
 def order_score_scope(signal, sport):

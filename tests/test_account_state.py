@@ -980,6 +980,45 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
         self.assertEqual('cancelled', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
 
+    async def test_live_under_checks_win_potential_at_reservation_and_recheck(self):
+        await self.healthy()
+        fixture = 'leyu:234568'
+        signal, expert, _, quote = await self.signal(fixture=fixture)
+        await self.enable([expert])
+        await self.pool.execute("UPDATE v2_expert_signals SET selection='under',score_baseline=$2 WHERE id=$1",
+                                signal, {'home': 2, 'away': 0})
+        await self.pool.execute("UPDATE v2_current_quotes SET selection='under' WHERE id=$1", quote)
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=2 WHERE id=$1', fixture)
+        order = await self.reserve(signal)
+        await self.pool.execute('UPDATE v2_fixtures SET home_score=3 WHERE id=$1', fixture)
+        await self.pool.execute('UPDATE v2_expert_signals SET score_baseline=$2 WHERE id=$1',
+                                signal, {'home': 3, 'away': 0})
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                with self.assertRaises(orders.OrderEligibilityError) as error:
+                    await orders.recheck_order(connection, order, self.settings)
+                self.assertEqual('live_under_cannot_win', error.exception.reason)
+        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+        self.assertNotEqual('order', work['kind'])
+        self.assertEqual('cancelled', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
+
+        later, _ = await self.followup_signal(signal, line='1.75', selection='under', period='first_half')
+        await self.pool.execute("UPDATE v2_expert_signals SET market_id='18',score_baseline=$2 WHERE id=$1",
+                                later, {'home': 3, 'away': 0})
+        await self.pool.execute("UPDATE v2_current_quotes SET market_id='18',play_id='18' "
+                                "WHERE fixture_id=$1 AND period='first_half'", fixture)
+        await self.pool.execute('UPDATE v2_fixtures SET half_home_score=2,half_away_score=0 WHERE id=$1', fixture)
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                eligible = dict(await orders.eligible_signal(connection, later))
+                self.assertTrue(orders.cannot_win_live_under(eligible))
+                self.assertTrue(orders.cannot_win_live_under(dict(eligible, line=Decimal('2'))))
+                self.assertFalse(orders.cannot_win_live_under(dict(eligible, line=Decimal('2.25'))))
+                self.assertFalse(orders.cannot_win_live_under(dict(eligible, half_home_score=None)))
+                self.assertFalse(orders.cannot_win_live_under(dict(eligible, current_basis='remaining_period')))
+                self.assertIsNone(orders.checked_score_benchmark(eligible, manual=True))
+
     async def test_unknown_mock_submission_not_requeued_or_released(self):
         await self.healthy()
         signal,expert,_,_=await self.signal()
