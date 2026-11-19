@@ -256,6 +256,12 @@ def render(report):
         lines.append(f"来源回放未生成收益行。前段受理 {cover['training_fills']} 笔，后段 {cover['holdout_fills']} 笔，"
                      f"其中存在资料缺失或无效的受理记录 {cover['invalid_fills']} 笔。")
     fixture = section('fixture_exposure')
+    overlap = section('order_overlap')
+    if overlap:
+        lines.append(f"近 48 小时 {overlap['native_fills']} 笔原生受理、{overlap['fixtures']} 场。按成交顺序发现 "
+                     f"{overlap['same_contract']} 笔相同合约及 {overlap['nearby_open_contract']} 笔前单未结的自动相邻线。"
+                     f"缺原生下单时点 {overlap['missing_placement']} 笔，缺合同字段 {overlap['missing_contract']} 笔，"
+                     f"匹配同一原生回执 {overlap['reused_receipt']} 笔，不能确定前后顺序 {overlap['uncertain_ordering']} 笔。")
     limits = [row for row in fixture.get('cap_sensitivity', []) if row['scope'] == 'fixture']
     if limits:
         lines += ['', '| 同场敞口限制 | 早段回放净额变化 | 晚段回放净额变化 | 晚段被排除但缺净额 |',

@@ -11,7 +11,7 @@ import tarfile
 
 QUERIES = (
     'execution_quality', 'opportunity_coverage', 'review_latency', 'review_funnel',
-    'market_refresh_coverage', 'review_price_coverage', 'snapshot_fill_comparison',
+    'market_refresh_coverage', 'review_price_coverage', 'snapshot_fill_comparison', 'order_overlap',
     'source_holdout', 'fixture_exposure', 'message_exposure', 'freshness_replay', 'cross_source_replay',
 )
 PSQL_DEFAULT = re.compile(r"\\if :\{\?(\w+)\}\n\\else\n\\set \1 ''\n\\endif\n")

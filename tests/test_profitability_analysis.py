@@ -1,11 +1,18 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
+import os
 import tempfile
 import unittest
+from urllib.parse import urlsplit
+
+import asyncpg
 
 from infra.profitability.analysis_report import reference_evidence, render, settlement_evidence
 from infra.profitability.collect_analysis import QUERIES, prepare_query
+
+ROOT = Path(__file__).resolve().parents[1]
+TEST_DATABASE = os.environ.get('TEST_DATABASE_ADMIN_URL')
 
 
 class ProfitabilityAnalysisTest(unittest.TestCase):
@@ -13,7 +20,7 @@ class ProfitabilityAnalysisTest(unittest.TestCase):
         self.now = datetime(2026, 11, 19, 13, tzinfo=timezone.utc)
 
     def test_prepares_existing_sql_using_text_parameters(self):
-        folder = Path(__file__).resolve().parents[1] / 'infra/profitability'
+        folder = ROOT / 'infra/profitability'
         params = dict.fromkeys(('begin', 'end', 'anchor', 'split', 'analysis_end', 'receipt_as_of', 'observed'), self.now)
         for name in QUERIES:
             with self.subTest(name=name):
@@ -93,6 +100,41 @@ class ProfitabilityAnalysisTest(unittest.TestCase):
                          'references': [], 'diagnostics': {'source_holdout': {'error': 'QueryCanceledError'}}})
         self.assertIn('QueryCanceledError', report)
         self.assertIn('stale_or_after_cutoff', report)
+
+    def test_report_distinguishes_order_overlap_from_evidence_gaps(self):
+        overlap = {'native_fills': 15, 'fixtures': 4, 'same_contract': 2, 'nearby_open_contract': 1,
+                   'missing_placement': 1, 'missing_contract': 1, 'reused_receipt': 1, 'uncertain_ordering': 2}
+        report = render({'observed_at': self.now.isoformat(), 'settlement': {'status': 'stale_or_after_cutoff'},
+                         'references': [], 'diagnostics': {'order_overlap': {'data': overlap}}})
+        self.assertIn('2 笔相同合约及 1 笔前单未结的自动相邻线', report)
+        self.assertIn('不能确定前后顺序 2 笔', report)
+
+
+@unittest.skipUnless(TEST_DATABASE, 'isolated Docker PostgreSQL required')
+class ProfitabilityOverlapDatabaseTest(unittest.IsolatedAsyncioTestCase):
+    async def test_counts_contract_overlap_without_ambiguous_or_reused_receipts(self):
+        parts = urlsplit(TEST_DATABASE)
+        if (parts.scheme, parts.username, parts.hostname, parts.path) != (
+                'postgresql', 'postgres', 'ai-football-v2-pgverify', '/postgres'):
+            raise RuntimeError('Overlap test requires the isolated Docker test database')
+        begin = datetime(2026, 11, 18, 2, tzinfo=timezone.utc)
+        query, args = prepare_query((ROOT / 'infra/profitability/order_overlap.sql').read_text(), {
+            'begin': begin, 'end': begin + timedelta(hours=1),
+        })
+        conn = await asyncpg.connect(TEST_DATABASE, timeout=5, command_timeout=7)
+        try:
+            await conn.fetchval("SELECT set_config('profitability_test.starts_at', $1, false)", begin.isoformat())
+            fixture = ROOT / 'tests/integration/profitability_order_overlap.sql'
+            await conn.execute(fixture.read_text())
+            async with conn.transaction(isolation='repeatable_read', readonly=True):
+                result = json.loads(await conn.fetchval(query, *args))
+        finally:
+            await conn.close()
+        self.assertEqual({
+            'fixtures': 4, 'native_fills': 16, 'automatic_fills': 15, 'same_contract': 3,
+            'nearby_open_contract': 1, 'reused_receipt': 1, 'uncertain_ordering': 2,
+            'missing_contract': 1, 'missing_placement': 1,
+        }, result)
 
 
 if __name__ == '__main__':
