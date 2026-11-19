@@ -5,8 +5,18 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-10.3'
+REGISTRY_VERSION = '2026-11-19.1'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport': 'football', 'competition': '欧洲女子冠军联赛',
+        'names': ('巴黎FC(女)', '巴黎FC女足', 'Paris FC Women'),
+        'reference': 'uefa:2050572+leyu:5831449:20261119',
+    },
+    {
+        'sport': 'football', 'competition': '欧洲女子冠军联赛',
+        'names': ('科治(女)', '勒尔科治女足', 'HB Køge Women'),
+        'reference': 'uefa:2050572+leyu:5831449:20261119',
+    },
     {
         'sport': 'football',
         'names': ('恰斯拉夫', '卡拉夫', 'FK Caslav'),

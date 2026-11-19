@@ -25,14 +25,14 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
     for row in rows:
         fixture = row['candidate_data']
         sport = fixture.get('sport')
-        home_match = team_name_matches(body.team_a, fixture['home_team'], fixture.get('home_aliases', []), sport=sport)
-        away_match = team_name_matches(body.team_a, fixture['away_team'], fixture.get('away_aliases', []), sport=sport)
-        home_other = team_name_matches(body.team_b, fixture['home_team'], fixture.get('home_aliases', []), sport=sport)
-        away_other = team_name_matches(body.team_b, fixture['away_team'], fixture.get('away_aliases', []), sport=sport)
+        scope = {'sport': sport, 'competition': fixture.get('competition_name')}
+        home_match = team_name_matches(body.team_a, fixture['home_team'], fixture.get('home_aliases', []), **scope)
+        away_match = team_name_matches(body.team_a, fixture['away_team'], fixture.get('away_aliases', []), **scope)
+        home_other = team_name_matches(body.team_b, fixture['home_team'], fixture.get('home_aliases', []), **scope)
+        away_other = team_name_matches(body.team_b, fixture['away_team'], fixture.get('away_aliases', []), **scope)
         if not ((home_match and away_other) or (away_match and home_other)):
             continue
         if body.competition:
-            sport = fixture.get('sport')
             if normalize_competition_name(body.competition, sport) != normalize_competition_name(fixture['competition_name'], sport):
                 continue
         kickoff = datetime.fromisoformat(fixture['kickoff_at'])

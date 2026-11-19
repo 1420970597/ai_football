@@ -7,6 +7,11 @@ import test_reviews as support
 
 
 class VerifiedTeamAliasTests(unittest.TestCase):
+    def test_koge_name_equivalence_is_limited_to_the_reviewed_competition(self):
+        self.assertTrue(names.team_name_matches('勒尔科治女足', '科治(女)', sport='football', competition='欧洲女子冠军联赛'))
+        self.assertFalse(names.team_name_matches('勒尔科治女足', '科治(女)', sport='football', competition='丹麦女子联赛'))
+        self.assertFalse(names.team_name_matches('勒尔科治女足', '科治', sport='football', competition='欧洲女子冠军联赛'))
+
     def test_alias_evidence_is_football_only_and_keeps_squad_identity(self):
         self.assertTrue(names.team_name_matches('卡拉夫', '恰斯拉夫', sport='football'))
         self.assertIn('恰斯拉夫', names.team_search_variants('卡拉夫', sport='football'))
@@ -43,6 +48,22 @@ class VerifiedTeamAliasAPITests(unittest.IsolatedAsyncioTestCase):
     context = support.ReviewTests.context
     post = support.ReviewTests.post
     fixture = support.ReviewTests.fixture
+
+    async def test_reviewed_womens_names_bind_only_the_champions_league_fixture(self):
+        wanted = await self.fixture(1, home_team='巴黎FC(女)', away_team='科治(女)',
+                                    competition_name='欧洲女子冠军联赛')
+        await self.fixture(2, home_team='巴黎FC(女)', away_team='科治(女)', competition_name='其他女子联赛')
+        await self.pool.execute("UPDATE v2_expert_messages SET raw_text='巴黎FC女足 vs 勒尔科治女足 大2.5' WHERE id=$1",
+                                self.message)
+        response = await self.post('search_matches', team_query='勒尔科治女足', sport='football',
+                                   team_a='巴黎FC女足', team_b='勒尔科治女足')
+        self.assertEqual(200, response.status_code, response.text)
+        resolution = response.json()['resolution']
+        self.assertTrue(resolution['resolved'], resolution)
+        self.assertEqual(wanted, resolution['fixture']['id'])
+        self.assertEqual('uefa:2050572+leyu:5831449:20261119',
+                         resolution['fixture']['verified_alias_sources']['away'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
     async def test_verified_name_recalls_fixture_and_emits_evidence(self):
         wanted = await self.fixture(1, home_team='Alpha1', away_team='恰斯拉夫')

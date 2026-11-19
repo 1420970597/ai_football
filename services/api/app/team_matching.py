@@ -36,11 +36,16 @@ def normalize_team_name(value: str) -> str:
     return " ".join("".join(chars).split())
 
 
-def _verified_group(value: str, sport: str | None):
+def _verified_group(value: str, sport: str | None, competition: str | None):
+    from .competition_names import normalize_competition_name
+
     normalized = normalize_team_name(value)
     for group in VERIFIED_TEAM_NAMES:
-        if sport == group['sport'] and normalized in {
-                normalize_team_name(name) for name in group['names']}:
+        if (sport == group['sport']
+                and normalized in {normalize_team_name(name) for name in group['names']}
+                and (not group.get('competition') or
+                     normalize_competition_name(competition or '', sport)
+                     == normalize_competition_name(group['competition'], sport))):
             return group
     return None
 
@@ -50,7 +55,7 @@ def with_verified_aliases(fixture: dict) -> dict:
     result = dict(fixture)
     sources = {}
     for side in ('home', 'away'):
-        group = _verified_group(fixture.get(side + '_team', ''), fixture.get('sport'))
+        group = _verified_group(fixture.get(side + '_team', ''), fixture.get('sport'), fixture.get('competition_name'))
         if group:
             existing = list(fixture.get(side + '_aliases') or [])
             result[side + '_aliases'] = list(dict.fromkeys([*existing, *group['names']]))
@@ -60,12 +65,13 @@ def with_verified_aliases(fixture: dict) -> dict:
     return result
 
 
-def team_search_variants(value: str, *, sport: str | None = None) -> tuple[str, ...]:
+def team_search_variants(value: str, *, sport: str | None = None,
+                         competition: str | None = None) -> tuple[str, ...]:
     normalized = normalize_team_name(value)
     if not normalized:
         return ()
     variants = {normalized}
-    group = _verified_group(value, sport)
+    group = _verified_group(value, sport, competition)
     if group:
         variants.update(normalize_team_name(name) for name in group['names'])
     phrase = _PHRASE_ALIASES.get(normalized)
@@ -102,11 +108,11 @@ def _club_marker_variants(value: str) -> set[str]:
     return variants
 
 
-def _name_forms(value: str, *, sport: str | None = None) -> set[str]:
+def _name_forms(value: str, *, sport: str | None = None, competition: str | None = None) -> set[str]:
     normalized = normalize_team_name(value)
     if not normalized:
         return set()
-    forms = set(team_search_variants(normalized, sport=sport))
+    forms = set(team_search_variants(normalized, sport=sport, competition=competition))
     forms.update(" ".join(_TOKEN_ALIASES.get(token, token) for token in form.split())
                  for form in tuple(forms))
     expanded = set(forms)
@@ -143,14 +149,15 @@ def _prefix_match(query: str, candidate: str) -> bool:
                for query_token, candidate_token in zip(query_tokens, candidate_tokens))
 
 
-def team_name_matches(query: str, primary_name: str, aliases=(), *, sport: str | None = None) -> bool:
-    query_forms = _name_forms(query, sport=sport)
+def team_name_matches(query: str, primary_name: str, aliases=(), *, sport: str | None = None,
+                      competition: str | None = None) -> bool:
+    query_forms = _name_forms(query, sport=sport, competition=competition)
     if not query_forms:
         return False
     candidate_forms: set[str] = set()
     for value in (primary_name, *aliases):
         if isinstance(value, str):
-            candidate_forms.update(_name_forms(value, sport=sport))
+            candidate_forms.update(_name_forms(value, sport=sport, competition=competition))
     if query_forms & candidate_forms:
         return True
     return any(_prefix_match(query_form, candidate_form)
