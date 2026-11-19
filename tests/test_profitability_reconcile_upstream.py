@@ -7,12 +7,67 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from infra.profitability.reconcile_upstream import collect, reconcile_window
-from infra.profitability.window_evidence import reconciliation
+from infra.profitability.window_evidence import reconciliation, summarize
 from services.collector.leyu_protocol import LeyuError
 
 
 START = datetime(2026, 11, 18, 2, tzinfo=timezone.utc)
 END = START + timedelta(hours=12)
+
+
+class SettlementStreakEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / 'reconciliations').mkdir()
+        self.snapshot = {
+            'anchor': START.isoformat(), 'observed_at': (START + timedelta(hours=60)).isoformat(),
+            'deadline_state': 'positive_receipts_all_four', 'rolling_four_positive_receipts': True,
+            'windows': [],
+        }
+        for ordinal in range(5):
+            begin = START + timedelta(hours=12 * ordinal)
+            end = begin + timedelta(hours=12)
+            digest = 'v1:' + str(ordinal) * 64
+            self.snapshot['windows'].append({
+                'ordinal': ordinal, 'closed': True, 'since': begin.isoformat(), 'until': end.isoformat(),
+                'provider_net': '2.44', 'settled': 1, 'status': 'positive_receipts',
+                'missing_fee_field': 0, 'missing_currency': 0, 'local_receipt_digest': digest,
+            })
+            self.write_scan(ordinal)
+
+    def write_scan(self, ordinal, **changes):
+        window = self.snapshot['windows'][ordinal]
+        scan = {'begin': window['since'], 'end': window['until'], 'complete_page': True,
+                'local_settled': 1, 'upstream_settled': 1, 'matched': 1, 'local_only': 0, 'upstream_only': 0,
+                'settlement_window_attribution_complete': True, 'order_receipt_fields_reconciled': True,
+                'local_receipt_digest': window['local_receipt_digest']}
+        (self.root / 'reconciliations' / f'{ordinal}.json').write_text(json.dumps([scan | changes]))
+
+    def test_initial_and_rolling_require_fresh_upstream_agreement_in_each_window(self):
+        report = summarize(self.root, self.snapshot)
+        self.assertTrue(report['initial_four_windows']['verified'])
+        self.assertTrue(report['rolling_four_windows']['verified'])
+        self.write_scan(0, local_receipt_digest='v1:' + 'f' * 64)
+        report = summarize(self.root, self.snapshot)
+        self.assertEqual([0], report['initial_four_windows']['unverified_windows'])
+        self.assertFalse(report['initial_four_windows']['verified'])
+        self.assertTrue(report['rolling_four_windows']['verified'])
+        self.write_scan(4, settlement_window_attribution_complete=False)
+        self.assertFalse(summarize(self.root, self.snapshot)['rolling_four_windows']['verified'])
+
+    def test_rolling_windows_must_be_consecutive_and_locally_qualified(self):
+        self.snapshot['rolling_four_positive_receipts'] = False
+        report = summarize(self.root, self.snapshot)
+        self.assertFalse(report['rolling_four_windows']['verified'])
+        self.assertEqual([], report['rolling_four_windows']['unverified_windows'])
+        self.snapshot['rolling_four_positive_receipts'] = True
+        self.snapshot['windows'].pop(3)
+        report = summarize(self.root, self.snapshot)
+        self.assertEqual([1, 2, 3, 4], report['rolling_four_windows']['ordinals'])
+        self.assertEqual([3], report['rolling_four_windows']['missing_closed_windows'])
+        self.assertFalse(report['rolling_four_windows']['verified'])
 
 
 class ReconcileUpstreamTests(unittest.TestCase):

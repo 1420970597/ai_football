@@ -71,6 +71,23 @@ def valid_digest(value):
     return isinstance(value, str) and re.fullmatch(r'v1:[0-9a-f]{64}', value) is not None
 
 
+def streak_evidence(windows, ordinals, local_qualified):
+    missing = [ordinal for ordinal in ordinals if ordinal not in windows]
+    unverified = []
+    for ordinal in ordinals:
+        window = windows.get(ordinal)
+        if window is None:
+            continue
+        scan = window['reconciliation'] or {}
+        if (window['window_status'] != 'positive_receipts'
+                or scan.get('current_receipt_fields_reconciled') is not True
+                or scan.get('settlement_window_attribution_complete') is not True):
+            unverified.append(ordinal)
+    return {'ordinals': list(ordinals), 'missing_closed_windows': missing,
+            'unverified_windows': unverified, 'local_streak_verified': local_qualified,
+            'verified': local_qualified and len(ordinals) == 4 and not missing and not unverified}
+
+
 def summarize(root, snapshot):
     anchor = datetime.fromisoformat(snapshot['anchor'])
     observed = datetime.fromisoformat(snapshot['observed_at'])
@@ -107,7 +124,16 @@ def summarize(root, snapshot):
                 **{key: wallet_totals.get(key) for key in ('sampling_gaps', 'incomplete_intervals', 'intervals_with_difference')},
             } if isinstance(wallet_totals, dict) else None,
         })
-    return {'anchor': anchor, 'observed_at': observed, 'windows': items}
+    closed = {item['ordinal']: item for item in items}
+    elapsed_windows = (observed - anchor) // timedelta(hours=12)
+    rolling = range(max(0, elapsed_windows - 4), max(0, elapsed_windows))
+    return {
+        'anchor': anchor, 'observed_at': observed, 'windows': items,
+        'initial_four_windows': streak_evidence(closed, range(4),
+                                                snapshot.get('deadline_state') == 'positive_receipts_all_four'),
+        'rolling_four_windows': streak_evidence(closed, rolling,
+                                                snapshot.get('rolling_four_positive_receipts') is True),
+    }
 
 
 if __name__ == '__main__':
