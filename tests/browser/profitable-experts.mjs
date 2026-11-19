@@ -54,7 +54,9 @@ try{
     assert.ok(!(await page.locator('#betting-status').innerText()).includes('赛前及篮球专家推荐仍可浏览'));
     assert.ok((await page.locator('#betting-expert-mode-note').innerText()).includes('不限于下方已选名单'));
     assert.ok((await page.locator('#betting-expert-mode-note').innerText()).includes('足球赛前与滚球，以及篮球全场胜负、大小、让分的赛前与滚球'));
-    assert.ok((await form.locator('[name=confirmed]').locator('..').innerText()).includes('足球赛前与滚球、篮球全场胜负及大小让分的赛前与滚球'));
+    const confirmation=await form.locator('[name=confirmed]').locator('..').innerText();
+    assert.match(confirmation, /所选项目、专家、每单本金与限额/);
+    assert.match(confirmation, /本人账户资金.*自动投注/);
     assert.equal(await form.locator('[name=expert]').first().isChecked(),true);
     await mode.selectOption('profitable');
     assert.equal(await form.locator('[name=expert]').first().isDisabled(),true);
