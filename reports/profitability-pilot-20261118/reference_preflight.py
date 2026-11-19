@@ -6,6 +6,9 @@ from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 
+REFERENCE_SIDES = {'winner': {'home', 'draw', 'away'}, 'handicap': {'home', 'away'},
+                   'total': {'over', 'under'}, 'team_total': {'over', 'under'}}
+
 
 def instant(value):
     result = datetime.fromisoformat(value)
@@ -60,7 +63,55 @@ def replay_books(observation):
     return rows
 
 
-def compare(preflights, bindings, archive, max_age_seconds):
+def bind_outcomes(reference, orientation, kind):
+    if orientation is None:
+        return 'mapping_missing'
+    if orientation['rules_sha256'] != reference['rules_sha256']:
+        return 'mapping_rules_changed'
+    labels = orientation['labels']
+    if labels.keys() != {book['outcome'] for book in reference['books']}:
+        return 'mapping_labels_changed'
+    sides = set(labels.values())
+    if len(sides) != len(labels):
+        return 'mapping_invalid'
+    selection = orientation.get('selection')
+    expected = REFERENCE_SIDES.get(kind, set())
+    if kind == 'winner':
+        if selection not in expected or sides != {'yes', 'no'}:
+            return 'mapping_invalid'
+        reference['proposition'] = selection
+    elif selection is not None or not sides <= expected:
+        return 'mapping_invalid'
+    for book in reference['books']:
+        book['canonical_outcome'] = labels[book['outcome']]
+    return 'mapped'
+
+
+def source_groups(references, kind):
+    groups = {}
+    for source in sorted({reference['source'] for reference in references}):
+        markets = {}
+        duplicates = set()
+        expected = REFERENCE_SIDES.get(kind, set())
+        for reference in references:
+            if reference['source'] != source or reference.get('outcome_status') != 'mapped':
+                continue
+            sides = ([reference['proposition']] if kind == 'winner'
+                     else [book['canonical_outcome'] for book in reference['books']])
+            for side in sides:
+                if side in markets:
+                    duplicates.add(side)
+                else:
+                    markets[side] = reference['market']
+        missing = expected - markets.keys()
+        split_binary = kind != 'winner' and len(set(markets.values())) > 1
+        status = 'ambiguous' if duplicates or split_binary else 'incomplete' if missing or not markets else 'complete'
+        groups[source] = {'status': status, 'markets': markets, 'missing': sorted(missing),
+                          'duplicates': sorted(duplicates)}
+    return groups
+
+
+def compare(preflights, bindings, archive, max_age_seconds, outcomes=None):
     archive_by_market = {}
     for batch in archive:
         for observation in batch['markets']:
@@ -104,9 +155,15 @@ def compare(preflights, bindings, archive, max_age_seconds):
                     source |= {'oldest_quote_age_seconds': (cutoff - first).total_seconds(),
                                'within_market_skew_seconds': (last - first).total_seconds(),
                                'rules_sha256': observation['rules_sha256'], 'books': books}
+                    if outcomes is not None:
+                        orientation = outcomes.get(binding['source'], {}).get(binding['market'])
+                        source['outcome_status'] = bind_outcomes(source, orientation, preflight['kind'])
             source['status'] = status
             sources.append(source)
-        rows.append({'preflight': preflight, 'references': sources})
+        row = {'preflight': preflight, 'references': sources}
+        if outcomes is not None:
+            row['source_groups'] = source_groups(sources, preflight['kind'])
+        rows.append(row)
     return rows
 
 
@@ -116,12 +173,16 @@ def main():
     parser.add_argument('bindings', type=Path)
     parser.add_argument('archive', nargs='+', type=Path)
     parser.add_argument('--max-age-seconds', type=int, default=30)
+    parser.add_argument('--outcomes', type=Path)
     args = parser.parse_args()
     if not 1 <= args.max_age_seconds <= 120:
         parser.error('max age must be 1-120 seconds')
     try:
         preflights = json.loads(args.preflights.read_text())
         bindings = json.loads(args.bindings.read_text())
+        outcomes = json.loads(args.outcomes.read_text()) if args.outcomes else None
+        if args.outcomes and not isinstance(outcomes, dict):
+            raise ValueError('invalid outcome manifest')
         archive = []
         interrupted = 0
         for path in args.archive:
@@ -133,7 +194,7 @@ def main():
                     archive.append(json.loads(line))
         if not archive:
             raise ValueError('no captured order book rounds')
-        matches = compare(preflights, bindings, archive, args.max_age_seconds)
+        matches = compare(preflights, bindings, archive, args.max_age_seconds, outcomes)
         print(json.dumps({'capture_rounds': len(archive), 'max_age_seconds': args.max_age_seconds,
                           'archives_with_incomplete_tail': interrupted,
                           'preflights': matches}))

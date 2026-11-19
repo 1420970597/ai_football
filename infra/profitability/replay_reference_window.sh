@@ -58,10 +58,18 @@ reference_files=()
 for capture in "${captures[@]}"; do
     reference_files+=("/evidence/$(basename -- "$capture")")
 done
+research="$root/reports/profitability-pilot-20261118"
+outcomes=()
+if [[ "$bindings" == fixture-bindings-*.json ]]; then
+    outcome_file="reference-outcomes-${bindings#fixture-bindings-}"
+    if [[ -r "$research/$outcome_file" ]]; then
+        outcomes=(--outcomes "/research/$outcome_file")
+    fi
+fi
 printf '%s\n' "$database_rows" | docker run --rm -i --user 0:0 --network none --cpus .25 --memory 128m \
-    --entrypoint python -v "$root/reports/profitability-pilot-20261118:/research:ro" \
+    --entrypoint python -v "$research:/research:ro" \
     -v "$archive:/evidence:ro" ai-football-verifier:v2.0.0-dev /research/reference_preflight.py \
-    /dev/stdin "/evidence/$bindings" "${reference_files[@]}" > "$draft"
+    /dev/stdin "/evidence/$bindings" "${reference_files[@]}" "${outcomes[@]}" > "$draft"
 target="$archive/$label-replay-$(date -u +%FT%TZ).json"
 ln -T -- "$draft" "$target"
 printf 'Archived preflight replay in %s\n' "$(basename -- "$target")"

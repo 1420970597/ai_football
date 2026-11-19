@@ -71,6 +71,54 @@ class ReferencePreflightTests(unittest.TestCase):
         self.binding['period'] = 'full_time'
         self.assertEqual([], self.compare(self.market))
 
+    def test_exact_outcome_mapping_keeps_market_direction_and_rules(self):
+        preflight = self.preflight | {'kind': 'handicap', 'period': 'full_time', 'line': '1.5'}
+        binding = self.binding | preflight
+        market = self.market | {'books': [self.book | {'outcome': 'Away team'},
+                                           self.book | {'outcome': 'Home team'}]}
+        orientation = {'rules_sha256': 'rules', 'labels': {'Home team': 'home', 'Away team': 'away'}}
+
+        def replay(mapping):
+            batch = {'captured_at': preflight['captured_at'], 'markets': [market]}
+            row, = compare([preflight], [binding], [batch], 30,
+                           {'polymarket': {binding['market']: mapping}})
+            return row['references'][0], row['source_groups']['polymarket']
+
+        reference, group = replay(orientation)
+        self.assertEqual(['away', 'home'], [book['canonical_outcome'] for book in reference['books']])
+        self.assertEqual('complete', group['status'])
+        for mapping, status in ((None, 'mapping_missing'),
+                                (orientation | {'rules_sha256': 'changed'}, 'mapping_rules_changed'),
+                                (orientation | {'labels': {'Home team': 'home'}}, 'mapping_labels_changed'),
+                                (orientation | {'labels': {'Home team': 'away', 'Away team': 'away'}}, 'mapping_invalid')):
+            with self.subTest(status=status):
+                reference, group = replay(mapping)
+                self.assertEqual(status, reference['outcome_status'])
+                self.assertNotIn('canonical_outcome', reference['books'][0])
+                self.assertEqual('incomplete', group['status'])
+
+    def test_three_way_groups_require_distinct_complete_propositions_within_source(self):
+        preflight = self.preflight | {'kind': 'winner', 'period': 'full_time', 'line': None}
+        selections = ('home', 'draw', 'away')
+        bindings = [self.binding | preflight | {'market': side} for side in selections]
+        markets = [self.market | {'market': side, 'books': [self.book | {'outcome': 'Yes'},
+                                                           self.book | {'outcome': 'No'}]} for side in selections]
+        orientations = {side: {'rules_sha256': 'rules', 'selection': side, 'labels': {'Yes': 'yes', 'No': 'no'}}
+                        for side in selections}
+
+        def replay(records):
+            batch = {'captured_at': preflight['captured_at'], 'markets': records}
+            row, = compare([preflight], bindings, [batch], 30, {'polymarket': orientations})
+            return row['source_groups']['polymarket']
+
+        self.assertEqual('complete', replay(markets)['status'])
+        self.assertEqual(['away'], replay(markets[:2])['missing'])
+        self.assertEqual('incomplete', replay(markets[:2])['status'])
+        orientations['away']['selection'] = 'home'
+        group = replay(markets)
+        self.assertEqual('ambiguous', group['status'])
+        self.assertEqual(['home'], group['duplicates'])
+
     def test_replay_retains_complete_rounds_from_interrupted_capture(self):
         first_round = json.dumps({'markets': [self.market], 'captured_at': self.preflight['captured_at']}).encode() + b'\n'
         shut = deepcopy(self.market)
