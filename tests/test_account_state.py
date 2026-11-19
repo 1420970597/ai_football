@@ -1236,6 +1236,49 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Decimal('2'),Decimal(str(visible['provider_price'])))
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
 
+    async def test_settled_recheck_can_share_budget_with_recently_confirmed_open_orders(self):
+        await self.healthy()
+        signal_rows = [await self.signal() for _ in range(3)]
+        await self.enable([row[1] for row in signal_rows], daily='8', exposure='8')
+        unknown, open_order, settled = [await self.reserve(row[0]) for row in signal_rows]
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='unknown',provider_order_no='UNKNOWN' WHERE id=$1", unknown['id'])
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='accepted',provider_order_no='OPEN',"
+            "receipt_observed_at=now()-interval '3 minutes',result_payload=$2 WHERE id=$1",
+            open_order['id'], {'order_no': 'OPEN', 'state': 'unsettled'})
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='settled',provider_order_no='RECHECK',provider_price=1.95,"
+            "provider_stake=2,provider_placed_at=now()-interval '2 hours',settled_net=1.90,"
+            "settled_at=now()-interval '1 hour',receipt_observed_at=now()-interval '1 hour',"
+            "updated_at=now()-interval '1 hour' WHERE id=$1", settled['id'])
+
+        async def check_claim(expected, capable=True):
+            self.assertEqual(202, (await self.api.post('/api/v1/accounts/leyu/refresh')).status_code)
+            response = await self.worker_api.post('/internal/executor/claim', params={
+                'settled_recheck': str(capable).lower()})
+            self.assertEqual(200, response.status_code, response.text)
+            work = response.json()
+            self.assertEqual(expected, [row['provider_order_no'] for row in work['orders']])
+            self.assertEqual(str(settled['id']) if 'RECHECK' in expected else None, work.get('settled_recheck'))
+            result = await self.worker_api.post(f"/internal/executor/jobs/{work['job_id']}/finish", json={
+                'attempt_id': work['attempt_id'], 'status': 'success', 'balance': '100',
+                'observed_at': datetime.now(timezone.utc).isoformat()})
+            self.assertEqual(200, result.status_code, result.text)
+
+        await check_claim(['UNKNOWN', 'OPEN'])
+        await self.pool.execute("UPDATE v2_bet_orders SET receipt_observed_at=now() WHERE id=$1", open_order['id'])
+        await self.pool.execute(
+            "UPDATE v2_fixtures SET phase='finished' WHERE id=(SELECT fixture_id FROM v2_expert_signals WHERE id=$1)",
+            signal_rows[1][0])
+        await check_claim(['UNKNOWN', 'OPEN'])
+        await self.pool.execute(
+            "UPDATE v2_fixtures SET phase='live' WHERE id=(SELECT fixture_id FROM v2_expert_signals WHERE id=$1)",
+            signal_rows[1][0])
+        await check_claim(['UNKNOWN', 'OPEN'], capable=False)
+        await check_claim(['UNKNOWN', 'RECHECK'])
+        await check_claim(['UNKNOWN', 'OPEN'])
+
     async def test_complete_history_can_append_a_verified_principal_refund(self):
         await self.healthy()
         signal, expert, _, _ = await self.signal()

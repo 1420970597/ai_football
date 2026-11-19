@@ -442,24 +442,33 @@ async def claim_work(request: Request, live_capable: bool = False, settled_reche
                     config['leyu_app_authorization_code'] = decrypt_secret(settings.encryption_key, authorization['encrypted_authorization_code'])
                 attempt = uuid.uuid4()
                 await conn.execute("UPDATE v2_account_jobs SET state='running',attempt_id=$2,config_revision=$3,lease_until=now()+interval '300 seconds',updated_at=now() WHERE id=$1", job["id"], attempt, account["config_revision"])
+                allow_settled_recheck = settled_recheck and job['kind'] in {'refresh', 'reconcile'}
                 reconcile = [] if history_request else await conn.fetch(
-                    "SELECT o.id,o.provider_order_no,o.created_at FROM v2_bet_orders o "
+                    "SELECT o.id,o.provider_order_no,o.created_at, ($3 AND o.state='accepted' "
+                    "AND o.result_payload->>'state'='unsettled' AND o.result_payload->>'order_no'=o.provider_order_no "
+                    "AND o.receipt_observed_at BETWEEN now()-interval '2 minutes' AND now() "
+                    "AND EXISTS(SELECT 1 FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id "
+                    "WHERE s.id=o.signal_id AND f.phase='live' AND NOT EXISTS(SELECT 1 FROM v2_fixture_results r "
+                    "WHERE r.fixture_id=f.id AND r.status IN('confirmed','void')))) IS TRUE AS can_wait "
+                    "FROM v2_bet_orders o "
                     "WHERE o.user_id=$1 AND o.provider_identity_hash=$2 AND o.state IN('accepted','unknown') "
-                    "AND o.provider_order_no IS NOT NULL AND " + jobs.OPEN_ORDER_CHECK_DUE + " ORDER BY o.updated_at,o.id LIMIT 2",
-                    account["user_id"], account["provider_identity_hash"],
+                    "AND o.provider_order_no IS NOT NULL AND " + jobs.OPEN_ORDER_CHECK_DUE +
+                    " ORDER BY (o.state='unknown') DESC,can_wait,o.updated_at,o.id LIMIT 2",
+                    account["user_id"], account["provider_identity_hash"], allow_settled_recheck,
                 )
-                revision_order = (await jobs.due_settled_recheck(conn, account)
-                                  if settled_recheck and job['kind'] in {'refresh', 'reconcile'} and len(reconcile) < 2
-                                  else None)
+                revision_order = None
+                if allow_settled_recheck and (len(reconcile) < 2 or reconcile[1]['can_wait']):
+                    revision_order = await jobs.due_settled_recheck(conn, account)
                 if revision_order is not None:
-                    reconcile.append(revision_order)
+                    reconcile = reconcile[:1] + [revision_order]
                 job_details = {'orders': {str(row['id']): row['provider_order_no'] for row in reconcile}}
                 if revision_order is not None:
                     job_details['settled_recheck'] = str(revision_order['id'])
                 if authorization.get('device_authorization'):
                     job_details['device_authorization'] = True
                 await conn.execute('UPDATE v2_account_jobs SET details=$2 WHERE id=$1', job['id'], job_details)
-                work = {"kind": "account", "job_id": str(job["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "orders": [dict(row) for row in reconcile]}
+                work = {"kind": "account", "job_id": str(job["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config,
+                        "orders": [{key: row[key] for key in ('id', 'provider_order_no', 'created_at')} for row in reconcile]}
                 if history_request:
                     work['history'] = history_request
                 if revision_order is not None:
