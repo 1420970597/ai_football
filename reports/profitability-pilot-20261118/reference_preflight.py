@@ -198,7 +198,15 @@ def bind_outcomes(reference, orientation, kind, binary_winner=False):
         return 'mapping_invalid'
     selection = orientation.get('selection')
     expected = REFERENCE_SIDES.get(kind, set())
+    kalshi_binary = reference.get('source') == 'kalshi' and set(labels) == {'yes'}
     yes_only = reference.get('source') == 'polymarket_us' and kind == 'winner' and not binary_winner
+    proposition = kind == 'winner' and not binary_winner
+    if kalshi_binary:
+        pair = {'yes', 'no'} if proposition else {'home', 'away'} if binary_winner else expected
+        if len(pair) != 2 or not sides < pair or proposition and sides != {'yes'}:
+            return 'mapping_invalid'
+        opposite, = pair - sides
+        sides = pair
     if binary_winner:
         if selection is not None or sides != {'home', 'away'}:
             return 'mapping_invalid'
@@ -210,6 +218,14 @@ def bind_outcomes(reference, orientation, kind, binary_winner=False):
         return 'mapping_invalid'
     for book in reference['books']:
         book['canonical_outcome'] = labels[book['outcome']]
+    if kalshi_binary:
+        yes, = reference['books']
+        # The same matched binary book backs both sides at complementary prices.
+        reference['books'].append(yes | {
+            'outcome': 'no', 'canonical_outcome': opposite,
+            'bid': str(1 - Decimal(yes['ask'])), 'ask': str(1 - Decimal(yes['bid'])),
+            'bid_size': yes['ask_size'], 'ask_size': yes['bid_size'],
+        })
     return 'mapped_yes_only' if yes_only else 'mapped'
 
 

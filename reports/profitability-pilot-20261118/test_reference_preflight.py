@@ -1,4 +1,5 @@
 from copy import deepcopy
+from decimal import Decimal
 import json
 from pathlib import Path
 import subprocess
@@ -6,6 +7,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
+from preflight_price_decision import evaluate
 from reference_preflight import compare
 
 
@@ -159,6 +161,85 @@ class ReferencePreflightTests(unittest.TestCase):
                        30, outcomes)
         self.assertEqual('incomplete', row['source_groups']['polymarket_us']['status'])
         self.assertEqual(['home'], row['source_groups']['polymarket_us']['missing'])
+
+    def test_native_kalshi_binary_quote_reaches_independent_price_rule(self):
+        contract = self.preflight | {'sport': 'football', 'phase': 'scheduled', 'market_id': '18',
+                                     'score_basis': 'full_period', 'settlement_scope': 'regulation'}
+        preflight = contract | {'effective_score_basis': 'full_period', 'selection': 'over',
+                                'price': '1.80', 'provider_quote_checked_at': '2026-11-19T12:02:54Z'}
+        kalshi = self.binding | {'source': 'kalshi', 'market': 'KXTESTTOTAL-2'}
+        native_book = self.book | {'outcome': 'yes'}
+        native = kalshi | {'books': [native_book], 'status': 'active'}
+        polymarket = self.market | {'books': [self.book, self.book | {'outcome': 'Under',
+                                                                     'bid': '0.39', 'ask': '0.40'}]}
+        outcomes = {
+            'polymarket': {self.binding['market']: {'rules_sha256': 'rules',
+                                                   'labels': {'Over': 'over', 'Under': 'under'}}},
+            'kalshi': {kalshi['market']: {'rules_sha256': 'rules', 'labels': {'yes': 'over'}}},
+        }
+        approval = {
+            'contract': contract, 'approved_at': '2026-11-19T12:02:00Z',
+            'cost_per_unit': '0.01', 'required_net_edge': '0.02', 'cost_evidence': 'fixture',
+            'settlement_evidence': 'fixture', 'offer_feed_origin': 'leyu',
+            'sources': {binding['source']: {'venue': binding['source'], 'feed_origin': binding['source'],
+                                            'minimum_book_depth': '1.2', 'rules': {binding['market']: 'rules'}}
+                        for binding in (self.binding, kalshi)},
+        }
+
+        def replay(offer):
+            batch = {'captured_at': offer['captured_at'], 'markets': [polymarket, native]}
+            return compare([offer], [self.binding, kalshi], [batch], 30, outcomes)[0]
+
+        row = replay(preflight)
+        self.assertEqual('complete', row['source_groups']['kalshi']['status'])
+        under = row['references'][1]['books'][1]
+        self.assertEqual({'outcome': 'no', 'canonical_outcome': 'under', 'bid': '0.39', 'ask': '0.40',
+                          'bid_size': '2.125', 'ask_size': '1.250', 'quoted_at': native_book['quote_time'],
+                          'received_at': native_book['received_at']}, under)
+        decision = evaluate(row, [approval], 30)
+        self.assertEqual('price_eligible', decision['status'])
+        self.assertEqual(1 + Decimal('0.43') / Decimal('0.60'), decision['pricing']['minimum_odds'])
+        self.assertEqual('below_minimum_odds', evaluate(replay(preflight | {'price': '1.70'}), [approval], 30)['status'])
+
+        native['status'] = 'closed'
+        self.assertEqual('market_not_open', replay(preflight)['references'][1]['status'])
+        native['status'] = 'active'
+        native_book['quote_time'] = None
+        self.assertEqual('missing_native_time', replay(preflight)['references'][1]['status'])
+        native_book['quote_time'] = self.book['quote_time']
+        outcomes['kalshi'][kalshi['market']]['labels']['yes'] = 'home'
+        self.assertEqual('mapping_invalid', replay(preflight)['references'][1]['outcome_status'])
+
+    def test_kalshi_home_draw_and_away_still_need_three_distinct_markets(self):
+        preflight = self.preflight | {'kind': 'winner', 'period': 'full_time', 'line': None}
+        selections = ('home', 'draw', 'away')
+        bindings = [preflight | {'source': 'kalshi', 'market': side, 'rules_sha256': 'rules'}
+                    for side in selections]
+        markets = [binding | {'books': [self.book | {'outcome': 'yes'}], 'status': 'active'}
+                   for binding in bindings]
+        outcomes = {'kalshi': {side: {'selection': side, 'rules_sha256': 'rules', 'labels': {'yes': 'yes'}}
+                               for side in selections}}
+
+        def replay(records):
+            batch = {'captured_at': preflight['captured_at'], 'markets': records}
+            return compare([preflight], bindings, [batch], 30, outcomes)[0]
+
+        row = replay(markets)
+        self.assertEqual('complete', row['source_groups']['kalshi']['status'])
+        for side, reference in zip(selections, row['references']):
+            self.assertEqual(side, reference['proposition'])
+            self.assertEqual(['yes', 'no'], [book['canonical_outcome'] for book in reference['books']])
+        self.assertEqual(['away'], replay(markets[:2])['source_groups']['kalshi']['missing'])
+
+    def test_kalshi_handicap_keeps_orientation_when_yes_is_away(self):
+        preflight = self.preflight | {'kind': 'handicap', 'period': 'full_time', 'line': '-1.5'}
+        binding = preflight | {'source': 'kalshi', 'market': 'KXTESTSPREAD-AWAY2', 'rules_sha256': 'rules'}
+        market = binding | {'books': [self.book | {'outcome': 'yes'}], 'status': 'active'}
+        batch = {'captured_at': preflight['captured_at'], 'markets': [market]}
+        outcomes = {'kalshi': {binding['market']: {'rules_sha256': 'rules', 'labels': {'yes': 'away'}}}}
+        row, = compare([preflight], [binding], [batch], 30, outcomes)
+        self.assertEqual('complete', row['source_groups']['kalshi']['status'])
+        self.assertEqual(['away', 'home'], [book['canonical_outcome'] for book in row['references'][0]['books']])
 
     def test_adjacent_totals_require_two_timely_lines_from_the_same_source(self):
         preflight = self.preflight | {'kind': 'total', 'period': 'full_time', 'line': '2.75'}
