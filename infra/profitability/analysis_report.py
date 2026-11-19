@@ -85,6 +85,7 @@ REPLAY = re.compile(r'(.+)-replay-(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\.json')
 def reference_coverage(preflights):
     quotes, scores, scope, streams, adjacent_streams = (Counter() for _ in range(5))
     contracts = {}
+    price_statuses, price_reasons = Counter(), Counter()
     contract_fields = ('sport', 'phase', 'period', 'kind')
     mapped_timed = score_and_quote = complete_group = streamed = paired_adjacent = 0
     for row in preflights:
@@ -94,6 +95,9 @@ def reference_coverage(preflights):
         if score_status:
             scores[score_status] += 1
         scope[row.get('settlement_comparison', 'not_recorded')] += 1
+        decision = row.get('price_decision', {})
+        price_statuses[decision.get('status', 'not_recorded')] += 1
+        price_reasons.update(decision.get('reasons', []))
         streams.update(ref['stream']['status'] for ref in references if 'stream' in ref)
         adjacent = row.get('adjacent_line_coverage', {})
         adjacent_streams.update(ref['stream']['status'] for line in adjacent.get('lines', [])
@@ -118,6 +122,7 @@ def reference_coverage(preflights):
             'adjacent_stream_quote_statuses': dict(adjacent_streams), 'with_mapped_timed_quote': mapped_timed,
             'with_mapped_timed_quote_and_matching_score': score_and_quote, 'with_complete_quote_group': complete_group,
             'with_stream_top_of_book': streamed, 'with_paired_adjacent_lines': paired_adjacent,
+            'price_decision_statuses': dict(price_statuses), 'price_decision_reasons': dict(price_reasons),
             'by_contract': [dict(zip(contract_fields, key)) | dict(counts)
                             for key, counts in sorted(contracts.items())]}
 
@@ -143,6 +148,8 @@ def reference_evidence(root, observed):
             raw = path.read_bytes()
             doc = json.loads(raw, parse_float=Decimal)
             entry.update(status='ok', sha256=sha256(raw).hexdigest(), capture_rounds=doc['capture_rounds'],
+                         pricing_approvals_sha256=doc.get('pricing_approvals_sha256'),
+                         automatic_policy_comparison=doc.get('automatic_policy_comparison'),
                          stream_segments=doc.get('stream_segments', []), **reference_coverage(doc['preflights']))
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             entry['status'] = type(error).__name__
@@ -286,6 +293,17 @@ def render(report):
                      f"其中外部观测比分一致 {item['with_mapped_timed_quote_and_matching_score']} 条。"
                      f"同源完整报价组 {item['with_complete_quote_group']} 条，"
                      f"流首档 {item['with_stream_top_of_book']} 条，相邻线配对 {item['with_paired_adjacent_lines']} 条。")
+        decisions = item['price_decision_statuses']
+        if decisions:
+            lines.append(f"  价格通过 {decisions.get('price_eligible', 0)} 条，低于最低赔率 "
+                         f"{decisions.get('below_minimum_odds', 0)} 条，证据不足 {decisions.get('ineligible', 0)} 条，"
+                         f"旧档无逐笔定价 {decisions.get('not_recorded', 0)} 条。")
+        if comparison := item.get('automatic_policy_comparison'):
+            baseline = comparison['current_following']
+            priced = comparison['price_rule']
+            verified = baseline['receipt_statuses'].get('locally_matched_receipt', 0)
+            lines.append(f"  同批自动预检中，现行跟单 {baseline['selected']} 笔，价格规则通过 {priced['selected']} 笔，"
+                         f"观望 0 笔下单。现行组有 {verified} 笔具备本地匹配的费用及币种。")
     for item in external:
         if item['status'] != 'ok':
             lines.append(f"- `{item['label']}` · 归档读取失败，`{item['status']}`。")

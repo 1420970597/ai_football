@@ -4,9 +4,6 @@ import json
 import sys
 from decimal import Decimal, InvalidOperation
 
-from app.settlement import settle
-
-
 OUTCOME_FRACTIONS = {
     'win': (Decimal(1), Decimal(0)),
     'half_win': (Decimal('0.5'), Decimal(0)),
@@ -24,6 +21,8 @@ def decimal(value):
 
 
 def price_contract(document):
+    from app.settlement import settle
+
     signal = document['contract']
     if (signal.get('sport') != 'football' or signal.get('phase') not in {'scheduled', 'live'}
             or signal.get('kind') not in {'total', 'handicap'}

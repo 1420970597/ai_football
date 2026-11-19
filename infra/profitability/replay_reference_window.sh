@@ -79,6 +79,7 @@ for capture in "${captures[@]}"; do
 done
 research="$root/reports/profitability-pilot-20261118"
 outcomes=()
+pricing_args=()
 score_args=()
 score_mount=()
 stream_args=()
@@ -94,6 +95,10 @@ if [[ "$bindings" == fixture-bindings-*.json ]]; then
     outcome_file="reference-outcomes-${bindings#fixture-bindings-}"
     if [[ -r "$research/$outcome_file" ]]; then
         outcomes=(--outcomes "/research/$outcome_file")
+    fi
+    pricing_file="pricing-approvals-${bindings#fixture-bindings-}"
+    if [[ -r "$archive/$pricing_file" ]]; then
+        pricing_args=(--pricing-approvals "/evidence/$pricing_file")
     fi
     score_file="reference-score-bindings-${bindings#fixture-bindings-}"
     if [[ -r "$research/$score_file" ]]; then
@@ -111,7 +116,7 @@ printf '%s\n' "$database_rows" | docker run --rm -i --user 0:0 --network none --
     --entrypoint python -v "$research:/research:ro" \
     -v "$archive:/evidence:ro" "${score_mount[@]}" "${stream_mount[@]}" \
     ai-football-verifier:v2.0.0-dev /research/reference_preflight.py \
-    /dev/stdin "/evidence/$bindings" "${reference_files[@]}" "${outcomes[@]}" "${score_args[@]}" "${stream_args[@]}" > "$draft"
+    /dev/stdin "/evidence/$bindings" "${reference_files[@]}" "${outcomes[@]}" "${pricing_args[@]}" "${score_args[@]}" "${stream_args[@]}" > "$draft"
 target="$archive/$label-replay-$(date -u +%FT%TZ).json"
 ln -T -- "$draft" "$target"
 printf 'Archived preflight replay in %s\n' "$(basename -- "$target")"

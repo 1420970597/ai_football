@@ -3,10 +3,12 @@
 import argparse
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
 
+from preflight_price_decision import compare_with_receipts, evaluate
 from reference_lines import adjacent_lines
 from reference_stream_replay import compare_rest, read_segment, stream_quote
 
@@ -127,7 +129,7 @@ def replay_books(observation):
     return rows
 
 
-def bind_outcomes(reference, orientation, kind):
+def bind_outcomes(reference, orientation, kind, binary_winner=False):
     if orientation is None:
         return 'mapping_missing'
     if orientation['rules_sha256'] != reference['rules_sha256']:
@@ -140,7 +142,10 @@ def bind_outcomes(reference, orientation, kind):
         return 'mapping_invalid'
     selection = orientation.get('selection')
     expected = REFERENCE_SIDES.get(kind, set())
-    if kind == 'winner':
+    if binary_winner:
+        if selection is not None or sides != {'home', 'away'}:
+            return 'mapping_invalid'
+    elif kind == 'winner':
         if selection not in expected or sides != {'yes', 'no'}:
             return 'mapping_invalid'
         reference['proposition'] = selection
@@ -151,16 +156,16 @@ def bind_outcomes(reference, orientation, kind):
     return 'mapped'
 
 
-def source_groups(references, kind):
+def source_groups(references, kind, binary_winner=False):
     groups = {}
     for source in sorted({reference['source'] for reference in references}):
         markets = {}
         duplicates = set()
-        expected = REFERENCE_SIDES.get(kind, set())
+        expected = {'home', 'away'} if binary_winner else REFERENCE_SIDES.get(kind, set())
         for reference in references:
             if reference['source'] != source or reference.get('outcome_status') != 'mapped':
                 continue
-            sides = ([reference['proposition']] if kind == 'winner'
+            sides = ([reference['proposition']] if kind == 'winner' and not binary_winner
                      else [book['canonical_outcome'] for book in reference['books']])
             for side in sides:
                 if side in markets:
@@ -168,14 +173,14 @@ def source_groups(references, kind):
                 else:
                     markets[side] = reference['market']
         missing = expected - markets.keys()
-        split_binary = kind != 'winner' and len(set(markets.values())) > 1
+        split_binary = (kind != 'winner' or binary_winner) and len(set(markets.values())) > 1
         status = 'ambiguous' if duplicates or split_binary else 'incomplete' if missing or not markets else 'complete'
         groups[source] = {'status': status, 'markets': markets, 'missing': sorted(missing),
                           'duplicates': sorted(duplicates)}
     return groups
 
 
-def quote_at(binding, records, cutoff, earliest, outcomes):
+def quote_at(binding, records, cutoff, earliest, outcomes, binary_winner=False):
     observed, observation = next((r for r in records if r[0] <= cutoff), (None, None))
     source = {'source': binding['source'], 'market': binding['market']}
     if observation is None:
@@ -202,7 +207,7 @@ def quote_at(binding, records, cutoff, earliest, outcomes):
                        'rules_sha256': observation['rules_sha256'], 'books': books}
             if outcomes is not None:
                 orientation = outcomes.get(binding['source'], {}).get(binding['market'])
-                source['outcome_status'] = bind_outcomes(source, orientation, binding['kind'])
+                source['outcome_status'] = bind_outcomes(source, orientation, binding['kind'], binary_winner)
     return source | {'status': status}
 
 
@@ -256,10 +261,11 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
         cutoff = instant(preflight['captured_at'])
         earliest = cutoff - timedelta(seconds=max_age_seconds)
         contract = contract_key(preflight)
+        binary_winner = preflight.get('sport') == 'basketball' and preflight['kind'] == 'winner'
 
         def quote(binding):
             records = archive_by_market.get((binding['source'], binding['market']), [])
-            reference = quote_at(binding, records, cutoff, earliest, outcomes)
+            reference = quote_at(binding, records, cutoff, earliest, outcomes, binary_winner)
             if stream_segments is not None and binding['source'] == 'polymarket':
                 stream = stream_quote(binding, stream_segments, cutoff, max_age_seconds)
                 compare_rest(stream, reference)
@@ -273,10 +279,17 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
             row['score_comparison'] = match_scores(preflight, (score_bindings or {}).get(preflight['fixture_id']),
                                                    score_records, cutoff, score_max_age_seconds)
         if outcomes is not None:
-            row['source_groups'] = source_groups(sources, preflight['kind'])
+            row['source_groups'] = source_groups(sources, preflight['kind'], binary_winner)
             adjacent = adjacent_groups(contract, by_contract, quote, min(adjacent_skew_seconds, max_age_seconds))
             if adjacent is not None:
                 row['adjacent_line_coverage'] = adjacent
+            if preflight.get('sport') == 'football' and preflight['kind'] == 'handicap' and contract[-1] == 0:
+                winner = (contract[0], 'winner', contract[2], None, None)
+                winner_refs = [quote(binding) for binding in by_contract.get(winner, [])]
+                if winner_refs:
+                    row['winner_reference_for_zero_handicap'] = {
+                        'references': winner_refs, 'source_groups': source_groups(winner_refs, 'winner'),
+                    }
         rows.append(row)
     return rows
 
@@ -304,6 +317,7 @@ def main():
     parser.add_argument('--score-bindings', type=Path)
     parser.add_argument('--score-archive', action='append', type=Path, default=[])
     parser.add_argument('--stream-archive', action='append', type=Path, default=[])
+    parser.add_argument('--pricing-approvals', type=Path)
     args = parser.parse_args()
     if not 1 <= args.max_age_seconds <= 120:
         parser.error('max age must be 1-120 seconds')
@@ -313,6 +327,10 @@ def main():
         outcomes = json.loads(args.outcomes.read_text()) if args.outcomes else None
         if args.outcomes and not isinstance(outcomes, dict):
             raise ValueError('invalid outcome manifest')
+        approvals_raw = args.pricing_approvals.read_bytes() if args.pricing_approvals else None
+        approvals = json.loads(approvals_raw) if approvals_raw is not None else []
+        if not isinstance(approvals, list):
+            raise ValueError('invalid pricing approvals')
         score_bindings = json.loads(args.score_bindings.read_text()) if args.score_bindings else {}
         if not isinstance(score_bindings, dict) or (args.score_archive and not score_bindings):
             raise ValueError('invalid score bindings')
@@ -333,11 +351,16 @@ def main():
         matches = compare(preflights, bindings, archive, args.max_age_seconds, outcomes,
                           score_records=scores, score_bindings=score_bindings,
                           stream_segments=stream_segments if args.stream_archive else None)
+        for row in matches:
+            row['price_decision'] = evaluate(row, approvals, args.max_age_seconds)
         print(json.dumps({'capture_rounds': len(archive), 'max_age_seconds': args.max_age_seconds,
                           'archives_with_incomplete_tail': interrupted,
                           'score_capture_rounds': len(scores), 'score_archives_with_incomplete_tail': interrupted_scores,
+                          'pricing_approvals_sha256': (
+                              sha256(approvals_raw).hexdigest() if approvals_raw is not None else None),
+                          'automatic_policy_comparison': compare_with_receipts(matches),
                           'stream_segments': stream_summaries,
-                          'preflights': matches}))
+                          'preflights': matches}, default=str))
     except (OSError, KeyError, TypeError, ValueError, InvalidOperation) as error:
         parser.exit(1, f'Invalid preflight evidence ({type(error).__name__})\n')
 

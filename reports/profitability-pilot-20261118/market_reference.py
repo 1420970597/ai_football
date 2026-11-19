@@ -29,7 +29,7 @@ def identity(value):
 def live_state(state, contract_period, oldest, cutoff):
     period = state['period']
     if (state['status'] != 'playing' or period not in {'first_half', 'second_half'}
-            or contract_period == 'first_half' and period != 'first_half'):
+            or contract_period != 'full_time' and period != contract_period):
         raise ValueError('the live period must be playing and confirmed')
     values = tuple(state[key] for key in ('home_score', 'away_score', 'home_red_cards', 'away_red_cards'))
     if any(type(value) is not int or value < 0 for value in values):
@@ -65,7 +65,7 @@ def market_terms(contract):
     sport, kind, period, phase = (contract[key] for key in ('sport', 'kind', 'period', 'phase'))
     basis = contract['score_basis']
     if (sport not in {'football', 'basketball'} or kind not in MARKET_SIDES
-            or phase not in {'scheduled', 'live'} or period not in {'full_time', 'first_half'}
+            or phase not in {'scheduled', 'live'} or period not in {'full_time', 'first_half', 'second_half'}
             or basis != 'full_period' and (sport, kind, period, phase, basis) != (
                 'football', 'handicap', 'full_time', 'live', 'remaining_period')):
         raise ValueError('unsupported or ambiguous market contract')
@@ -151,7 +151,7 @@ def price_from_verified_references(document):
             'line_basis', 'team_side', 'settlement_scope')
     state = None
     quoted_times = []
-    offer_keys = ('offer_status', 'offer_quoted_at', 'offer_received_at')
+    offer_keys = ('offer_status', 'offer_quoted_at', 'offer_received_at', 'offer_checked_at')
     legacy_scheduled_total = (
         (contract['phase'], contract['sport'], contract['kind']) == ('scheduled', 'football', 'total')
         and line % 1 == Decimal('0.5')
@@ -159,7 +159,16 @@ def price_from_verified_references(document):
     if reference_mode != 'same_line' or not legacy_scheduled_total or any(key in document for key in offer_keys):
         if document['offer_status'] != 'active':
             raise ValueError('offered quote is not active')
-        quoted_times.append(quote_time(document['offer_quoted_at'], document['offer_received_at'], oldest, cutoff))
+        if 'offer_checked_at' in document:
+            if any(key in document for key in ('offer_quoted_at', 'offer_received_at')):
+                raise ValueError('offer has conflicting time evidence')
+            # The native account preflight timestamps the completed check, without a provider quote time.
+            checked = aware_time(document['offer_checked_at'])
+            if not oldest <= checked <= cutoff:
+                raise ValueError('offer check is stale or after the decision')
+            quoted_times.append(checked)
+        else:
+            quoted_times.append(quote_time(document['offer_quoted_at'], document['offer_received_at'], oldest, cutoff))
     if contract['phase'] == 'live':
         state, latest_confirmation = live_state(document['event_state'], contract['period'], oldest, cutoff)
     book_ranges = {}
