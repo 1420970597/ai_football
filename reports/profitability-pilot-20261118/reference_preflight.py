@@ -318,6 +318,7 @@ def main():
     parser.add_argument('--score-archive', action='append', type=Path, default=[])
     parser.add_argument('--stream-archive', action='append', type=Path, default=[])
     parser.add_argument('--pricing-approvals', type=Path)
+    parser.add_argument('--catalog-expansion', type=Path)
     args = parser.parse_args()
     if not 1 <= args.max_age_seconds <= 120:
         parser.error('max age must be 1-120 seconds')
@@ -327,6 +328,19 @@ def main():
         outcomes = json.loads(args.outcomes.read_text()) if args.outcomes else None
         if args.outcomes and not isinstance(outcomes, dict):
             raise ValueError('invalid outcome manifest')
+        if args.catalog_expansion:
+            supplement = json.loads(args.catalog_expansion.read_bytes())
+            supplemental_outcomes = supplement['outcomes']['polymarket']
+            outcomes = outcomes or {}
+            primary = outcomes.get('polymarket', {})
+            supplemental_bindings = supplement['bindings']
+            existing = {(binding['source'], binding['market']) for binding in bindings}
+            keys = {(binding['source'], binding['market']) for binding in supplemental_bindings}
+            if (keys != {('polymarket', market) for market in supplemental_outcomes}
+                    or existing & keys or len(keys) != len(supplemental_bindings) or primary.keys() & supplemental_outcomes.keys()):
+                raise ValueError('invalid or duplicate catalog expansion')
+            bindings.extend(supplemental_bindings)
+            outcomes['polymarket'] = primary | supplemental_outcomes
         approvals_raw = args.pricing_approvals.read_bytes() if args.pricing_approvals else None
         approvals = json.loads(approvals_raw) if approvals_raw is not None else []
         if not isinstance(approvals, list):

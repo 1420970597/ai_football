@@ -156,3 +156,29 @@ class ReferenceOrderBookTests(unittest.TestCase):
                 self.assertEqual('invalid_ticker_observation', results[0]['error'])
                 if tickers == {'TARGET'}:
                     self.assertEqual(result, results[1])
+
+    def test_event_catalog_batches_only_explicit_unambiguous_markets(self):
+        identifiers = [f'line-{number}' for number in range(11)]
+        markets = [{'slug': slug, 'conditionId': slug, 'description': 'Match rules',
+                    'outcomes': '["Over","Under"]', 'acceptingOrders': True,
+                    'clobTokenIds': json.dumps([f'{slug}:over', f'{slug}:under'])}
+                   for slug in identifiers]
+        # Ten listed markets, including one duplicate, and one absent requested identifier.
+        catalog = {'slug': 'match-market-catalog', 'markets': [*markets[:10], markets[9]]}
+        requested = [('polymarket', slug) for slug in identifiers]
+
+        def request(url, *, body=None):
+            if url == f'{GAMMA}/events/slug/match-market-catalog':
+                return catalog
+            self.assertEqual(f'{CLOB}/books', url)
+            return [{'market': item['token_id'].split(':')[0], 'asset_id': item['token_id'],
+                     'timestamp': '1795044465721', 'bids': [{'price': '0.45', 'size': '4'}],
+                     'asks': [{'price': '0.55', 'size': '5'}]}
+                    for item in reversed(body)]
+
+        with patch('reference_orderbooks.get_json', side_effect=request) as query:
+            observations = capture(requested, 'match-market-catalog')['markets']
+        self.assertEqual(3, query.call_count)
+        self.assertEqual([16, 2], [len(call.kwargs['body']) for call in query.call_args_list[1:]])
+        self.assertTrue(all(len(row['books']) == 2 for row in observations[:9]))
+        self.assertEqual(['ValueError', 'ValueError'], [row['error'] for row in observations[9:]])

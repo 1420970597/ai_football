@@ -146,7 +146,10 @@ def failed_market(source, identifier, error):
 
 def polymarket_metadata(identifier):
     start = now()
-    market = get_json(f'{GAMMA}/markets/slug/{identifier}')
+    return polymarket_terms(identifier, get_json(f'{GAMMA}/markets/slug/{identifier}'), start)
+
+
+def polymarket_terms(identifier, market, start):
     labels = json.loads(market['outcomes'])
     tokens = json.loads(market['clobTokenIds'])
     if (market['slug'] != identifier or len(labels) != 2 or len(tokens) != 2
@@ -161,11 +164,30 @@ def polymarket_metadata(identifier):
     }, tuple(zip(labels, tokens))
 
 
-def capture_polymarket(identifiers):
+def capture_polymarket(identifiers, event=None):
+    identifiers = tuple(identifiers)
     results, metadata, expected = {}, {}, {}
+    event_markets = {}
+    if event is not None:
+        try:
+            started = now()
+            catalog = get_json(f'{GAMMA}/events/slug/{event}')
+            if catalog['slug'] != event:
+                raise ValueError('wrong event catalog')
+            for market in catalog['markets']:
+                slug = market['slug']
+                event_markets[slug] = None if slug in event_markets else market
+        except READ_ERRORS as error:
+            return {identifier: failed_market('polymarket', identifier, error) for identifier in identifiers}
     for identifier in identifiers:
         try:
-            entry, sides = polymarket_metadata(identifier)
+            if event is None:
+                entry, sides = polymarket_metadata(identifier)
+            else:
+                market = event_markets.get(identifier)
+                if market is None:
+                    raise ValueError('missing or ambiguous market in event catalog')
+                entry, sides = polymarket_terms(identifier, market, started)
             condition = entry['condition_id']
             if any(token in expected and expected[token] != condition for _, token in sides):
                 raise ValueError('market metadata assigns a token to multiple conditions')
@@ -176,31 +198,34 @@ def capture_polymarket(identifiers):
     if not expected:
         return results
 
-    try:
-        response = get_json(f'{CLOB}/books', body=[{'token_id': token} for token in expected])
-        received_at = now()
-        if not isinstance(response, list):
-            raise ValueError('invalid batch order book response')
-        indexed = {}
-        for book in response:
-            token = book['asset_id']
-            if token not in expected:
-                raise ValueError('unexpected batch order book token')
-            indexed[token] = None if token in indexed else book
-    except READ_ERRORS as error:
-        results.update((identifier, failed_market('polymarket', identifier, error)) for identifier in metadata)
-        return results
-
-    for identifier, (entry, sides) in metadata.items():
+    prepared = list(metadata.items())
+    for offset in range(0, len(prepared), 8):
+        batch = prepared[offset:offset + 8]
+        tokens = tuple(dict.fromkeys(token for _, (_, sides) in batch for _, token in sides))
         try:
-            books = [
-                polymarket_book(indexed[token] or {}, entry['condition_id'], token, received_at)
-                | {'outcome': label, 'received_at': received_at}
-                for label, token in sides
-            ]
-            results[identifier] = entry | {'books': books}
+            response = get_json(f'{CLOB}/books', body=[{'token_id': token} for token in tokens])
+            received_at = now()
+            if not isinstance(response, list):
+                raise ValueError('invalid batch order book response')
+            indexed = {}
+            for book in response:
+                token = book['asset_id']
+                if token not in tokens:
+                    raise ValueError('unexpected batch order book token')
+                indexed[token] = None if token in indexed else book
         except READ_ERRORS as error:
-            results[identifier] = failed_market('polymarket', identifier, error)
+            results.update((identifier, failed_market('polymarket', identifier, error)) for identifier, _ in batch)
+            continue
+        for identifier, (entry, sides) in batch:
+            try:
+                books = [
+                    polymarket_book(indexed[token] or {}, entry['condition_id'], token, received_at)
+                    | {'outcome': label, 'received_at': received_at}
+                    for label, token in sides
+                ]
+                results[identifier] = entry | {'books': books}
+            except READ_ERRORS as error:
+                results[identifier] = failed_market('polymarket', identifier, error)
     return results
 
 
@@ -240,10 +265,12 @@ def capture_market(source, identifier):
     }
 
 
-def capture(markets):
+def capture(markets, polymarket_event=None):
     markets = tuple(markets)
     recorded = []
-    polymarket = capture_polymarket(identifier for source, identifier in markets if source == 'polymarket')
+    polymarket = capture_polymarket(
+        (identifier for source, identifier in markets if source == 'polymarket'), polymarket_event,
+    )
     for source, identifier in markets:
         try:
             observation = polymarket[identifier] if source == 'polymarket' else capture_market(source, identifier)
@@ -256,6 +283,8 @@ def capture(markets):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--polymarket', action='append', default=[])
+    parser.add_argument('--polymarket-event',
+                        help='read an event catalog for its explicitly listed Polymarket markets')
     parser.add_argument('--polymarket-us', action='append', default=[])
     parser.add_argument('--kalshi', action='append', default=[])
     parser.add_argument('--replay-kalshi-tickers', action='store_true',
@@ -268,10 +297,15 @@ def main():
         + [('polymarket_us', slug) for slug in args.polymarket_us]
         + [('kalshi', ticker) for ticker in args.kalshi]
     )
-    if (not 1 <= len(markets) <= 8 or len(set(markets)) != len(markets)
+    if args.polymarket_event and (
+            not args.polymarket or not re.fullmatch(r'[a-z0-9-]{1,160}', args.polymarket_event)):
+        parser.error('event capture requires a valid event and explicit Polymarket market IDs')
+    max_markets = 48 if args.polymarket_event else 8
+    if (not 1 <= len(markets) <= max_markets or len(set(markets)) != len(markets)
+            or len(args.polymarket_us) + len(args.kalshi) > 8
             or any(not re.fullmatch(r'[a-z0-9-]{1,160}', slug) for slug in args.polymarket + args.polymarket_us)
             or any(not re.fullmatch(r'[A-Z0-9-]{1,160}', ticker) for ticker in args.kalshi)):
-        parser.error('provide one to eight distinct public market IDs')
+        parser.error(f'provide one to {max_markets} distinct public market IDs')
     if not 1 <= args.samples <= 240 or not 20 <= args.interval_seconds <= 300:
         parser.error('samples must be 1-240 and interval must be 20-300 seconds')
     if (args.samples - 1) * args.interval_seconds > 3 * 60 * 60:
@@ -284,7 +318,7 @@ def main():
         return
     for index in range(args.samples):
         start = monotonic()
-        print(json.dumps(capture(markets), default=str), flush=True)
+        print(json.dumps(capture(markets, args.polymarket_event), default=str), flush=True)
         if index + 1 < args.samples:
             sleep(max(0, args.interval_seconds - (monotonic() - start)))
 

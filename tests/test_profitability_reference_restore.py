@@ -41,6 +41,7 @@ elif [[ $1 == show ]]; then
 fi
 ''',
             'systemd-run': 'printf "%s\\t" "$@"; printf "\\n"',
+            'docker': 'printf "%s\\n" "$CATALOG_MARKET"',
         }.items():
             executable = commands / name
             executable.write_text('#!/usr/bin/env bash\n' + body + '\n')
@@ -115,6 +116,21 @@ fi
         self.assertIn('--on-calendar=2026-11-19 22:32:00 UTC', replay)
         self.assertEqual([label, 'leyu:5831469', '2026-11-19T19:57:00Z', '2026-11-19T22:32:00Z',
                           self.bindings.name], replay[-5:])
+
+    def test_expansion_has_the_original_window_and_preserves_active_timer(self):
+        label = 'uwcl-slb-asr-2026-11-19'
+        (self.archive / f'catalog-{label}.json').write_text('{}\n')
+        self.env['CATALOG_MARKET'] = f'{label}-total-3pt5'
+        unit = 'ai-football-profitability-reference-catalog-benfica'
+        result, units = self.invoke('2026-11-19T13:00:00+00:00')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('--on-calendar=2026-11-19 19:57:00 UTC', units[unit])
+        self.assertEqual(['--capture', '2026-11-19T19:57:00Z', f'{label}-catalog',
+                          '--polymarket-event', f'{label}-more-markets',
+                          '--polymarket', self.env['CATALOG_MARKET']], units[unit][-7:])
+        result, units = self.invoke('2026-11-19T13:00:00+00:00', active=f'{unit}.timer')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn(unit, units)
 
     def test_interrupted_stream_resumes_until_fixed_end_and_running_stream_is_preserved(self):
         now = '2026-11-19T12:09:00+00:00'

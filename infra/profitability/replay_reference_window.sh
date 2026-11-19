@@ -80,6 +80,7 @@ done
 research="$root/reports/profitability-pilot-20261118"
 outcomes=()
 pricing_args=()
+catalog_args=()
 score_args=()
 score_mount=()
 stream_args=()
@@ -112,11 +113,16 @@ if [[ "$bindings" == fixture-bindings-*.json ]]; then
         fi
     fi
 fi
+catalog_file="catalog-$label.json"
+if [[ -r "$archive/$catalog_file" ]]; then
+    catalog_args=(--catalog-expansion "/evidence/$catalog_file")
+fi
 printf '%s\n' "$database_rows" | docker run --rm -i --user 0:0 --network none --cpus .25 --memory 128m \
     --entrypoint python -v "$research:/research:ro" \
     -v "$archive:/evidence:ro" "${score_mount[@]}" "${stream_mount[@]}" \
     ai-football-verifier:v2.0.0-dev /research/reference_preflight.py \
-    /dev/stdin "/evidence/$bindings" "${reference_files[@]}" "${outcomes[@]}" "${pricing_args[@]}" "${score_args[@]}" "${stream_args[@]}" > "$draft"
+    /dev/stdin "/evidence/$bindings" "${reference_files[@]}" "${outcomes[@]}" "${pricing_args[@]}" \
+    "${catalog_args[@]}" "${score_args[@]}" "${stream_args[@]}" > "$draft"
 target="$archive/$label-replay-$(date -u +%FT%TZ).json"
 ln -T -- "$draft" "$target"
 printf 'Archived preflight replay in %s\n' "$(basename -- "$target")"

@@ -82,6 +82,7 @@ restore_fixture() {
     local capture_unit="ai-football-profitability-reference-$name"
     local stream_unit="ai-football-profitability-reference-stream-$name"
     local replay_unit="ai-football-profitability-reference-replay-$name"
+    local catalog_unit="ai-football-profitability-reference-catalog-$name"
     local now begin_epoch end_epoch earliest capture_at stream_at stream_start stream_end replay_at
     now=$(date -u +%s)
     begin_epoch=$(date -u -d "$begin" +%s)
@@ -103,6 +104,32 @@ restore_fixture() {
             --polymarket "$label-spread-$handicap-1pt5" "$@"
     else
         printf '%s\n' "$name capture window has elapsed."
+    fi
+
+    local catalog="$archive/catalog-$label.json"
+    if [[ -s "$catalog" ]] && (( capture_at <= begin_epoch + last_offset )) && ! unit_active "$catalog_unit"; then
+        local evidence market
+        local catalog_args=()
+        evidence=$(docker run --rm --user "$(id -u):$(id -g)" --network none --cpus .25 --memory 96m \
+            --mount "type=bind,src=$catalog,dst=/catalog.json,readonly" --entrypoint python \
+            ai-football-verifier:v2.0.0-dev -c '
+import json
+import sys
+with open("/catalog.json") as source:
+    data = json.load(source)
+if data["event"] != sys.argv[1] + "-more-markets" or not 1 <= len(data["bindings"]) <= 48:
+    raise ValueError("catalog event differs or has an invalid market count")
+for item in data["bindings"]:
+    if item["fixture_id"] != sys.argv[2] or item["source"] != "polymarket":
+        raise ValueError("catalog binding differs from the scheduled fixture")
+    print(item["market"])
+' "$label" "$fixture")
+        while IFS= read -r market; do
+            catalog_args+=(--polymarket "$market")
+        done <<< "$evidence"
+        register_once "$catalog_unit" "$capture_at" 9000s \
+            "$root/restore_reference_pilot.sh" --capture "$begin" "$label-catalog" \
+            --polymarket-event "$label-more-markets" "${catalog_args[@]}"
     fi
 
     if unit_active "$stream_unit"; then
