@@ -7,6 +7,13 @@ import test_reviews as support
 
 
 class VerifiedTeamAliasTests(unittest.TestCase):
+    def test_maldonado_alias_is_limited_to_the_reviewed_senior_league(self):
+        scope = {'sport': 'football', 'competition': '乌拉圭甲级联赛'}
+        self.assertTrue(names.team_name_matches('马尔多纳多', '马尔多纳多体育', **scope))
+        self.assertIn('马尔多纳多体育', names.team_search_variants('马尔多纳多', **scope))
+        self.assertFalse(names.team_name_matches('马尔多纳多', '马尔多纳多体育U19', **scope))
+        self.assertFalse(names.team_name_matches('马尔多纳多', '马尔多纳多体育', sport='football', competition='乌拉圭杯'))
+
     def test_koge_name_equivalence_is_limited_to_the_reviewed_competition(self):
         self.assertTrue(names.team_name_matches('勒尔科治女足', '科治(女)', sport='football', competition='欧洲女子冠军联赛'))
         self.assertFalse(names.team_name_matches('勒尔科治女足', '科治(女)', sport='football', competition='丹麦女子联赛'))
@@ -48,6 +55,21 @@ class VerifiedTeamAliasAPITests(unittest.IsolatedAsyncioTestCase):
     context = support.ReviewTests.context
     post = support.ReviewTests.post
     fixture = support.ReviewTests.fixture
+
+    async def test_maldonado_short_name_recalls_and_resolves_reviewed_fixture(self):
+        wanted = await self.fixture(1, home_team='波士顿河', away_team='马尔多纳多体育',
+                                    competition_name='乌拉圭甲级联赛')
+        await self.fixture(2, home_team='波士顿河', away_team='马尔多纳多体育', competition_name='乌拉圭杯')
+        await self.pool.execute("UPDATE v2_expert_messages SET raw_text='波士顿河 vs 马尔多纳多 大2.5' WHERE id=$1", self.message)
+        response = await self.post('search_matches', team_query='马尔多纳多', sport='football',
+                                   team_a='波士顿河', team_b='马尔多纳多')
+        self.assertEqual(200, response.status_code, response.text)
+        resolution = response.json()['resolution']
+        self.assertTrue(resolution['resolved'], resolution)
+        self.assertEqual(wanted, resolution['fixture']['id'])
+        self.assertEqual('polymarket:uru1-bri-mal-2026-11-19+leyu:5875268',
+                         resolution['fixture']['verified_alias_sources']['away'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
     async def test_reviewed_womens_names_bind_only_the_champions_league_fixture(self):
         wanted = await self.fixture(1, home_team='巴黎FC(女)', away_team='科治(女)',

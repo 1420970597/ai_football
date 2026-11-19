@@ -13,3 +13,9 @@
 只读复演 18:45 至 20:07 UTC 之间四条完整候选审核，两条新获得唯一绑定，其中一条有明确投注意图。仓库 114 项审核测试与生产候选两项隔离测试通过。20:18:55 UTC 仅更新独立 MCP API，健康检查和候选源码校验通过。再次使用生产代码读取原候选，结果一致。后续真实推荐还须通过消息时效、原生盘口、本人授权和发送许可。
 
 生产仅在 22:45:14 UTC 切换独立 MCP API，镜像 `sha256:dee2d1032e279fd81b02c0b34b324bc749905c7a83cc5c063e0c55f8e6fc8f27`。既有生产只读输入和赛程核验通过。自然审核后续继续观察，用上一镜像 `ai-football-mcp-api:brazil-u20-alias-20261118` 可回滚同一服务。 [生产源码提交](https://github.com/1420970597/ai_football/commit/a55847b408b430e9a0b988ea3658cd72657eef75)
+
+## 波士顿河对马尔多纳多体育
+
+11 月 19 日，留存审核的候选快照包含乌拉圭甲级联赛原生赛事 `leyu:5875268`。工具用「波士顿河」和「马尔多纳多」判断对阵，乐鱼客队名为「马尔多纳多体育」。公开原生合约确认两队为 CA Boston River 和 Deportivo Maldonado，于 11 月 19 日 19:30 UTC 开球。已在现有名录中登记客队的完整名称和简称，适用范围为乌拉圭甲级联赛足球。 [原生合约](https://polymarket.com/sports/uru1/uru1-bri-mal-2026-11-19) [乌拉圭足协球队资料](https://www.auf.org.uy/boston-river/)
+
+116 项隔离审核回归通过。22:29:42 UTC 仅切换独立 MCP API，镜像 `sha256:1a0a38b59de6aaf67b8d3cf61f697c7a00dcae252f3bf48566a5abda8223769b`，容器健康、零重启。用同一批 15:00 至 22:20 UTC 的 17 条审核只读复演，唯一绑定由 2 条增至 5 条，其中新增 1 条带明确投注意图。已完赛事的审核复演只验证身份，实际候选仍须通过消息时效、盘口及账户授权校验。回滚使用切换前 Compose 配置与 `ai-football-mcp-api:uwcl-team-identity-20261119`。 [审核名录](../../services/api/app/verified_team_names.py)

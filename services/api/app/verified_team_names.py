@@ -5,8 +5,13 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-19.1'
+REGISTRY_VERSION = '2026-11-19.2'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport': 'football', 'competition': '乌拉圭甲级联赛',
+        'names': ('马尔多纳多体育', '马尔多纳多', 'Deportivo Maldonado'),
+        'reference': 'polymarket:uru1-bri-mal-2026-11-19+leyu:5875268',
+    },
     {
         'sport': 'football', 'competition': '欧洲女子冠军联赛',
         'names': ('巴黎FC(女)', '巴黎FC女足', 'Paris FC Women'),
