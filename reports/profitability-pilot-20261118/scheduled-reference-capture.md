@@ -17,6 +17,8 @@ Kalshi 两场挂牌全场大 2.5 的盘口 REST 响应均无原生报价时点�
 
 ## 原采样档案
 
+11 月 19 日 21:35 UTC，拜仁对科隆早段同时登记独立 Kalshi REST 盘口观察。从 11 月 20 日 05:58 至 06:25 UTC，每 40 秒读取全场 2.5、3.5、4.5、5.5 四条半球线。已现场核验主客、合约规则和对应公开盘口。四个 REST 响应均缺原生盘口时点。若该时段产生真实预检，再按原生预检时间读取最新已闭分钟用于历史比价，仍以有原生时间、深度和费用证据作为严格择价验证条件。 [Kalshi 拜仁盘口](https://kalshi.com/markets/kxbundesligatotal/bundesliga-total/kxbundesligatotal-26nov20bmukoe)
+
 2026 年 11 月 19 日以近期已成交的赛事类型为起点，匹配同日赛程。东南亚球会锦标赛和巴甲各登记一场连续采样，欧女冠登记两场。每场从开球前 3 分钟开始，以 33 秒为轮次间隔，最多 238 轮。采集包括胜平负三项、全场大小、上半场大小和全场让球。奥地利维也纳对拜仁另有 Kalshi 全场大小与让球，巴甲另有 Kalshi 全场大小。 [柴桢对泰港目录](https://gamma-api.polymarket.com/events/slug/aseanc-svr-por-2026-11-19) [奥地利维也纳对拜仁目录](https://gamma-api.polymarket.com/events/slug/uwcl-faw-bm-2026-11-19) [本菲卡对罗马目录](https://gamma-api.polymarket.com/events/slug/uwcl-slb-asr-2026-11-19) [瓦斯科对巴西国际目录](https://gamma-api.polymarket.com/events/slug/bra-vas-int-2026-11-19)
 
 | 比赛 | 采样启动 UTC | 回放启动 UTC |
