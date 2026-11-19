@@ -43,6 +43,18 @@ Run `window_evidence.py` in a Docker Python image under the UID authorized to re
 
 `collect_window_evidence.sh <private monitor root>` archives this summary as `window-evidence/<UTC timestamp>.json` under the monitor root. The offline Docker job requires a snapshot no more than 11 minutes old and leaves existing records in place. `restore_reconciliation_timer.sh` also restores this archive timer. It runs at 02:27, 02:47, 14:27 and 14:47 UTC after the corresponding upstream reconciliation slots.
 
+New archives include the exact bytes of the monitor, reconciliation and wallet documents used by the summary, along with their SHA-256 digests. Archive verification checks those digests and recomputes the full summary from the retained inputs. Use a network-disabled Docker verifier with the archive mounted read-only. The filename contains colons, so mount the individual archive with Docker's `--mount` option.
+
+```bash
+docker run --rm --network none --cpus .25 --memory 128m \
+  --user "$(id -u):$(id -g)" --entrypoint python \
+  -v "$PWD/infra/profitability:/research:ro" \
+  --mount "type=bind,src=$evidence_archive,dst=/archive.json,readonly" \
+  ai-football-verifier:v2.0.0-dev /research/window_evidence.py --verify-archive /archive.json
+```
+
+Set `evidence_archive` to the absolute path of one archive. Archives created before input retention remain readable as summaries. The verifier requires a finite positive net and zero missing fee or currency fields in every qualifying window.
+
 Before publishing a digest-named archive, the rolling job verifies that the completed scan reports the selected digest and the same 12-hour bounds. A ledger update between the monitor snapshot and the scan can yield a different digest. The job discards that draft and exits with status 75, leaving the next run eligible to check the ledger version visible in its fresh snapshot.
 
 An incomplete or contradictory scan of the current digest can receive one additional scan within the five-window recheck range. It is stored as `<ordinal>.receipt-<digest>.retry.json`, alongside the first scan. The summary prefers complete receipt reconciliation, then a scan with the matching digest and order list. Missing fee or currency evidence without a discrepancy does not itself trigger the retry.

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from infra.profitability.reconcile_upstream import collect, reconcile_window
-from infra.profitability.window_evidence import reconciliation, summarize
+from infra.profitability.window_evidence import load_report, reconciliation, summarize, verify_archive
 from services.collector.leyu_protocol import LeyuError
 
 
@@ -68,6 +68,45 @@ class SettlementStreakEvidenceTests(unittest.TestCase):
         self.assertEqual([1, 2, 3, 4], report['rolling_four_windows']['ordinals'])
         self.assertEqual([3], report['rolling_four_windows']['missing_closed_windows'])
         self.assertFalse(report['rolling_four_windows']['verified'])
+
+    def test_positive_label_requires_positive_amount_and_fee_currency_evidence(self):
+        window = self.snapshot['windows'][4]
+        for replacements in ({'provider_net': '0'}, {'provider_net': '-2'}, {'provider_net': 'NaN'},
+                             {'missing_fee_field': 1}, {'missing_currency': 1}):
+            with self.subTest(replacements=replacements):
+                self.snapshot['windows'][4] = window | replacements
+                report = summarize(self.root, self.snapshot)
+                self.assertEqual([4], report['rolling_four_windows']['unverified_windows'])
+                self.assertFalse(report['rolling_four_windows']['verified'])
+
+    def test_archive_replays_captured_files_and_detects_changes(self):
+        state = self.root / 'state'
+        state.mkdir()
+        path = state / 'latest.json'
+        path.write_text(json.dumps(self.snapshot))
+        inputs = {}
+
+        def read(path):
+            return load_report(path, inputs, self.root)
+
+        digest = self.snapshot['windows'][4]['local_receipt_digest']
+        retry = self.root / 'reconciliations' / '4.late-1.json'
+        primary = self.root / 'reconciliations' / '4.json'
+        retry.write_bytes(primary.read_bytes())
+        summary = summarize(self.root, read(path), read=read)
+        archive = json.loads(json.dumps(summary | {'evidence_format': 1, 'input_files': inputs}, default=str))
+        self.assertEqual('4.late-1.json', summary['windows'][4]['reconciliation']['file'])
+        self.assertEqual(digest, json.loads(inputs['reconciliations/4.late-1.json']['json'])[0]['local_receipt_digest'])
+        path.unlink()
+        retry.unlink()
+        self.assertEqual(summary, verify_archive(archive))
+        archive['input_files']['state/latest.json']['json'] += '\n'
+        with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            verify_archive(archive)
+        archive['input_files']['state/latest.json']['json'] = inputs['state/latest.json']['json']
+        archive['windows'][0]['settled'] += 1
+        with self.assertRaisesRegex(ValueError, 'summary differs'):
+            verify_archive(archive)
 
 
 class ReconcileUpstreamTests(unittest.TestCase):

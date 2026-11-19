@@ -14,7 +14,7 @@ draft=$(mktemp -- "$archive/.evidence.XXXXXX")
 trap 'rm -f -- "$draft"' EXIT
 docker run --rm --user "$(id -u):$(id -g)" --network none --cpus .25 --memory 128m \
     --entrypoint python -v "$root:/research:ro" -v "$monitor:/evidence:ro" \
-    ai-football-verifier:v2.0.0-dev /research/window_evidence.py /evidence --max-snapshot-age-seconds 660 > "$draft"
+    ai-football-verifier:v2.0.0-dev /research/window_evidence.py /evidence --max-snapshot-age-seconds 660 --include-inputs > "$draft"
 target="$archive/$(date -u +%FT%T.%6NZ).json"
 ln -T -- "$draft" "$target"
 printf 'Archived settlement verification in %s\n' "$(basename -- "$target")"
