@@ -491,12 +491,14 @@ async def list_match_markets(body: MarketInput, request: Request):
                     'fixture_id': body.fixture_id, 'quote_ids': [],
                     'reason': 'source_period_not_supported'})
             age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
+            missing_live_score = fixture['phase'] == 'live' and (
+                fixture['home_score'] is None or fixture['away_score'] is None)
             reason = None
             if not getattr(settings, 'market_refresh_url', ''):
                 reason = 'refresh_unconfigured'
             elif job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS:
                 reason = 'historical_review_not_current'
-            elif quotes and all(fresh_quote(quote, max_age) for quote in quotes):
+            elif not missing_live_score and quotes and all(fresh_quote(quote, max_age) for quote in quotes):
                 reason = 'quotes_already_fresh'
             elif (not quotes and total_quotes and any(value is not None for value in filters.values())
                   and not (fixture['sport'] == 'football' and filters['market_kind'] == 'team_total')):
