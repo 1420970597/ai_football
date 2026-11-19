@@ -128,9 +128,40 @@ fi
         self.assertEqual(['--capture', '2026-11-19T19:57:00Z', f'{label}-catalog',
                           '--polymarket-event', f'{label}-more-markets',
                           '--polymarket', self.env['CATALOG_MARKET']], units[unit][-7:])
+        early = 'ai-football-profitability-reference-prematch-benfica'
+        for name in (early, f'{early}-catalog'):
+            self.assertIn('--on-calendar=2026-11-19 17:30:00 UTC', units[name])
+            self.assertIn('--before', units[name])
+        self.assertIn('2026-11-19T17:30:00Z', units['ai-football-profitability-reference-replay-benfica'])
         result, units = self.invoke('2026-11-19T13:00:00+00:00', active=f'{unit}.timer')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn(unit, units)
+        self.assertIn(f'{early}-catalog', units)
+        result, units = self.invoke('2026-11-19T19:15:00+00:00', active=f'{early}.service')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn(early, units)
+        self.assertIn('--on-calendar=2026-11-19 19:15:05 UTC', units[f'{early}-catalog'])
+        result, units = self.invoke('2026-11-19T19:57:00+00:00')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn(early, units)
+        self.assertNotIn(f'{early}-catalog', units)
+
+    def test_prematch_capture_starts_only_inside_its_bounded_window(self):
+        begin, end = '2026-11-19T17:30:00Z', '2026-11-19T19:57:00Z'
+        label = 'uwcl-slb-asr-2026-11-19'
+        args = ('--capture', begin, '--before', end, label, '--polymarket', f'{label}-slb')
+        result, _ = self.invoke('2026-11-19T19:30:00+00:00', *args)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([label, '--samples', '41', '--interval-seconds', '40',
+                          '--end-at', str(int(datetime.fromisoformat(end).timestamp())), *args[-2:]],
+                         result.stdout.splitlines())
+        for outside in ('2026-11-19T17:29:59+00:00', '2026-11-19T19:57:00+00:00'):
+            result, _ = self.invoke(outside, *args)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertNotIn('--samples', result.stdout)
+        result, _ = self.invoke(begin, *args, '--polymarket-event', f'{label}-more-markets')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([label, '--samples', '883', '--interval-seconds', '10'], result.stdout.splitlines()[:5])
 
     def test_expanded_capture_uses_five_seconds_and_an_absolute_deadline(self):
         begin = '2026-11-19T19:57:00Z'

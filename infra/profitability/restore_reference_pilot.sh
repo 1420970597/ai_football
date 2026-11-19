@@ -7,31 +7,50 @@ archive="$project_root/.runtime/profitability-watch/public-orderbook-pilot-20261
 bindings=fixture-bindings-20261119.json
 interval=33
 last_offset=$((237 * interval))
+prematch_offset=$((147 * 60))
+prematch_interval=40
+prematch_catalog_interval=10
 
 if [[ ${1-} == --capture || ${1-} == --score ]]; then
     mode=$1
     shift
     begin=$(date -u -d "$1" +%s)
+    shift
+    end=$((begin + last_offset))
+    bounded=false
+    if [[ "$mode" == --capture && ${1-} == --before ]]; then
+        end=$(date -u -d "$2" +%s)
+        shift 2
+        (( end > begin && end - begin <= prematch_offset )) || exit 2
+        bounded=true
+    fi
     now=$(date -u +%s)
-    remaining=$((begin + last_offset - now))
-    if (( now < begin || remaining < 0 )); then
+    remaining=$((end - now))
+    if (( now < begin || remaining < 0 )) || { $bounded && (( remaining == 0 )); }; then
         printf '%s\n' 'The scheduled sampling window is closed or has not started.'
         exit 0
     fi
-    shift
     capture_args=()
     poll_interval=$interval
     deadline_args=()
     if [[ "$mode" == --score ]]; then
         capture_args=(--score)
     else
+        if $bounded; then
+            poll_interval=$prematch_interval
+        fi
         for argument in "${@:2}"; do
             if [[ "$argument" == --polymarket-event ]]; then
                 poll_interval=5
-                deadline_args=(--end-at "$((begin + last_offset))")
+                if $bounded; then
+                    poll_interval=$prematch_catalog_interval
+                fi
                 break
             fi
         done
+        if $bounded || (( poll_interval == 5 )); then
+            deadline_args=(--end-at "$end")
+        fi
     fi
     exec bash "$root/capture_reference_window.sh" "${capture_args[@]}" "$1" \
         --samples "$((remaining / poll_interval + 1))" --interval-seconds "$poll_interval" \
@@ -94,7 +113,8 @@ restore_fixture() {
     local stream_unit="ai-football-profitability-reference-stream-$name"
     local replay_unit="ai-football-profitability-reference-replay-$name"
     local catalog_unit="ai-football-profitability-reference-catalog-$name"
-    local now begin_epoch end_epoch earliest capture_at stream_at stream_start stream_end replay_at
+    local prematch_unit="ai-football-profitability-reference-prematch-$name"
+    local now begin_epoch end_epoch earliest capture_at stream_at stream_start stream_end replay_at replay_begin
     now=$(date -u +%s)
     begin_epoch=$(date -u -d "$begin" +%s)
     end_epoch=$(date -u -d "$end" +%s)
@@ -104,21 +124,32 @@ restore_fixture() {
     stream_start=$((stream_at > earliest ? stream_at : earliest))
     stream_end=$((stream_at + 900))
     replay_at=$((end_epoch > earliest ? end_epoch : earliest))
+    replay_begin=$begin
+    local main_markets=(
+        --polymarket "$label-$home" --polymarket "$label-draw" --polymarket "$label-$away"
+        --polymarket "$label-total-2pt5" --polymarket "$label-first-half-total-1pt5"
+        --polymarket "$label-spread-$handicap-1pt5" "$@"
+    )
 
     if unit_active "$capture_unit"; then
         printf '%s\n' "$name capture is active."
     elif (( capture_at <= begin_epoch + last_offset )); then
         register_once "$capture_unit" "$capture_at" 9000s \
             "$root/restore_reference_pilot.sh" --capture "$begin" "$label" \
-            --polymarket "$label-$home" --polymarket "$label-draw" --polymarket "$label-$away" \
-            --polymarket "$label-total-2pt5" --polymarket "$label-first-half-total-1pt5" \
-            --polymarket "$label-spread-$handicap-1pt5" "$@"
+            "${main_markets[@]}"
     else
         printf '%s\n' "$name capture window has elapsed."
     fi
 
     local catalog="$archive/catalog-$label.json"
-    if [[ -s "$catalog" ]] && (( capture_at <= begin_epoch + last_offset )) && ! unit_active "$catalog_unit"; then
+    local prematch_catalog_unit="${prematch_unit}-catalog"
+    local prematch_begin=$((begin_epoch - prematch_offset))
+    local prematch_at=$((prematch_begin > earliest ? prematch_begin : earliest))
+    if [[ -s "$catalog" ]]; then
+        replay_begin=$(date -u -d "@$prematch_begin" +%FT%TZ)
+    fi
+    if [[ -s "$catalog" ]] && (( capture_at <= begin_epoch + last_offset )) &&
+        { ! unit_active "$catalog_unit" || { (( prematch_at < begin_epoch )) && ! unit_active "$prematch_catalog_unit"; }; }; then
         local evidence market
         local catalog_args=()
         evidence=$(docker run --rm --user "$(id -u):$(id -g)" --network none --cpus .25 --memory 96m \
@@ -138,9 +169,21 @@ for item in data["bindings"]:
         while IFS= read -r market; do
             catalog_args+=(--polymarket "$market")
         done <<< "$evidence"
-        register_once "$catalog_unit" "$capture_at" 9000s \
-            "$root/restore_reference_pilot.sh" --capture "$begin" "$label-catalog" \
-            --polymarket-event "$label-more-markets" "${catalog_args[@]}"
+        if ! unit_active "$catalog_unit"; then
+            register_once "$catalog_unit" "$capture_at" 9000s \
+                "$root/restore_reference_pilot.sh" --capture "$begin" "$label-catalog" \
+                --polymarket-event "$label-more-markets" "${catalog_args[@]}"
+        fi
+        if (( prematch_at < begin_epoch )) && ! unit_active "$prematch_catalog_unit"; then
+            register_once "$prematch_catalog_unit" "$prematch_at" 9000s \
+                "$root/restore_reference_pilot.sh" --capture "$replay_begin" --before "$begin" "$label-prematch-catalog" \
+                --polymarket-event "$label-more-markets" "${catalog_args[@]}"
+        fi
+    fi
+    if [[ -s "$catalog" ]] && (( prematch_at < begin_epoch )) && ! unit_active "$prematch_unit"; then
+        register_once "$prematch_unit" "$prematch_at" 9000s \
+            "$root/restore_reference_pilot.sh" --capture "$replay_begin" --before "$begin" "$label-prematch" \
+            "${main_markets[@]}"
     fi
 
     if unit_active "$stream_unit"; then
@@ -158,7 +201,7 @@ for item in data["bindings"]:
         printf '%s\n' "$name replay is active."
     elif (( now < end_epoch )) || has_archive "$archive/$label-"*.jsonl; then
         register_once "$replay_unit" "$replay_at" 90s \
-            "$root/replay_reference_window.sh" "$label" "$fixture" "$begin" "$end" "$bindings"
+            "$root/replay_reference_window.sh" "$label" "$fixture" "$replay_begin" "$end" "$bindings"
     else
         printf '%s\n' "$name has no captured observations to replay."
     fi
