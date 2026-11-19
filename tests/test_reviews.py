@@ -888,6 +888,36 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Decimal('1.95'), read['price'])
         self.assertEqual(fixture_id, read['quote_context']['fixture_id'])
 
+    async def test_fresh_live_quote_refreshes_missing_score(self):
+        fixture_id = await self.fixture(phase='live', kickoff_at=(self.now - timedelta(minutes=5)).isoformat())
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+
+        with patch.object(reviews, '_request_market_refresh',
+                          return_value={'attempted': True, 'reason': 'refresh_unavailable'}) as refresh:
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(200, response.status_code, response.text)
+        refresh.assert_awaited_once()
+        self.assertIsNone(response.json()['fixture']['home_score'])
+        self.assertIsNone(response.json()['fixture']['away_score'])
+        self.assertTrue(response.json()['markets'][0]['fresh'])
+
+        async def refresh_score(*args, **kwargs):
+            async with self.pool.acquire() as conn:
+                await conn.execute('UPDATE v2_fixtures SET home_score=0,away_score=0 WHERE id=$1', fixture_id)
+            return {'attempted': True, 'accepted': True, 'reason': 'written'}
+
+        with patch.object(reviews, '_request_market_refresh', side_effect=refresh_score) as refresh:
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+            refresh.assert_awaited_once()
+            reread = await self.post('list_match_markets', fixture_id=fixture_id)
+            refresh.assert_awaited_once()
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(0, response.json()['fixture']['home_score'])
+        self.assertEqual(0, response.json()['fixture']['away_score'])
+        self.assertEqual('quotes_already_fresh', reread.json()['refresh']['reason'])
+
     async def test_refresh_releases_single_pool_connection_and_rereads_updated_price(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()
