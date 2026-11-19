@@ -16,10 +16,11 @@ CREATE TEMP TABLE orders (
 INSERT INTO orders VALUES
     (1,-60,240,2), (2,60,400,-5), (3,120,400,2), (4,180,400,3), (5,240,400,-5),
     (6,255,420,4), (7,300,500,-5), (8,480,600,3), (9,100,400,2), (10,100,400,4),
-    (11,130,400,1), (12,140,400,-1), (13,86430,86500,5);
+    (11,130,400,1), (12,140,400,-1), (13,86430,86500,5), (14,145,400,-4), (15,150,NULL,NULL);
 
 INSERT INTO v2_expert_signals
-SELECT id, CASE WHEN id=12 THEN 'leyu:2' ELSE 'leyu:1' END, CASE WHEN id=9 THEN 'live' ELSE 'scheduled' END,
+SELECT id, CASE WHEN id IN (12,14,15) THEN 'leyu:2' ELSE 'leyu:1' END,
+       CASE WHEN id=9 THEN 'live' ELSE 'scheduled' END,
        CASE WHEN id=4 THEN '18' ELSE '2' END,'total', CASE WHEN id=4 THEN 'first_half' ELSE 'full_time' END,
        CASE WHEN id=11 THEN 'remaining_period' WHEN id=9 THEN 'unknown' ELSE 'full_period' END,
        CASE WHEN id=3 THEN 'under' WHEN id=10 THEN NULL ELSE 'over' END,
@@ -39,6 +40,6 @@ FROM v2_bet_orders o
 UNION ALL
 SELECT o.id+100,o.id,:'begin'::timestamptz + settled_seconds*interval '1 second',
        jsonb_build_object('order_no',provider_order_no,'state','settled','net_profit',net)
-FROM v2_bet_orders o JOIN orders s ON s.id=o.id;
+FROM v2_bet_orders o JOIN orders s ON s.id=o.id WHERE s.settled_seconds IS NOT NULL;
 
 \ir ../../infra/profitability/fixture_exposure.sql

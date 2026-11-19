@@ -52,6 +52,7 @@ WITH RECURSIVE bounds AS (
            count(*) FILTER (WHERE fixture_id IS NULL OR account_id IS NULL OR provider_identity_hash IS NULL
                                OR placed_at IS NULL OR accepted_at IS NULL OR stake IS NULL OR stake <= 0
                                OR closed_at < placed_at) AS invalid_fills,
+           count(*) FILTER (WHERE accepted_at IS NULL) AS fills_without_observed_acceptance,
            count(DISTINCT (account_id, provider_identity_hash)) AS account_bindings,
            count(DISTINCT currency) AS known_currencies
     FROM fills CROSS JOIN bounds
@@ -102,6 +103,27 @@ WITH RECURSIVE bounds AS (
     WHERE s.placed_at >= b.begin_at
       AND s.risk_group IS NOT DISTINCT FROM r.risk_group
     GROUP BY 1, 2, 3
+), removed_by_fixture AS (
+    SELECT CASE WHEN s.placed_at < b.split_at THEN 'early' ELSE 'late' END AS period,
+           s.fixture_id, r.scope, r.cap, sum(-s.net) AS observed_delta,
+           count(*) FILTER (WHERE s.net IS NULL) AS removed_without_net,
+           sum(s.stake) FILTER (WHERE s.net IS NULL) AS stake_without_net
+    FROM replay r JOIN sequence s USING (fixture_id, scope, step) CROSS JOIN bounds b
+    WHERE NOT r.retained AND s.placed_at >= b.begin_at
+      AND s.risk_group IS NOT DISTINCT FROM r.risk_group
+    GROUP BY 1, s.fixture_id, r.scope, r.cap
+), cap_sensitivity AS (
+    SELECT period, scope, cap, count(*) AS affected_fixtures,
+           count(observed_delta) AS fixtures_with_observed_delta,
+           count(*) FILTER (WHERE removed_without_net > 0) AS fixtures_missing_any_removed_net,
+           sum(removed_without_net) AS removed_without_net,
+           sum(stake_without_net) AS stake_without_net,
+           sum(observed_delta) AS observed_delta,
+           CASE WHEN count(observed_delta) > 1 THEN sum(observed_delta) - max(observed_delta) END
+               AS lowest_delta_excluding_one,
+           CASE WHEN count(observed_delta) > 1 THEN sum(observed_delta) - min(observed_delta) END
+               AS highest_delta_excluding_one
+    FROM removed_by_fixture GROUP BY period, scope, cap
 ), fixture_receipts AS (
     SELECT CASE WHEN s.placed_at < b.split_at THEN 'early' ELSE 'late' END AS period,
            CASE WHEN grouping(s.phase) = 1 THEN 'all' ELSE coalesce(s.phase, 'unknown') END AS phase,
@@ -127,6 +149,8 @@ SELECT jsonb_build_object('bounds', to_jsonb(b), 'coverage', to_jsonb(c),
         FROM comparison p WHERE scope='same_side'), '[]'::jsonb),
     'verified_period_total_comparisons', coalesce((SELECT jsonb_agg(to_jsonb(p) - ARRAY['scope','fills_without_side_key'] ORDER BY period, cap)
         FROM comparison p WHERE scope='verified_period_total'), '[]'::jsonb),
+    'cap_sensitivity', coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY period, scope, cap)
+        FROM cap_sensitivity p), '[]'::jsonb),
     'fixture_sensitivity', coalesce((SELECT jsonb_agg(to_jsonb(f) ORDER BY period, phase)
         FROM fixture_sensitivity f), '[]'::jsonb))
 FROM bounds b CROSS JOIN coverage c;
