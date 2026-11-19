@@ -63,6 +63,12 @@ class ReferencePilotRestoreTests(unittest.TestCase):
         self.assertIn('--on-calendar=2026-11-19 12:00:00 UTC', stream)
         self.assertIn('--stream', stream)
         self.assertIn(f'{SVAY_LABEL}-spread-home-1pt5', stream)
+        adjacent = units['ai-football-profitability-reference-vasco-adjacent']
+        self.assertIn('--on-calendar=2026-11-19 22:27:00 UTC', adjacent)
+        self.assertEqual(['--polymarket', 'bra-vas-int-2026-11-19-total-2pt5',
+                          '--polymarket', 'bra-vas-int-2026-11-19-total-3pt5',
+                          '--kalshi', 'KXBRASILEIROTOTAL-26NOV19VDGINT-3',
+                          '--kalshi', 'KXBRASILEIROTOTAL-26NOV19VDGINT-4'], adjacent[-8:])
 
     def test_in_progress_uses_remaining_rounds_at_service_launch(self):
         result, units = self.invoke('2026-11-19T12:00:00+00:00')

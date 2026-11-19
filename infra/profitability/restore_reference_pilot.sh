@@ -111,3 +111,17 @@ restore_fixture vienna uwcl-faw-bm-2026-11-19 leyu:5831446 \
 restore_fixture vasco bra-vas-int-2026-11-19 leyu:5816659 \
     2026-11-19T22:27:00Z 2026-11-20T01:02:00Z vas int home \
     --kalshi KXBRASILEIROTOTAL-26NOV19VDGINT-3
+
+adjacent_unit=ai-football-profitability-reference-vasco-adjacent
+adjacent_begin=2026-11-19T22:27:00Z
+adjacent_epoch=$(date -u -d "$adjacent_begin" +%s)
+earliest=$(($(date -u +%s) + 5))
+adjacent_at=$((adjacent_epoch > earliest ? adjacent_epoch : earliest))
+if unit_active "$adjacent_unit"; then
+    printf '%s\n' 'Vasco adjacent totals observation is active.'
+elif (( adjacent_at <= adjacent_epoch + last_offset )); then
+    register_once "$adjacent_unit" "$adjacent_at" 9000s \
+        "$root/restore_reference_pilot.sh" --capture "$adjacent_begin" vasco-adjacent-totals \
+        --polymarket bra-vas-int-2026-11-19-total-2pt5 --polymarket bra-vas-int-2026-11-19-total-3pt5 \
+        --kalshi KXBRASILEIROTOTAL-26NOV19VDGINT-3 --kalshi KXBRASILEIROTOTAL-26NOV19VDGINT-4
+fi

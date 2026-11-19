@@ -18,6 +18,8 @@
 
 06:03 UTC，新增 Polymarket 开球时段流采样，三个窗口从 12:00、17:45 和 22:30 UTC 开始，各观察 15 分钟。档案记录每个合约的规则摘要和选项编号、原始帧、原生时间及本机实际接收时间。首份订单簿单独标识，重连初始快照沿用上游时间。欧女冠实测 50 秒收到 56 条变动，接收延迟为 10.6 至 57.1 毫秒。独立短测保存 12 份初始订单簿、19 条增量和正常结束标志。流用于测定覆盖、延迟及变化时点。赛后预检仍使用有完整双边深度的 REST 档案。中断保留已收到帧，缺正常结束标志时按不完整档案处理。 [采样程序](reference_orderbook_stream.py) [官方公开流](https://docs.polymarket.com/market-data/realtime-data#market-stream)
 
+瓦斯科额外从 22:27 UTC 在同一轮采集两家来源的全场大小 2.5 和 3.5，用于检查四分之一线的相邻报价覆盖。该采样单列为 `vasco-adjacent-totals`，保存原生时间与接收时间，常规完赛规则和异常赛果条款仍单独核验。06:09 至 06:11 UTC 的受理样本发生在采样窗口之前。 [Polymarket 盘口目录](https://gamma-api.polymarket.com/events/slug/bra-vas-int-2026-11-19-more-markets) [Kalshi 大小球目录](https://api.elections.kalshi.com/trade-api/v2/markets?event_ticker=KXBRASILEIROTOTAL-26NOV19VDGINT)
+
 采样保存规则摘要、原生报价和接收时点。赛后任务按赛事身份、期间、玩法和盘口线，将同一笔已验证预检与各候选市场的最近一轮完整报价配对。原生时点和接收时点都须落在预检前 30 秒内。通过时保留规则摘要、原生选项名称、买卖价及深度和各侧原生及接收时点，用于复算；外部源独立性及同期滚球状态仍需校验。最新观测停盘、缺深度、原生时点不可核验或规则变化时，输出相应原因。完全无预检的比赛保留采样轮数。规则摘要变更需重新核验。 [采样入口](../../infra/profitability/capture_reference_window.sh) [生产预检只读查询](../../infra/profitability/reference_preflights.sql) [回放入口](../../infra/profitability/replay_reference_window.sh)
 
 部署使用临时 systemd 定时器。主机重启后运行 `bash infra/profitability/restore_reference_pilot.sh`。入口复用当期私有绑定档案，保留已经运行的定时器。未开始的赛程仍按原时间采样，进行中的赛程从当前时间采集剩余轮次，过去的时段保留缺口。原窗口已闭合时，只为有采样且缺少结果的比赛补做回放。回放合并重启前后的完整记录，遇到未写完的尾行时记录中断档案数，档案内已换行的坏行会使回放失败。Docker 回放复现两场此前巴甲的 5 条真实预检。欧女冠提前试运行生成 1 轮订单簿、0 笔预检的归档。脚本仅观察公开市场和已写入的执行记录。 [恢复入口](../../infra/profitability/restore_reference_pilot.sh) [回放边界测试](test_reference_preflight.py)
