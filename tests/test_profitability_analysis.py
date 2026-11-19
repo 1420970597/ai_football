@@ -35,11 +35,41 @@ class ProfitabilityAnalysisTest(unittest.TestCase):
             self.assertEqual(report['status'], 'stale_or_after_cutoff')
             self.assertNotIn('windows', report)
 
+    def test_settlement_uses_previous_checkpoint_when_latest_is_after_cutoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoints = root / 'state/checkpoints'
+            checkpoints.mkdir(parents=True)
+            snapshot = {
+                'anchor': (self.now - timedelta(hours=3)).isoformat(),
+                'observed_at': (self.now + timedelta(microseconds=1)).isoformat(),
+                'windows': [], 'unknown_total': 0, 'pending_total': 2,
+            }
+            (root / 'state/latest.json').write_text(json.dumps(snapshot))
+            (checkpoints / '20261119T130000Z.json').write_text(json.dumps(snapshot))
+            prior = snapshot | {'observed_at': (self.now - timedelta(minutes=4)).isoformat(), 'pending_total': 1}
+            (checkpoints / '20261119T125600Z.json').write_text(json.dumps(prior))
+            (checkpoints / '20261119T125800Z.json').write_text('{')
+            (checkpoints / '20261119T124800Z.json').write_text(json.dumps(
+                prior | {'observed_at': (self.now - timedelta(minutes=12)).isoformat()}))
+            report = settlement_evidence(root, self.now)
+            self.assertEqual(report['status'], 'ok')
+            self.assertEqual(report['pending_total'], 1)
+            self.assertEqual(report['snapshot_file'], 'state/checkpoints/20261119T125600Z.json')
+            (checkpoints / '20261119T125600Z.json').unlink()
+            self.assertEqual(settlement_evidence(root, self.now)['status'], 'stale_or_after_cutoff')
+
     def test_reference_uses_latest_past_replay_and_tracks_failed_archive(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            rows = [{'references': [{'status': 'timed_depth', 'outcome_status': 'mapped'}],
-                     'score_comparison': {'status': 'observed_score_matches'}}]
+            rows = [{'preflight': {'sport': 'football', 'phase': 'live', 'period': 'full_time', 'kind': 'total'},
+                     'references': [{'status': 'timed_depth', 'outcome_status': 'mapped'},
+                                    {'status': 'stale_before_preflight', 'stream': {'status': 'observed_top_of_book'}}],
+                     'score_comparison': {'status': 'observed_score_matches'},
+                     'settlement_comparison': 'unknown_settlement_basis',
+                     'source_groups': {'polymarket': {'status': 'incomplete'}},
+                     'adjacent_line_coverage': {'source_groups': {'polymarket': {'status': 'paired'}},
+                                                'lines': [{'references': [{'stream': {'status': 'outside_stream_segment'}}]}]}}]
             (root / 'fixture-replay-2026-11-19T12:00:00Z.json').write_text('{}')
             (root / 'fixture-replay-2026-11-19T12:59:00Z.json').write_text(json.dumps({
                 'capture_rounds': 200, 'preflights': rows,
@@ -49,6 +79,12 @@ class ProfitabilityAnalysisTest(unittest.TestCase):
             matched, smoke = reference_evidence(root, self.now)
             self.assertEqual(matched['archived_at'].minute, 59)
             self.assertEqual(matched['with_mapped_timed_quote_and_matching_score'], 1)
+            self.assertEqual(matched['with_stream_top_of_book'], 1)
+            self.assertEqual(matched['with_complete_quote_group'], 0)
+            self.assertEqual(matched['with_paired_adjacent_lines'], 1)
+            self.assertEqual(matched['adjacent_stream_quote_statuses'], {'outside_stream_segment': 1})
+            self.assertEqual(matched['settlement_comparison_statuses'], {'unknown_settlement_basis': 1})
+            self.assertEqual(matched['by_contract'][0]['kind'], 'total')
             self.assertTrue(smoke['smoke'])
             self.assertEqual(smoke['status'], 'JSONDecodeError')
 

@@ -17,14 +17,39 @@ def read_json(path):
     return json.loads(path.read_bytes(), parse_float=Decimal)
 
 
+CHECKPOINT = re.compile(r'\d{8}T\d{6}Z\.json')
+SNAPSHOT_MAX_AGE = timedelta(minutes=11)
+
+
+def snapshot_as_of(root, observed):
+    latest = root / 'state/latest.json'
+    raw = latest.read_bytes()
+    snapshot = json.loads(raw, parse_float=Decimal)
+    snapshot_at = datetime.fromisoformat(snapshot['observed_at'])
+    if snapshot_at <= observed:
+        return latest, raw, snapshot, snapshot_at
+    earliest = observed - SNAPSHOT_MAX_AGE
+    first = earliest.strftime('%Y%m%dT%H%M%SZ.json')
+    last = observed.strftime('%Y%m%dT%H%M%SZ.json')
+    candidates = (path for path in latest.parent.glob('checkpoints/*.json')
+                  if CHECKPOINT.fullmatch(path.name) and first <= path.name <= last)
+    for path in sorted(candidates, reverse=True):
+        try:
+            candidate_raw = path.read_bytes()
+            candidate = json.loads(candidate_raw, parse_float=Decimal)
+            at = datetime.fromisoformat(candidate['observed_at'])
+            if earliest <= at <= observed:
+                return path, candidate_raw, candidate, at
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            continue
+    return latest, raw, snapshot, snapshot_at
+
+
 def settlement_evidence(root, observed):
-    snapshot_path = root / 'state/latest.json'
     try:
-        raw = snapshot_path.read_bytes()
-        snapshot = json.loads(raw, parse_float=Decimal)
-        snapshot_at = datetime.fromisoformat(snapshot['observed_at'])
+        snapshot_path, raw, snapshot, snapshot_at = snapshot_as_of(root, observed)
         age = observed - snapshot_at
-        if not timedelta(0) <= age <= timedelta(minutes=11):
+        if not timedelta(0) <= age <= SNAPSHOT_MAX_AGE:
             return {'status': 'stale_or_after_cutoff', 'observed_at': snapshot_at}
 
         def read_as_of(path):
@@ -47,6 +72,7 @@ def settlement_evidence(root, observed):
                             'cash_flow_difference', 'absolute_cash_flow_difference')
                 window['wallet'].update({key: wallet['comparison'].get(key) for key in measures})
         return {'status': 'ok', 'observed_at': snapshot_at, 'snapshot_sha256': sha256(raw).hexdigest(),
+                'snapshot_file': snapshot_path.relative_to(root).as_posix(),
                 'closed': closed, 'windows': snapshot['windows'], 'unknown_total': snapshot['unknown_total'],
                 'pending_total': snapshot['pending_total']}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
@@ -54,6 +80,46 @@ def settlement_evidence(root, observed):
 
 
 REPLAY = re.compile(r'(.+)-replay-(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\.json')
+
+
+def reference_coverage(preflights):
+    quotes, scores, scope, streams, adjacent_streams = (Counter() for _ in range(5))
+    contracts = {}
+    contract_fields = ('sport', 'phase', 'period', 'kind')
+    mapped_timed = score_and_quote = complete_group = streamed = paired_adjacent = 0
+    for row in preflights:
+        references = row['references']
+        quotes.update(ref['status'] for ref in references)
+        score_status = row.get('score_comparison', {}).get('status')
+        if score_status:
+            scores[score_status] += 1
+        scope[row.get('settlement_comparison', 'not_recorded')] += 1
+        streams.update(ref['stream']['status'] for ref in references if 'stream' in ref)
+        adjacent = row.get('adjacent_line_coverage', {})
+        adjacent_streams.update(ref['stream']['status'] for line in adjacent.get('lines', [])
+                                for ref in line['references'] if 'stream' in ref)
+        has_quote = any(ref['status'] == 'timed_depth' and ref.get('outcome_status') == 'mapped'
+                        for ref in references)
+        has_group = any(group['status'] == 'complete' for group in row.get('source_groups', {}).values())
+        has_stream = any(ref.get('stream', {}).get('status') == 'observed_top_of_book' for ref in references)
+        has_adjacent = any(group['status'] == 'paired' for group in adjacent.get('source_groups', {}).values())
+        mapped_timed += has_quote
+        score_and_quote += has_quote and score_status == 'observed_score_matches'
+        complete_group += has_group
+        streamed += has_stream
+        paired_adjacent += has_adjacent
+        contract = row.get('preflight', {})
+        key = tuple(contract.get(field) or 'unknown' for field in contract_fields)
+        tally = contracts.setdefault(key, Counter())
+        tally.update({'preflights': 1, 'mapped_timed_quote': int(has_quote), 'complete_quote_group': int(has_group),
+                      'stream_top_of_book': int(has_stream), 'paired_adjacent_lines': int(has_adjacent)})
+    return {'preflights': len(preflights), 'source_quote_statuses': dict(quotes), 'score_statuses': dict(scores),
+            'settlement_comparison_statuses': dict(scope), 'stream_quote_statuses': dict(streams),
+            'adjacent_stream_quote_statuses': dict(adjacent_streams), 'with_mapped_timed_quote': mapped_timed,
+            'with_mapped_timed_quote_and_matching_score': score_and_quote, 'with_complete_quote_group': complete_group,
+            'with_stream_top_of_book': streamed, 'with_paired_adjacent_lines': paired_adjacent,
+            'by_contract': [dict(zip(contract_fields, key)) | dict(counts)
+                            for key, counts in sorted(contracts.items())]}
 
 
 def reference_evidence(root, observed):
@@ -76,23 +142,8 @@ def reference_evidence(root, observed):
         try:
             raw = path.read_bytes()
             doc = json.loads(raw, parse_float=Decimal)
-            preflights = doc['preflights']
-            quote_statuses = Counter()
-            score_statuses = Counter()
-            mapped_timed = score_and_quote = 0
-            for row in preflights:
-                references = row['references']
-                score_status = row.get('score_comparison', {}).get('status')
-                if score_status:
-                    score_statuses[score_status] += 1
-                quote_statuses.update(ref['status'] for ref in references)
-                if any(ref['status'] == 'timed_depth' and ref.get('outcome_status') == 'mapped' for ref in references):
-                    mapped_timed += 1
-                    score_and_quote += score_status == 'observed_score_matches'
             entry.update(status='ok', sha256=sha256(raw).hexdigest(), capture_rounds=doc['capture_rounds'],
-                         preflights=len(preflights), source_quote_statuses=dict(quote_statuses),
-                         score_statuses=dict(score_statuses), with_mapped_timed_quote=mapped_timed,
-                         with_mapped_timed_quote_and_matching_score=score_and_quote)
+                         stream_segments=doc.get('stream_segments', []), **reference_coverage(doc['preflights']))
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             entry['status'] = type(error).__name__
         summaries.append(entry)
@@ -226,7 +277,12 @@ def render(report):
     for item in actual:
         lines.append(f"- `{item['label']}` · {item['capture_rounds']} 次采样，{item['preflights']} 条乐鱼自然预检，"
                      f"有方向及盘口深度证据的同步报价 {item['with_mapped_timed_quote']} 条，"
-                     f"其中同时满足独立比分观测 {item['with_mapped_timed_quote_and_matching_score']} 条。")
+                     f"其中外部观测比分一致 {item['with_mapped_timed_quote_and_matching_score']} 条。"
+                     f"同源完整报价组 {item['with_complete_quote_group']} 条，"
+                     f"流首档 {item['with_stream_top_of_book']} 条，相邻线配对 {item['with_paired_adjacent_lines']} 条。")
+    for item in external:
+        if item['status'] != 'ok':
+            lines.append(f"- `{item['label']}` · 归档读取失败，`{item['status']}`。")
     lines += ['', '场外归档衡量参考价覆盖。有效的净收益判断还需同一结算合同、当时可成交数量、总费用和两边实际成交或拒绝回执。',
               '', '## 覆盖与异常', '', '同一目录中的 `report.json` 保存各项统计、SQL 摘要及场外归档状态。']
     lines += [f"- `{name}` · {result.get('error', '已生成')}" for name, result in diagnostics.items()]
