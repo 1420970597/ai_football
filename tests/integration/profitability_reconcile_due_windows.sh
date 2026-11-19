@@ -302,7 +302,13 @@ printf '%s\n' '--unit=ai-football-profitability-reconcile-rolling' '--collect' '
     '--on-calendar=*-*-* 02,14:25,45:00 UTC' '--timer-property=AccuracySec=1s' \
     '--property=Type=oneshot' '--property=TimeoutStartSec=75s' /usr/bin/bash \
     "$test_dir/infra/profitability/reconcile_due_windows.sh" "$anchor" "$state_path" > expected_arguments
-cmp timer_arguments expected_arguments
+cmp ai-football-profitability-reconcile-rolling.arguments expected_arguments
+test -e ai-football-profitability-window-evidence.timer.active
+printf '%s\n' '--unit=ai-football-profitability-window-evidence' '--collect' '--on-active=15s' \
+    '--on-calendar=*-*-* 02,14:27,47:00 UTC' '--timer-property=AccuracySec=1s' \
+    '--property=Type=oneshot' '--property=TimeoutStartSec=45s' /usr/bin/bash \
+    "$test_dir/infra/profitability/collect_window_evidence.sh" "$state_path/.." > expected_arguments
+cmp ai-football-profitability-window-evidence.arguments expected_arguments
 
 rm timer_arguments
 export restore_anchor=invalid
