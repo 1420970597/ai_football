@@ -59,11 +59,16 @@ class ReferencePilotRestoreTests(unittest.TestCase):
         vienna = units['ai-football-profitability-reference-vienna']
         self.assertIn('--on-calendar=2026-11-19 17:42:00 UTC', vienna)
         self.assertIn('KXUCLWSPREAD-26NOV19FAKBMU-BMU2', vienna)
+        stream = units['ai-football-profitability-reference-stream-svay']
+        self.assertIn('--on-calendar=2026-11-19 12:00:00 UTC', stream)
+        self.assertIn('--stream', stream)
+        self.assertIn(f'{SVAY_LABEL}-spread-home-1pt5', stream)
 
     def test_in_progress_uses_remaining_rounds_at_service_launch(self):
         result, units = self.invoke('2026-11-19T12:00:00+00:00')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn('--on-calendar=2026-11-19 12:00:05 UTC', units[SVAY])
+        self.assertNotIn('ai-football-profitability-reference-stream-svay', units)
         capture = ('--capture', '2026-11-19T11:57:00Z', SVAY_LABEL, '--polymarket', SVAY_LABEL + '-svr')
         result, _ = self.invoke('2026-11-19T12:07:00+00:00', *capture)
         self.assertEqual(0, result.returncode, result.stderr)

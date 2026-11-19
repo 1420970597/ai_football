@@ -59,13 +59,15 @@ restore_fixture() {
     local name=$1 label=$2 fixture=$3 begin=$4 end=$5 home=$6 away=$7 handicap=$8
     shift 8
     local capture_unit="ai-football-profitability-reference-$name"
+    local stream_unit="ai-football-profitability-reference-stream-$name"
     local replay_unit="ai-football-profitability-reference-replay-$name"
-    local now begin_epoch end_epoch earliest capture_at replay_at
+    local now begin_epoch end_epoch earliest capture_at stream_at replay_at
     now=$(date -u +%s)
     begin_epoch=$(date -u -d "$begin" +%s)
     end_epoch=$(date -u -d "$end" +%s)
     earliest=$((now + 5))
     capture_at=$((begin_epoch > earliest ? begin_epoch : earliest))
+    stream_at=$((begin_epoch + 180))
     replay_at=$((end_epoch > earliest ? end_epoch : earliest))
 
     if unit_active "$capture_unit"; then
@@ -78,6 +80,15 @@ restore_fixture() {
             --polymarket "$label-spread-$handicap-1pt5" "$@"
     else
         printf '%s\n' "$name capture window has elapsed."
+    fi
+
+    if unit_active "$stream_unit"; then
+        printf '%s\n' "$name public stream observation is active."
+    elif (( earliest <= stream_at )); then
+        register_once "$stream_unit" "$stream_at" 930s \
+            "$root/capture_reference_window.sh" --stream "$label" --seconds 900 \
+            "$label-$home" "$label-draw" "$label-$away" "$label-total-2pt5" \
+            "$label-first-half-total-1pt5" "$label-spread-$handicap-1pt5"
     fi
 
     if has_archive "$archive/$label-replay-"*.json; then
