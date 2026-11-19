@@ -453,11 +453,14 @@ async def claim_work(request: Request, live_capable: bool = False):
             if live_capable and orders.live_enabled(settings):
                 account = await conn.fetchrow("SELECT a.* FROM v2_leyu_accounts a WHERE EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.account_id=a.id AND o.state='pending' AND o.attempt_id IS NULL) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 1")
                 if account:
-                    order = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE account_id=$1 AND state='pending' AND attempt_id IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE", account["id"])
+                    order = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE account_id=$1 AND state='pending' AND attempt_id IS NULL ORDER BY created_at,id LIMIT 1 FOR UPDATE", account["id"])
                     try:
                         await orders.recheck_order(conn, order, settings)
                     except HTTPException as exc:
-                        await conn.execute("UPDATE v2_bet_orders SET state='cancelled',reserved_stake=0,result_payload=$2,updated_at=now() WHERE id=$1", order["id"], {"reason": "eligibility_changed", "status": exc.status_code})
+                        reason = getattr(exc, "reason", "")
+                        if reason not in {"duplicate_economic_order", "nearby_open_order"}:
+                            reason = "eligibility_changed"
+                        await conn.execute("UPDATE v2_bet_orders SET state='cancelled',reserved_stake=0,result_payload=$2,updated_at=now() WHERE id=$1", order["id"], {"reason": reason, "status": exc.status_code})
                         return {"kind": "idle"}
                     config = await jobs.private_config(conn, account, settings)
                     attempt = uuid.uuid4()
@@ -491,7 +494,7 @@ async def dispatch(request: Request):
                 "JOIN v2_expert_messages m ON m.id=s.message_id "
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
                 "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "
-                "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=b.user_id AND o.signal_id=s.id AND o.account_id IS NOT NULL) ORDER BY s.created_at LIMIT 30", profitable_ids)
+                "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=b.user_id AND o.signal_id=s.id AND o.account_id IS NOT NULL) ORDER BY s.created_at,s.id,b.user_id LIMIT 30", profitable_ids)
             reservation_rejections: Counter[str] = Counter()
             for pair in pairs:
                 try:

@@ -209,6 +209,18 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             async with conn.transaction():
                 return await orders.reserve_signal(conn,self.user['id'],signal,self.settings)
 
+    async def followup_signal(self, original, *, line='2.5', selection='over', period='full_time'):
+        signal, expert, _, quote = await self.signal()
+        fixture = await self.pool.fetchval('SELECT fixture_id FROM v2_expert_signals WHERE id=$1', original)
+        await self.pool.execute(
+            'UPDATE v2_expert_signals SET fixture_id=$2,line=$3,selection=$4,period=$5 WHERE id=$1',
+            signal, fixture, Decimal(line), selection, period)
+        if (line, selection, period) != ('2.5', 'over', 'full_time'):
+            await self.pool.execute(
+                'UPDATE v2_current_quotes SET fixture_id=$2,line=$3,selection=$4,period=$5 WHERE id=$1',
+                quote, fixture, Decimal(line), selection, period)
+        return signal, expert
+
     def native(self,request):
         self.native_requests.append(request)
         self.assertEqual('own-business-session',request.headers['requestId'])
@@ -616,6 +628,56 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(['auto_reservation_rejections candidates=2 reasons={"market_or_signal_unavailable": 1, "open_exposure_limit": 1}'],
                          [record.getMessage() for record in logged.records])
         self.assertEqual(Decimal('2'), await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
+
+    async def test_distinct_experts_cannot_reserve_identical_or_nearby_open_orders(self):
+        await self.healthy()
+        first, expert, _, _ = await self.signal(fixture='leyu:887765')
+        same, same_expert = await self.followup_signal(first)
+        close, close_expert = await self.followup_signal(first, line='2.75')
+        far, far_expert = await self.followup_signal(first, line='3.5')
+        opposite, opposite_expert = await self.followup_signal(first, selection='under')
+        another_period, period_expert = await self.followup_signal(first, period='first_half')
+        await self.enable([expert, same_expert, close_expert, far_expert, opposite_expert, period_expert],
+                          daily='20', exposure='20')
+        results = await asyncio.gather(self.reserve(first), self.reserve(same), return_exceptions=True)
+        rejected = [value for value in results if isinstance(value, orders.OrderEligibilityError)]
+        self.assertEqual(['duplicate_economic_order'], [value.reason for value in rejected])
+        row, = [value for value in results if not isinstance(value, Exception)]
+        with self.assertRaises(orders.OrderEligibilityError) as duplicate:
+            await self.reserve(close)
+        self.assertEqual('nearby_open_order', duplicate.exception.reason)
+        await self.reserve(far)
+        await self.reserve(opposite)
+        await self.reserve(another_period)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown' WHERE id=$1", row['id'])
+        with self.assertRaises(orders.OrderEligibilityError) as unknown:
+            await self.reserve(close)
+        self.assertEqual('nearby_open_order', unknown.exception.reason)
+        self.assertEqual(4, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
+    async def test_known_period_total_duplicates_cross_phase_and_legacy_queue_is_rechecked(self):
+        await self.healthy()
+        scheduled, expert, _, _ = await self.signal(fixture='leyu:887766')
+        live, live_expert = await self.followup_signal(scheduled)
+        await self.enable([expert, live_expert], daily='12', exposure='12')
+        await self.pool.execute("UPDATE v2_fixtures SET phase='scheduled' WHERE id='leyu:887766'")
+        await self.pool.execute("UPDATE v2_expert_signals SET phase='scheduled' WHERE id=$1", scheduled)
+        first = await self.reserve(scheduled)
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='accepted',provider_order_no='original' WHERE id=$1", first['id'])
+        await self.pool.execute("UPDATE v2_fixtures SET phase='live' WHERE id='leyu:887766'")
+        with self.assertRaises(orders.OrderEligibilityError) as duplicate:
+            await self.reserve(live)
+        self.assertEqual('duplicate_economic_order', duplicate.exception.reason)
+        await self.pool.execute(
+            "UPDATE v2_bet_orders SET state='rejected',reserved_stake=0 WHERE id=$1",first['id'])
+        later = await self.reserve(live)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',reserved_stake=stake WHERE id=$1",first['id'])
+        claim = await self.worker_api.post('/internal/executor/claim?live_capable=true')
+        self.assertEqual({'kind':'idle'}, claim.json())
+        stored = await self.pool.fetchrow('SELECT state,reserved_stake,result_payload FROM v2_bet_orders WHERE id=$1',later['id'])
+        self.assertEqual(('cancelled', Decimal('0'), 'duplicate_economic_order'),
+                         (stored['state'], stored['reserved_stake'], stored['result_payload']['reason']))
 
     async def test_many_distinct_recommendations_never_exceed_limits_and_stop_is_available(self):
         await self.healthy()

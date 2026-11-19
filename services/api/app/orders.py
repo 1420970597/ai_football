@@ -164,6 +164,49 @@ def remaining_period_benchmark(signal):
     return f"{home}:{away}"
 
 
+def order_score_scope(signal, sport):
+    phase, basis = signal["phase"], signal["score_basis"]
+    rule = settlement_rule({"id": signal["fixture_id"], "sport": sport}, dict(signal))
+    if rule:
+        basis = rule["score_basis"]
+    if basis == "full_period" or phase == "scheduled" and basis == "unknown":
+        return ("full_period",)
+    baseline = signal["score_baseline"] or {}
+    scores = tuple(baseline.get(side, baseline.get(f"{side}_score")) for side in ("home", "away"))
+    return phase, basis, scores if all(type(score) is int and score >= 0 for score in scores) else None
+
+
+async def prevent_overlapping_order(conn, user_id, account, signal, *, manual, order=None):
+    candidates = await conn.fetch(
+        "SELECT s.fixture_id,s.phase,s.market_id,s.market_kind,s.period,s.score_basis,s.score_baseline,s.line,o.state "
+        "FROM v2_expert_signals s JOIN v2_bet_orders o ON o.signal_id=s.id "
+        "WHERE s.fixture_id=$1 AND s.market_id=$2 AND s.market_kind=$3 AND s.period=$4 AND s.selection=$5 "
+        "AND o.user_id=$6 AND o.account_id=$7 AND o.provider_identity_hash IS NOT DISTINCT FROM $8 "
+        "AND ($9::uuid IS NULL OR o.id<>$9) AND ("
+        "o.state IN('submitting','accepted','unknown') OR o.state='settled' AND o.provider_order_no IS NOT NULL "
+        "OR o.state='pending' AND ($9 IS NULL OR (o.created_at,o.id)<($10::timestamptz,$9)))",
+        signal["fixture_id"], signal["market_id"], signal["market_kind"], signal["period"], signal["selection"],
+        user_id, account["id"], account["provider_identity_hash"],
+        order["id"] if order else None, order["created_at"] if order else None,
+    )
+    sport, kind, line = signal["sport"], signal["market_kind"], signal["line"]
+    scope = order_score_scope(signal, sport)
+    for prior in candidates:
+        prior_scope = order_score_scope(prior, sport)
+        other_line = prior["line"]
+        exact = (line == other_line or kind == "winner" and line in (None, 0) and other_line in (None, 0))
+        # With a missing live baseline, avoid repeating the exact line in the same scoring scope.
+        unknown_baseline = (len(scope) == len(prior_scope) == 3 and scope[:2] == prior_scope[:2]
+                            and None in (scope[-1], prior_scope[-1]))
+        if exact and (scope == prior_scope or unknown_baseline):
+            raise OrderEligibilityError(409, "本账户已有同场同盘口同方向的订单", "duplicate_economic_order")
+        if (not manual and kind in {"total", "handicap"} and prior["state"] != "settled"
+                and scope == prior_scope and not unknown_baseline and line is not None and other_line is not None
+                and line.is_finite() and other_line.is_finite()
+                and abs(line-other_line) <= (Decimal("0.5") if sport == "football" else Decimal("1"))):
+            raise OrderEligibilityError(409, "本账户已有同场同方向的相邻盘口订单", "nearby_open_order")
+
+
 async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = False):
     if manual:
         account, policy = await manual_policy(conn, user_id, settings)
@@ -183,6 +226,7 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
         stake = policy["stake_per_order"]
         if stake <= 0 or stake > policy["max_per_order"]:
             raise OrderEligibilityError(409, "单笔限额不足", "stake_limit")
+    await prevent_overlapping_order(conn, user_id, account, signal, manual=manual)
     sums = await exposure_totals(conn, user_id, policy["daily_timezone"])
     if sums["daily"] + stake > policy["daily_limit"]:
         raise OrderEligibilityError(409, "当日或开放敞口限额不足", "daily_limit")
@@ -258,6 +302,7 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
     selection_code = {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"])
     if not selection_code or current["selection_code"] != selection_code:
         raise HTTPException(409, "推荐方向与原生盘口不匹配")
+    await prevent_overlapping_order(conn, order["user_id"], account, signal, manual=manual, order=order)
     return (account, signal) if include_signal else account
 
 
