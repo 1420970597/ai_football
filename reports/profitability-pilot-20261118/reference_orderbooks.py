@@ -222,8 +222,10 @@ def main():
             or any(not re.fullmatch(r'[a-z0-9-]{1,160}', slug) for slug in args.polymarket + args.polymarket_us)
             or any(not re.fullmatch(r'[A-Z0-9-]{1,160}', ticker) for ticker in args.kalshi)):
         parser.error('provide one to eight distinct public market IDs')
-    if not 1 <= args.samples <= 20 or not 20 <= args.interval_seconds <= 300:
-        parser.error('samples must be 1-20 and interval must be 20-300 seconds')
+    if not 1 <= args.samples <= 240 or not 20 <= args.interval_seconds <= 300:
+        parser.error('samples must be 1-240 and interval must be 20-300 seconds')
+    if (args.samples - 1) * args.interval_seconds > 3 * 60 * 60:
+        parser.error('one capture can span at most three hours')
     if args.replay_kalshi_tickers:
         if args.polymarket or args.polymarket_us or args.samples != 1:
             parser.error('ticker replay only accepts Kalshi market IDs and one input stream')
