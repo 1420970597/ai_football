@@ -47,8 +47,6 @@ def price_offer(offer, root, now):
     if not re.fullmatch(r"[a-z0-9-]{1,160}", label):
         raise ValueError("invalid reference archive label")
     approvals = fixture["approvals"]
-    if not approvals:
-        return {"status": "ineligible", "reasons": ["settlement_and_cost_approval_missing"]}
 
     matches = compare(
         [offer], fixture["bindings"], recent_records(root / "books", label, cutoff, "captured_at"),

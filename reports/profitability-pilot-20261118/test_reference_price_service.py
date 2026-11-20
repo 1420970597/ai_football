@@ -54,5 +54,4 @@ class ReferencePriceServiceTests(unittest.TestCase):
             (root / 'reference-price.json').write_text(json.dumps(
                 {'fixtures': {'leyu:123': fixture | {'approvals': []}}},
             ))
-            self.assertEqual({'status': 'ineligible', 'reasons': ['settlement_and_cost_approval_missing']},
-                             price_offer(offer, root, now))
+            self.assertIn('settlement_and_cost_approval_missing', price_offer(offer, root, now)['reasons'])

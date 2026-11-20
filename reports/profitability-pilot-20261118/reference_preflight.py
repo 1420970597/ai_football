@@ -151,7 +151,18 @@ def match_scores(preflight, binding, records, cutoff, max_age_seconds):
     if not all(type(value) in (str, int) and re.fullmatch(r'[0-9]{1,3}', str(value)) for value in observed):
         return result | {'status': 'reference_score_missing'}
     actual = list(map(int, observed))
-    return result | {'score': actual, 'status': 'observed_score_matches' if actual == wanted else 'score_mismatch'}
+    result |= {'score': actual, 'status': 'observed_score_matches' if actual == wanted else 'score_mismatch'}
+    context = result['event_context']
+    if (actual == wanted and context['red_card_status'] == 'source_counts_match'
+            and context.get('delay_status') != 'delay_unresolved'
+            and context.get('latest_material_event_at')):
+        result['verified_event_state'] = {
+            'period': {1: 'first_half', 2: 'second_half'}[period], 'status': 'playing',
+            'home_score': actual[0], 'away_score': actual[1],
+            'home_red_cards': context['red_cards']['home'], 'away_red_cards': context['red_cards']['away'],
+            'confirmed_at': context['latest_material_event_at'], 'received_at': result['received_at'],
+        }
+    return result
 
 
 def compare_kalshi(sample, milestone, cutoff, max_age_seconds):
@@ -323,6 +334,10 @@ def quote_at(binding, records, cutoff, earliest, outcomes, binary_winner=False):
             if outcomes is not None:
                 orientation = outcomes.get(binding['source'], {}).get(binding['market'])
                 source['outcome_status'] = bind_outcomes(source, orientation, binding['kind'], binary_winner)
+            event = observation.get('event_state')
+            if (isinstance(event, dict) and event.get('fixture_id') == binding['fixture_id']
+                    and event.get('source') == binding['source']):
+                source['verified_event_state'] = event
     return source | {'status': status}
 
 
@@ -422,6 +437,8 @@ def compare(preflights, bindings, archive, max_age_seconds, outcomes=None, adjac
             row['equivalent_full_match_line'] = equivalent
         if score_comparison is not None:
             row['score_comparison'] = score_comparison
+            if 'verified_event_state' in score_comparison:
+                row['verified_offer_event_state'] = score_comparison['verified_event_state']
         if outcomes is not None and not remaining_unverified:
             row['source_groups'] = source_groups(sources, preflight['kind'], binary_winner)
             adjacent = adjacent_groups(contract, by_contract, quote, min(adjacent_skew_seconds, max_age_seconds))

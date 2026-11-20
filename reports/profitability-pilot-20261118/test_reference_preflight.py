@@ -404,9 +404,10 @@ class ReferencePreflightTests(unittest.TestCase):
         def replay(observation):
             row, = compare([preflight], [self.binding], [batch], 30, score_records=[observation],
                            score_bindings={'leyu:123': score_binding})
-            return row['score_comparison']['event_context'], row['references'][0]
+            return row['score_comparison']['event_context'], row['references'][0], row.get('verified_offer_event_state')
 
-        context, reference = replay(sample)
+        context, reference, state = replay(sample)
+        self.assertIsNone(state)
         self.assertEqual('source_counts_match', context['red_card_status'])
         self.assertEqual('delay_unresolved', context['delay_status'])
         self.assertEqual(['start-delay'], context['latest_material_events'])
@@ -418,7 +419,17 @@ class ReferencePreflightTests(unittest.TestCase):
             with self.subTest(patch=patch):
                 self.assertEqual(outcome, replay(sample | patch)[0]['red_card_status'])
         ended = delay | {'id': 'ended', 'type': {'type': 'end-delay'}, 'wallclock': '2026-11-19T12:02:57Z'}
-        self.assertEqual('delay_ended', replay(sample | {'key_events': [card, ended, delay]})[0]['delay_status'])
+        context, reference, state = replay(sample | {'key_events': [card, ended, delay]})
+        self.assertEqual('delay_ended', context['delay_status'])
+        self.assertEqual(('first_half', 1, 0, 0, 1), tuple(state[key] for key in (
+            'period', 'home_score', 'away_score', 'home_red_cards', 'away_red_cards',
+        )))
+        self.assertEqual('2026-11-19T12:02:57+00:00', state['confirmed_at'])
+        self.assertNotIn('verified_event_state', reference)
+        self.market['event_state'] = state | {'source': 'polymarket', 'fixture_id': 'other'}
+        self.assertNotIn('verified_event_state', replay(sample)[1])
+        self.market['event_state']['fixture_id'] = self.binding['fixture_id']
+        self.assertEqual(self.market['event_state'], replay(sample)[1]['verified_event_state'])
 
     def test_replay_retains_complete_rounds_from_interrupted_capture(self):
         first_round = json.dumps({'markets': [self.market], 'captured_at': self.preflight['captured_at']}).encode() + b'\n'
