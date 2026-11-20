@@ -1,0 +1,8 @@
+{
+  "strategy": "independent_price_after_slippage",
+  "registered_at": "2026-11-20T04:30:33Z",
+  "implementation_commit": "195369c25e9b0403953fd464e2cb187afe0a510d",
+  "evaluator_sha256": "644895b4c1e194aea36ce1e1f03e7593e3415d2777ead3ed32577d6d0d7e2253",
+  "start": "2026-11-20T05:00:00Z",
+  "end": "2026-12-18T05:00:00Z"
+}
