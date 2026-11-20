@@ -30,7 +30,8 @@ def main() -> int:
     hashes = {str(p.relative_to(frozen)): hashlib.sha256(p.read_bytes()).hexdigest()
               for p in sorted(frozen.rglob("*")) if p.is_file()}
     os.chdir(frozen)
-    sys.path[:0] = [str(frozen / "services/api"), str(frozen / "services"), str(frozen)]
+    sys.path[:0] = [str(frozen / "services/api"), str(frozen / "services"), str(frozen),
+                    str(frozen / "infra/profitability")]
     # Silence application handlers without disabling per-test log capture.
     # Global disable() also suppresses unittest.assertLogs' own handler.
     logging.disable(logging.NOTSET)

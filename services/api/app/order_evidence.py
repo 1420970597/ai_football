@@ -73,8 +73,10 @@ def stage_document(order, signal, attempt_id, prepared_digest, stage):
         }
     if stage == 'submission_authorized':
         document['preflight_evidence_id'] = str(stage_identity(order['id'], attempt_id, 'preflight_validated'))
-    elif 'native_market_prices' in order['quote_snapshot']:
-        document['native_market_prices'] = order['quote_snapshot']['native_market_prices']
+    else:
+        for key in ('native_market_prices', 'automatic_price_decision'):
+            if key in order['quote_snapshot']:
+                document[key] = order['quote_snapshot'][key]
     encoded = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
     return document | {'content_sha256': hashlib.sha256(encoded.encode()).hexdigest()}
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
+from uuid import UUID
 from urllib.parse import quote
 
 
@@ -55,6 +56,8 @@ class Settings:
     market_refresh_url: str = ""
     quote_policy_projection: bool = False
     hermes_connection_token: str = ""
+    automatic_price_account: UUID | None = None
+    automatic_price_socket: str = "/run/reference-price/pricing.sock"
 
 
 def _secret_bytes(name: str, expected: int) -> bytes:
@@ -74,6 +77,7 @@ def _secret_bytes(name: str, expected: int) -> bytes:
 def load_settings(*, role: str = "api") -> Settings:
     if role not in {"api", "worker", "mcp"}:
         raise ValueError("unknown service configuration role")
+    price_account = _clean(os.environ.get("AUTOMATIC_PRICE_ACCOUNT", "")) if role == "api" else ""
     return Settings(
         database_url=database_url(),
         session_secret=_secret_bytes("APP_SESSION_SECRET", 32) if role == "api" else b"",
@@ -94,4 +98,6 @@ def load_settings(*, role: str = "api") -> Settings:
         market_refresh_url=_clean(os.environ.get("TELEGRAM_CONTROL_URL", "http://collector:8092")).rstrip("/") + "/leyu/refresh",
         quote_policy_projection=role == "mcp",
         hermes_connection_token=_clean(os.environ.get("HERMES_CONNECTION_TOKEN", "")) if role == "api" else "",
+        automatic_price_account=UUID(price_account) if price_account else None,
+        automatic_price_socket=_clean(os.environ.get("AUTOMATIC_PRICE_SOCKET", "/run/reference-price/pricing.sock")),
     )

@@ -18,6 +18,7 @@ import httpx
 
 from services.api.app import account_jobs, database, orders
 from services.api.app.routes import accounts
+from services.api.app import order_price
 from services.api.app.security import decrypt_secret, encrypt_secret, token_hash
 from services.executor.account_protocol import AccountProtocolClient, BET_PATH, AMOUNT_PATH, LATEST_MARKET_PATH, LIMITS_PATH, ORDERS_PATH
 from services.executor.worker import Executor
@@ -989,6 +990,47 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'Over': '1.95', 'Under': '1.85'}, evidence['native_market_prices']['prices'])
         self.assertEqual(Decimal(77) / Decimal(1443), Decimal(evidence['native_market_prices']['overround']))
         self.assertEqual('1.95', evidence['price'])
+
+    async def test_independent_minimum_price_changes_money_authorization(self):
+        account = await self.healthy()
+        self.settings.automatic_price_account = account['id']
+        self.settings.automatic_price_socket = '/run/test-pricing.sock'
+        scenarios = (
+            ({'status': 'price_eligible', 'pricing': {'minimum_odds': '1.95001'}}, 'below_minimum_odds'),
+            ({'status': 'ineligible', 'reasons': ['two_complete_sources_missing']}, 'reference_ineligible'),
+            (httpx.ConnectError('socket down'), 'reference_unavailable'),
+            ({'status': 'price_eligible', 'pricing': {'minimum_odds': '1.94999'}}, 'pass'),
+        )
+        signals = [await self.signal() for _ in scenarios]
+        await self.enable([expert for _, expert, _, _ in signals], daily='20', exposure='20')
+        for (signal, _, _, _), (response, status) in zip(signals, scenarios, strict=True):
+            with self.subTest(status=status):
+                order = await self.reserve(signal)
+                work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+                self.assertEqual(str(order['id']), work['order_id'])
+                self.native_requests.clear()
+                with patch.object(order_price, 'reference_price', AsyncMock(side_effect=[response])) as reference:
+                    await self.executor().order_job(work)
+                socket, offer = reference.await_args.args
+                self.assertEqual('/run/test-pricing.sock', socket)
+                self.assertEqual(('live', 'total', 'over', Decimal('2.5'), Decimal('1.95')),
+                                 (offer['phase'], offer['kind'], offer['selection'],
+                                  Decimal(offer['line']), Decimal(offer['price'])))
+                self.assertEqual({'home': 0, 'away': 0}, offer['score_baseline'])
+                row = await self.pool.fetchrow('SELECT state,reserved_stake FROM v2_bet_orders WHERE id=$1', order['id'])
+                if status == 'pass':
+                    self.assertEqual(('accepted', Decimal('2')), tuple(row))
+                    self.assertEqual(1, sum(request.url.path == BET_PATH for request in self.native_requests))
+                else:
+                    self.assertEqual(('cancelled', Decimal('0')), tuple(row))
+                    self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
+                evidence = await self.pool.fetch(
+                    "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence_kind='order_attempt'",
+                    order['id'],
+                )
+                stages = {row['evidence']['stage']: row['evidence'] for row in evidence}
+                self.assertEqual(status, stages['preflight_validated']['automatic_price_decision']['status'])
+                self.assertEqual(status == 'pass', 'submission_authorized' in stages)
 
     async def test_live_total_requires_known_matching_scores_through_authorization(self):
         await self.healthy()

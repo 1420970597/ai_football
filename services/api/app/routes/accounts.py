@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
 from execution_scope import NATIVE_SELECTION_CODES, native_match_type, native_outcome_codes
 
-from .. import account_jobs as jobs, database, orders, order_evidence
+from .. import account_jobs as jobs, database, orders, order_evidence, order_price
 from ..auth import _limit, audit, require_user, verify_sensitive_session
 from ..membership import has_entitlement
 from ..review_state import authorize
@@ -789,9 +789,25 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 evidence = order_evidence.native_market_prices(snapshot, body.market_prices, execution_price)
                 if evidence is not None:
                     snapshot['native_market_prices'] = evidence
+            if order_price.applies(request.app.state.settings, order):
+                price_decision = await order_price.decision(
+                    request.app.state.settings, signal, execution_price, body.quote_checked_at, datetime.now(timezone.utc),
+                )
+                if (datetime.now(timezone.utc) - body.quote_checked_at).total_seconds() > 15:
+                    price_decision = price_decision | {'status': 'quote_expired'}
+                snapshot['automatic_price_decision'] = price_decision
             order_for_evidence['quote_snapshot'] = snapshot
             await conn.execute("UPDATE v2_bet_orders SET price=$2,quote_snapshot=$3::jsonb WHERE id=$1",order_id,execution_price,snapshot)
             await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'preflight_validated')
+            price_decision = snapshot.get('automatic_price_decision')
+            if price_decision and price_decision['status'] != 'pass':
+                await conn.execute(
+                    "UPDATE v2_bet_orders SET state='cancelled',reserved_stake=0,lease_until=NULL,"
+                    "result_payload=$2,updated_at=now() WHERE id=$1",
+                    order_id, {'reason': price_decision['status']},
+                )
+                await audit(conn,None,'executor','automatic_order_price_skipped','bet_order',str(order_id),details=price_decision)
+                return {'decision': 'skip', 'reason': price_decision['status']}
             await conn.execute("UPDATE v2_bet_orders SET state='submitting',prepared_digest=$2,submitted_at=now(),lease_until=now()+interval '30 seconds',updated_at=now() WHERE id=$1",order_id,body.prepared_digest)
             order_for_evidence['price'] = execution_price
             await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'submission_authorized')

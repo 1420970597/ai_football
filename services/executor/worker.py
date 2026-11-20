@@ -183,6 +183,8 @@ class Executor:
                 if group and prepared.market_prices:
                     authorization["market_prices"] = dict(prepared.market_prices)
                 permit = await self.rpc("POST", f"/orders/{work['order_id']}/authorize", json=authorization)
+                if permit.get("decision") == "skip":
+                    return
                 authorized = True
                 permit["scope"] = AccountScope(**permit["scope"])
                 receipt = await client.submit_once(prepared, SubmissionPermit(**permit))
