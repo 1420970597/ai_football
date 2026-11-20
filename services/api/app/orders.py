@@ -246,12 +246,19 @@ async def prevent_overlapping_order(conn, user_id, account, signal, *, manual, o
                             and None in (scope[-1], prior_scope[-1]))
         if exact and (scope == prior_scope or unknown_baseline):
             raise OrderEligibilityError(409, "本账户已有同场同盘口同方向的订单", "duplicate_economic_order")
-        if final_line is not None and final_line == full_match_handicap_line(prior, sport, prior_scope):
+        prior_final_line = None if final_line is None else full_match_handicap_line(prior, sport, prior_scope)
+        if final_line is not None and final_line == prior_final_line:
             raise OrderEligibilityError(409, "本账户已有同场同方向的等价全场让球订单", "duplicate_economic_order")
-        if (not manual and kind in {"total", "handicap"} and prior["state"] != "settled"
-                and scope == prior_scope and not unknown_baseline and line is not None and other_line is not None
-                and line.is_finite() and other_line.is_finite()
-                and abs(line-other_line) <= (Decimal("0.5") if sport == "football" else Decimal("1"))):
+        if manual or kind not in {"total", "handicap"} or prior["state"] == "settled":
+            continue
+        if final_line is not None and prior_final_line is not None:
+            left, right = final_line, prior_final_line
+        elif scope == prior_scope and not unknown_baseline:
+            left, right = line, other_line
+        else:
+            continue
+        if (left is not None and right is not None and left.is_finite() and right.is_finite()
+                and abs(left - right) <= (Decimal("0.5") if sport == "football" else Decimal("1"))):
             raise OrderEligibilityError(409, "本账户已有同场同方向的相邻盘口订单", "nearby_open_order")
 
 

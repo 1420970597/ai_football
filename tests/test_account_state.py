@@ -729,8 +729,9 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         scheduled, expert, _, first_quote = await self.signal(fixture=fixture)
         same_at_zero, expert_zero = await self.followup_signal(scheduled)
         same_after_goal, expert_goal = await self.followup_signal(scheduled, line='0.25', selection='home')
+        nearby_after_goal, expert_nearby = await self.followup_signal(scheduled, line='0.75', selection='home')
         different_after_goal, expert_other = await self.followup_signal(scheduled, line='-1.25', selection='home')
-        await self.enable([expert, expert_zero, expert_goal, expert_other], daily='12', exposure='12')
+        await self.enable([expert, expert_zero, expert_goal, expert_nearby, expert_other], daily='12', exposure='12')
         await self.pool.execute("UPDATE v2_fixtures SET phase='scheduled' WHERE id=$1", fixture)
         await self.pool.execute(
             "UPDATE v2_expert_signals SET phase='scheduled',selection='home',line=-0.75 WHERE id=$1", scheduled)
@@ -739,7 +740,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             same_at_zero, {'home': 0, 'away': 0})
         await self.pool.execute(
             "UPDATE v2_expert_signals SET score_baseline=$2 WHERE id=ANY($1::uuid[])",
-            [same_after_goal, different_after_goal], {'home': 1, 'away': 0})
+            [same_after_goal, nearby_after_goal, different_after_goal], {'home': 1, 'away': 0})
         await self.pool.execute(
             "UPDATE v2_expert_signals SET market_id='4',market_kind='handicap' WHERE fixture_id=$1", fixture)
         await self.pool.execute(
@@ -758,9 +759,20 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(orders.OrderEligibilityError) as shifted:
             await self.reserve(same_after_goal)
         self.assertEqual('duplicate_economic_order', shifted.exception.reason)
+        with self.assertRaises(orders.OrderEligibilityError) as nearby:
+            await self.reserve(nearby_after_goal)
+        self.assertEqual('nearby_open_order', nearby.exception.reason)
         distinct = await self.reserve(different_after_goal)
         self.assertEqual(different_after_goal, distinct['signal_id'])
         self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+        await self.pool.execute("UPDATE v2_bet_orders SET state='settled',reserved_stake=0 WHERE id=$1", first['id'])
+        later = await self.reserve(nearby_after_goal)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',reserved_stake=stake WHERE id=$1", first['id'])
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                with self.assertRaises(orders.OrderEligibilityError) as recheck:
+                    await orders.recheck_order(connection, later, self.settings)
+        self.assertEqual('nearby_open_order', recheck.exception.reason)
 
     async def test_many_distinct_recommendations_never_exceed_limits_and_stop_is_available(self):
         await self.healthy()
