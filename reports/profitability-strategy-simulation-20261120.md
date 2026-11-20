@@ -64,3 +64,33 @@ bash infra/profitability/capture_paper_slot.sh "$paper_dir" now
 赛果复算接收一组私有分钟归档组成的 JSON 数组，用 Docker 将其从标准输入传入 `infra/profitability/paper_settle.py`，参数为历史 UTC 观察截止。跨次重算保留原归档，每次按截止时可见的最新赛果版本独立计算。
 
 该轮过去 24 小时有 115 条自然建议，其中 50 条没有原生自动受理。使用近 48 小时原生已受理的 25 项历史预检核对纸面结算入口，25 项均复现，含 14 全输、8 全赢、2 半输和 1 半赢。该样本用于验证结算，尚未从前瞻采样看见可验证成交。
+
+## 按盘口隐含胜份额校正专家历史
+
+将同一盘口所有完整选项的赔率倒数归一，作为条件胜份额的参照。对每位专家按运动及赛前或滚球分别计算，只用此前 28 天在决策时已可见的赛果和计算证据，排除当前赛事及已经撤回的推荐。半赢与半输计半份有效本金，每场权重相同。两条固定候选分别要求至少 5 场和 15 场历史，并给盘口基准加 20 场和 40 场先验权重。只有校正后的估计收益超过每单位本金 0.02 的研究压力时才选入。归一赔率可能有系统偏差，当前只用作报价参照。 [盘口预测研究](https://doi.org/10.1016/j.ijforecast.2024.06.013) [盘口加成研究](https://doi.org/10.1080/00036846.2025.2507979)
+
+固定观察从 11 月 9 日至 11 月 20 日 03:00 UTC，11 月 18 日 00:00 UTC 分段，结算快照截至 11 月 20 日 03:55 UTC。早段 1,475 条均未找到可反复使用的完整盘口快照。后段 309 条中有 248 条盘口匹配，基准有 235 条在决策时未被撤回，212 条有可见版本结算。
+
+| 候选 | 后段已结 | 场次 | 压力后报价单位 | 未原生受理样本净额 | 剔除后来撤回后的净额 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 跟随全部有价建议 | 212 | 78 | −25.275 | −3.030 | −25.515 |
+| 按赔率校正专家 | 24 | 16 | −6.790 | −2.250 | −5.770 |
+| 较高样本要求和收缩权重 | 5 | 4 | −1.640 | −1.020 | −1.640 |
+
+两条校正规则的已结样本均为足球。第一条在四个完整 12 小时报价窗内为 3 个负、1 个空，第二条为 1 个负、3 个空。剔除贡献最高玩法后，第一条为 −3.68，第二条无剩余玩法。固定候选均不进入样本外主策略；完整报价覆盖、独立深度、可执行赔率和实际成本仍待验证。
+
+```bash
+umask 077
+trial_dir="$PWD/.runtime/profitability-simulation-20261120"
+experiment=reports/profitability-pilot-20261118/market_adjusted_experts.py
+docker exec -i ai-football-v2-api-1 python - export \
+  2026-11-09T00:00:00Z 2026-11-20T03:00:00Z 2026-11-20T03:55:00Z \
+  < "$experiment" > "$trial_dir/market-adjusted-cohort.json"
+docker run --rm --user "$(id -u):$(id -g)" --network none --cpus .5 --memory 192m \
+  -e PYTHONPATH=/workspace:/workspace/services/api:/workspace/services \
+  -v "$PWD:/workspace:ro" -v "$trial_dir:/trial:ro" \
+  ai-football-verifier:v2.0.0-dev python "/workspace/$experiment" replay \
+  /trial/market-adjusted-cohort.json 2026-11-18T00:00:00Z > "$trial_dir/market-adjusted-results.json"
+```
+
+冻结输入 SHA-256 为 `d8694b74b8cd275d8f6e97af7800102d9a1753f11c60018834e90ae020ef5d80`，汇总为 `40bfd7d5ecf3ec33a623136338873a2c23b3bcab87cfc283ac803c411772bdb7`。21 项 Docker 定向测试通过。
