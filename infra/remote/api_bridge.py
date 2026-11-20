@@ -41,7 +41,8 @@ def permitted(method: str, target: str, authorization: str, tokens: dict[str, st
     allowed_query = allowed_query or (method == 'POST' and parsed.path == '/internal/executor/claim'
                                       and (parsed.query in ('live_capable=false', 'live_capable=false&settled_recheck=true')
                                            or live_orders_enabled is True and parsed.query in (
-                                               'live_capable=true', 'live_capable=true&settled_recheck=true')))
+                                               'live_capable=true', 'live_capable=true&settled_recheck=true',
+                                               'live_capable=true&settled_recheck=true&observe_market_group=true')))
     if parsed.query and not allowed_query:
         return False
     for role, routes in (('collector', COLLECTOR_ROUTES), ('executor', EXECUTOR_ROUTES)):

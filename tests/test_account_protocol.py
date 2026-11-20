@@ -301,6 +301,15 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
                     await self.client.read_market_group((home, away, draw))
         self.assertEqual({LATEST_MARKET_PATH}, {request.url.path for request in self.requests})
 
+    async def test_incomplete_companion_quote_does_not_replace_the_selected_preflight(self):
+        prepared = await self.client.preflight(selection(), Decimal('2'), companion_options={'Under': 'under'})
+        self.assertEqual((), prepared.market_prices)
+        self.assertEqual('1.95', prepared.payload['seriesOrders'][0]['orderDetailList'][0]['oddFinally'])
+        market_requests = [request for request in self.requests if request.url.path == LATEST_MARKET_PATH]
+        request, = market_requests
+        self.assertEqual(['Over', 'Under'], [item['oddsType'] for item in json.loads(request.content)['idList']])
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
     async def test_quote_validity_includes_limits_and_authorization_time(self):
         self.client.live_orders_enabled = True
         clock = SimpleNamespace(monotonic=Mock(side_effect=[100, 111, 115]))

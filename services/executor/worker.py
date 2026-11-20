@@ -23,10 +23,11 @@ log = logging.getLogger("platform.executor")
 
 class Executor:
     def __init__(self, api: httpx.AsyncClient, api_url: str, *, live_orders_enabled=False, client_factory=AccountProtocolClient,
-                 session_factory=AccountSessionManager):
+                 session_factory=AccountSessionManager, observe_market_group=False):
         self.api = api
         self.api_url = api_url.rstrip("/")
         self.live_orders_enabled = live_orders_enabled is True
+        self.observe_market_group = observe_market_group is True
         self.client_factory, self.session_factory = client_factory, session_factory
 
     async def rpc(self, method, path, **kwargs):
@@ -175,10 +176,13 @@ class Executor:
             manager = self.session_factory(scope, work["config"], RenewalHooks(None, None, None))
             async with self.client_factory(scope, manager.venue_session(), live_orders_enabled=True) as client:
                 selected = NativeSelection.from_snapshot(work["selection"])
-                prepared = await client.preflight(selected, Decimal(work["stake"]), device_imei=work["config"]["leyu_app_uuid"])
-                permit = await self.rpc("POST", f"/orders/{work['order_id']}/authorize", json={"attempt_id": work["attempt_id"],
-                                        "prepared_digest": prepared.digest, "payload_json": prepared.payload_json,
-                                        "quote_checked_at": prepared.checked_at})
+                group = {"companion_options": work["companion_options"]} if work.get("companion_options") else {}
+                prepared = await client.preflight(selected, Decimal(work["stake"]), device_imei=work["config"]["leyu_app_uuid"], **group)
+                authorization = {"attempt_id": work["attempt_id"], "prepared_digest": prepared.digest,
+                                 "payload_json": prepared.payload_json, "quote_checked_at": prepared.checked_at}
+                if group and prepared.market_prices:
+                    authorization["market_prices"] = dict(prepared.market_prices)
+                permit = await self.rpc("POST", f"/orders/{work['order_id']}/authorize", json=authorization)
                 authorized = True
                 permit["scope"] = AccountScope(**permit["scope"])
                 receipt = await client.submit_once(prepared, SubmissionPermit(**permit))
@@ -198,8 +202,10 @@ class Executor:
                 if time.monotonic() >= dispatch_at:
                     await self.rpc("POST", "/dispatch")
                     dispatch_at = time.monotonic() + 10
-                work = await self.rpc("POST", "/claim", params={"live_capable": str(self.live_orders_enabled).lower(),
-                                                               "settled_recheck": "true"})
+                claim_params = {"live_capable": str(self.live_orders_enabled).lower(), "settled_recheck": "true"}
+                if self.observe_market_group and self.live_orders_enabled:
+                    claim_params["observe_market_group"] = "true"
+                work = await self.rpc("POST", "/claim", params=claim_params)
                 if work.get("kind") == "account":
                     await self.account_job(work)
                 elif work.get("kind") == "order":
@@ -230,7 +236,8 @@ async def main():
     async with httpx.AsyncClient(timeout=httpx.Timeout(25, connect=3), trust_env=False, follow_redirects=False,
                                  headers={"Authorization": "Bearer " + token}) as api:
         executor = Executor(api, os.environ.get("PLATFORM_EXECUTOR_API", "http://api:8080/internal/executor"),
-                            live_orders_enabled=os.environ.get("EXECUTOR_LIVE_ORDERS_ENABLED", "false").casefold() == "true")
+                            live_orders_enabled=os.environ.get("EXECUTOR_LIVE_ORDERS_ENABLED", "false").casefold() == "true",
+                            observe_market_group=os.environ.get("EXECUTOR_OBSERVE_MARKET_GROUP", "false").casefold() == "true")
         task = asyncio.create_task(executor.run(stop))
         await stop.wait()
         task.cancel()

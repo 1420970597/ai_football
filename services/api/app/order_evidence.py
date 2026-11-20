@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from datetime import timezone
 from decimal import Decimal
+from fractions import Fraction
 import hashlib
 import json
 import uuid
 
 from fastapi import HTTPException
+from execution_scope import native_outcome_codes
 
 STAGES = frozenset({'preflight_validated', 'submission_authorized'})
 NAMESPACE = uuid.UUID('c8b0c1d5-5c51-4b61-a35c-1611ba2819dc')
@@ -18,6 +20,15 @@ def _decimal(value):
     if not number.is_finite():
         raise ValueError('nonfinite order evidence number')
     return format((number if number else Decimal(0)).normalize(), 'f')
+
+
+def native_market_prices(snapshot, prices, selected_price):
+    if (prices.keys() != native_outcome_codes(snapshot['kind'], snapshot['sport_id'])
+            or prices.get(snapshot['selection_code']) != selected_price):
+        return None
+    margin = sum(Fraction(1) / Fraction(price) for price in prices.values()) - 1
+    return {'prices': {code: _decimal(price) for code, price in prices.items()},
+            'overround': str(Decimal(margin.numerator) / Decimal(margin.denominator))}
 
 
 def stage_document(order, signal, attempt_id, prepared_digest, stage):
@@ -62,6 +73,8 @@ def stage_document(order, signal, attempt_id, prepared_digest, stage):
         }
     if stage == 'submission_authorized':
         document['preflight_evidence_id'] = str(stage_identity(order['id'], attempt_id, 'preflight_validated'))
+    elif 'native_market_prices' in order['quote_snapshot']:
+        document['native_market_prices'] = order['quote_snapshot']['native_market_prices']
     encoded = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
     return document | {'content_sha256': hashlib.sha256(encoded.encode()).hexdigest()}
 

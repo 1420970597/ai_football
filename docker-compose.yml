@@ -224,6 +224,7 @@ services:
       PLATFORM_EXECUTOR_API: http://api:8080/internal/executor
       EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
       EXECUTOR_LIVE_ORDERS_ENABLED: ${EXECUTOR_LIVE_ORDERS_ENABLED:-false}
+      EXECUTOR_OBSERVE_MARKET_GROUP: ${EXECUTOR_OBSERVE_MARKET_GROUP:-false}
     configs:
       - source: leyu_app_signing_runtime
         target: /run/secrets/leyu-app-signing.json

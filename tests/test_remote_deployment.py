@@ -196,12 +196,17 @@ class RemoteTransportTests(unittest.TestCase):
     def test_explicit_live_gate_allows_only_authenticated_executor_claim(self):
         path = '/internal/executor/claim?live_capable=true'
         recheck_path = path + '&settled_recheck=true'
+        observe_path = recheck_path + '&observe_market_group=true'
         self.assertEqual(403, self.request('POST', path, token='executor'))
         self.assertEqual(403, self.request('POST', recheck_path, token='executor'))
+        self.assertEqual(403, self.request('POST', observe_path, token='executor'))
         self.assertEqual([], self.upstream.calls)
         self.bridge.live_orders_enabled = True
         self.assertEqual(200, self.request('POST', path, token='executor'))
         self.assertEqual(200, self.request('POST', recheck_path, token='executor'))
+        self.assertEqual(200, self.request('POST', observe_path, token='executor'))
+        self.assertEqual(403, self.request('POST', observe_path, token='collector'))
+        self.assertEqual(403, self.request('POST', observe_path.replace('live_capable=true', 'live_capable=false'), token='executor'))
         self.assertEqual(403, self.request('POST', recheck_path, token='collector'))
         self.assertEqual(403, self.request('POST', path, token='collector'))
         for query in ('live_capable=1', 'live_capable=True', 'live_capable=true&extra=1', 'live_capable=true&live_capable=false'):

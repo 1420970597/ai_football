@@ -11,12 +11,12 @@ import logging
 import re
 import uuid
 from urllib.parse import urlsplit
-from typing import Literal
+from typing import Annotated, Literal
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
-from execution_scope import native_match_type
+from execution_scope import NATIVE_SELECTION_CODES, native_match_type, native_outcome_codes
 
 from .. import account_jobs as jobs, database, orders, order_evidence
 from ..auth import _limit, audit, require_user, verify_sensitive_session
@@ -135,6 +135,7 @@ class AuthorizeInput(AttemptInput):
     prepared_digest: str = Field(pattern="^[a-f0-9]{64}$")
     payload_json: str = Field(min_length=1, max_length=20000)
     quote_checked_at: AwareDatetime
+    market_prices: dict[str, Annotated[Decimal, Field(gt=1, max_digits=12, decimal_places=5)]] | None = Field(default=None, max_length=3)
 
 
 class OrderFinish(AttemptInput):
@@ -415,7 +416,8 @@ async def list_orders(request: Request, limit: int = 30, before: uuid.UUID | Non
 
 
 @executor_router.post("/claim")
-async def claim_work(request: Request, live_capable: bool = False, settled_recheck: bool = False):
+async def claim_work(request: Request, live_capable: bool = False, settled_recheck: bool = False,
+                     observe_market_group: bool = False):
     service_auth(request)
     settings = request.app.state.settings
     async with database.current_pool().acquire() as conn:  # noqa: SIM117
@@ -489,8 +491,31 @@ async def claim_work(request: Request, live_capable: bool = False, settled_reche
                     config = await jobs.private_config(conn, account, settings)
                     attempt = uuid.uuid4()
                     await conn.execute("UPDATE v2_bet_orders SET attempt_id=$2,lease_until=now()+interval '45 seconds',updated_at=now() WHERE id=$1", order["id"], attempt)
-                    return {"kind": "order", "order_id": str(order["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "selection": order["quote_snapshot"], "stake": str(order["stake"])}
+                    work = {"kind": "order", "order_id": str(order["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "selection": order["quote_snapshot"], "stake": str(order["stake"])}
+                    if observe_market_group and not order['manual']:
+                        options = await market_companions(conn, order)
+                        if options:
+                            work['companion_options'] = options
+                    return work
     return {"kind": "idle"}
+
+
+async def market_companions(conn, order):
+    snapshot = order['quote_snapshot']
+    chosen = snapshot['selection_code']
+    expected = native_outcome_codes(snapshot['kind'], snapshot['sport_id'])
+    rows = await conn.fetch(
+        "SELECT q.selection,q.selection_id FROM v2_expert_signals s JOIN v2_current_quotes q "
+        "ON (q.fixture_id,q.market_id,q.market_kind,q.period)=(s.fixture_id,s.market_id,s.market_kind,s.period) "
+        "AND (q.line IS NOT DISTINCT FROM s.line OR s.market_kind='winner' AND COALESCE(q.line,0)=0 AND COALESCE(s.line,0)=0) "
+        "WHERE s.id=$1 AND q.market_instance_id=$2 AND q.play_id=$3 AND q.status='active' "
+        "AND q.selection_id IS NOT NULL LIMIT 4", order['signal_id'], snapshot['market_instance_id'], snapshot['play_id'],
+    )
+    options = {NATIVE_SELECTION_CODES.get(row['selection']): row['selection_id'] for row in rows}
+    if (len(rows) != len(expected) or options.keys() != expected
+            or options.get(chosen) != snapshot['selection_id'] or len(set(options.values())) != len(expected)):
+        return {}
+    return {code: option for code, option in options.items() if code != chosen}
 
 
 @executor_router.post("/dispatch")
@@ -760,6 +785,10 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
             snapshot = dict(order['quote_snapshot'])
             snapshot.update(price=str(execution_price), selection_id=str(detail['playOptionsId']),
                             provider_quote_checked_at=checked_at)
+            if not order['manual'] and body.market_prices is not None:
+                evidence = order_evidence.native_market_prices(snapshot, body.market_prices, execution_price)
+                if evidence is not None:
+                    snapshot['native_market_prices'] = evidence
             order_for_evidence['quote_snapshot'] = snapshot
             await conn.execute("UPDATE v2_bet_orders SET price=$2,quote_snapshot=$3::jsonb WHERE id=$1",order_id,execution_price,snapshot)
             await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'preflight_validated')

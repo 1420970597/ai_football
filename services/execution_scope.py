@@ -5,6 +5,9 @@ E362 and E2781. Periods must be explicit: a quarter is never a full-time bet.
 """
 
 SPORT_IDS = {"football": "1", "basketball": "2"}
+NATIVE_SELECTION_CODES = {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}
+NATIVE_OUTCOMES = {"winner": frozenset({"1", "2", "X"}), "handicap": frozenset({"1", "2"}),
+                   "total": frozenset({"Over", "Under"})}
 BASKETBALL_MARKETS = {
     "37": ("winner", "full_time"),
     "38": ("total", "full_time"),
@@ -14,6 +17,11 @@ BASKETBALL_MARKETS = {
 
 def native_sport_id(sport: str) -> str | None:
     return SPORT_IDS.get(sport)
+
+
+def native_outcome_codes(kind: str, sport_id: str) -> frozenset[str]:
+    codes = NATIVE_OUTCOMES.get(kind, frozenset())
+    return codes - {"X"} if sport_id == SPORT_IDS["basketball"] else codes
 
 
 def native_match_type(phase: str) -> int | None:

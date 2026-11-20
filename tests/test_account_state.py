@@ -67,6 +67,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             await self.pool.execute('INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES($1,$2)',key,encrypt_secret(b'k'*32,value))
         self.native_requests=[]
         self.native_submission='accepted'
+        self.native_companion_price=None
 
     async def asyncTearDown(self):
         self.patch.stop()
@@ -271,9 +272,13 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         if request.url.path==AMOUNT_PATH:
             value={'amount':'100'}
         elif request.url.path==LATEST_MARKET_PATH:
-            query=json.loads(request.content)['idList'][0]
+            queries=json.loads(request.content)['idList']
+            query=queries[0]
             value=[{'id':'market','matchInfoId':query['matchInfoId'],'playId':'2','matchStatus':1,'matchOver':0,'matchHandicapStatus':0,'status':0,'marketValue':'2.5',
                     'marketOddsList':[{'id':'option','oddsType':'Over','oddsStatus':1,'oddsValue':'195000'}]}]
+            if len(queries)==2 and self.native_companion_price is not None:
+                value.append(value[0] | {'marketOddsList': [{'id':'companion','oddsType':'Under','oddsStatus':1,
+                                                             'oddsValue':self.native_companion_price}]})
         elif request.url.path==LIMITS_PATH:
             value=[{'code':0,'playOptionsId':'option','minBet':'1','orderMaxPay':'10'}]
         elif request.url.path==ORDERS_PATH:
@@ -957,6 +962,33 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                               'source_updated_at': None, 'source_time_quality': 'unknown'},
                              item['evidence']['fixture_projection'])
         self.assertEqual(1,sum(request.url.path==BET_PATH for request in calls))
+
+    async def test_automatic_preflight_archives_complete_native_prices_from_one_request(self):
+        await self.healthy()
+        signal, expert, _, quote = await self.signal(fixture='leyu:234569')
+        await self.enable([expert])
+        await self.pool.execute(
+            "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,"
+            "period,market_kind,status,play_id,market_instance_id,selection_id) "
+            "SELECT $2,fixture_id,market_id,market_name,line,'under',1.90,source_updated_at,"
+            "period,market_kind,status,play_id,market_instance_id,'companion' FROM v2_current_quotes WHERE id=$1",
+            quote, uuid.uuid4(),
+        )
+        order = await self.reserve(signal)
+        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true&observe_market_group=true')).json()
+        self.assertEqual({'Under': 'companion'}, work['companion_options'])
+        self.native_companion_price = '185000'
+        await self.executor().order_job(work)
+        requests = [request for request in self.native_requests if request.url.path == LATEST_MARKET_PATH]
+        request, = requests
+        self.assertEqual(['Over', 'Under'], [option['oddsType'] for option in json.loads(request.content)['idList']])
+        self.assertEqual(1, sum(request.url.path == BET_PATH for request in self.native_requests))
+        evidence = await self.pool.fetchval(
+            "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence->>'stage'='preflight_validated'", order['id'],
+        )
+        self.assertEqual({'Over': '1.95', 'Under': '1.85'}, evidence['native_market_prices']['prices'])
+        self.assertEqual(Decimal(77) / Decimal(1443), Decimal(evidence['native_market_prices']['overround']))
+        self.assertEqual('1.95', evidence['price'])
 
     async def test_live_total_requires_known_matching_scores_through_authorization(self):
         await self.healthy()

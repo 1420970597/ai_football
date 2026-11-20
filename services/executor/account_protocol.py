@@ -18,7 +18,7 @@ from uuid import UUID
 import httpx
 
 from services.collector.leyu_protocol import AUTH_CODES, AuthExpired, LeyuError, MAX_RESPONSE_BYTES, ODDS_SCALE, SUCCESS_CODES, decode_envelope, parse_line, timestamp
-from services.execution_scope import native_execution_market_supported, native_match_type
+from services.execution_scope import native_execution_market_supported, native_match_type, native_outcome_codes
 from .account_session import AccountScope, VenueSession
 
 AMOUNT_PATH = "/yewu12/api/user/amount"
@@ -27,8 +27,6 @@ LATEST_MARKET_PATH = "/yewu13/v1/betOrder/client/queryLatestMarketInfo"
 LIMITS_PATH = "/yewu13/v1/betOrder/client/queryMarketMaxMinBetMoney"
 BET_PATH = "/yewu13/v1/betOrder/client/bet"
 QUOTE_VALID_SECONDS = 15
-OUTCOME_CODES = {"winner": frozenset({"1", "2", "X"}), "handicap": frozenset({"1", "2"}),
-                 "total": frozenset({"Over", "Under"})}
 
 log = logging.getLogger("platform.executor.account_protocol")
 REQUEST_OPERATIONS = {
@@ -83,11 +81,6 @@ def _rows(value: Any) -> list[Mapping[str, Any]]:
     return value
 
 
-def outcome_codes(kind: str, sport_id: str) -> frozenset[str]:
-    codes = OUTCOME_CODES[kind]
-    return codes - {"X"} if sport_id == "2" else codes
-
-
 @dataclass(frozen=True)
 class NativeSelection:
     match_id: str
@@ -117,7 +110,7 @@ class NativeSelection:
         if (not native_execution_market_supported(self.sport_id, self.chpid, self.kind, self.period)
                 or self.selection_code not in {"1", "2", "X", "Over", "Under"}):
             raise LeyuError("unsupported_native_selection")
-        if self.selection_code not in outcome_codes(self.kind, self.sport_id):
+        if self.selection_code not in native_outcome_codes(self.kind, self.sport_id):
             raise LeyuError("native_selection_direction_mismatch")
         line = None if self.kind == 'winner' and self.line is None else number(self.line)
         if self.kind == 'winner':
@@ -145,6 +138,7 @@ class PreparedBet:
     digest: str
     expires_monotonic: float
     checked_at: str
+    market_prices: tuple[tuple[str, str], ...] = ()
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -402,7 +396,7 @@ class AccountProtocolClient:
         if not 2 <= len(selections) <= 3:
             raise LeyuError("incomplete_native_market_group")
         reference = selections[0]
-        expected = outcome_codes(reference.kind, reference.sport_id)
+        expected = native_outcome_codes(reference.kind, reference.sport_id)
         key = reference.market_key()
         if (native_match_type(reference.phase) is None or len(selections) != len(expected)
                 or {option.selection_code for option in selections} != expected
@@ -411,6 +405,12 @@ class AccountProtocolClient:
             raise LeyuError("incomplete_native_market_group")
         response = await self._request(LATEST_MARKET_PATH, {"idList": [option.market_request() for option in selections]})
         received = datetime.now(timezone.utc).isoformat()
+        return self.market_group_evidence(reference, response, received)
+
+    @staticmethod
+    def market_group_evidence(reference: NativeSelection, response: Any, received: str) -> dict[str, Any]:
+        expected = native_outcome_codes(reference.kind, reference.sport_id)
+        key = reference.market_key()
         prices: dict[str, Decimal] = {}
         selection_ids: set[str] = set()
         phases = set()
@@ -445,7 +445,8 @@ class AccountProtocolClient:
                 "prices": {code: str(price) for code, price in prices.items()},
                 "overround": str(Decimal(margin.numerator) / Decimal(margin.denominator))}
 
-    async def preflight(self, selection: NativeSelection, stake: Decimal, *, device_imei: str = "") -> PreparedBet:
+    async def preflight(self, selection: NativeSelection, stake: Decimal, *, device_imei: str = "",
+                        companion_options: Mapping[str, str] | None = None) -> PreparedBet:
         match_type = native_match_type(selection.phase)
         if match_type is None:
             raise LeyuError("unsupported_execution_phase")
@@ -453,6 +454,15 @@ class AccountProtocolClient:
         if amount != amount.quantize(Decimal("0.01")):
             raise LeyuError("invalid_account_stake_precision")
         latest_query = {"idList": [selection.market_request()]}
+        if companion_options:
+            expected = native_outcome_codes(selection.kind, selection.sport_id) - {selection.selection_code}
+            ids = (*companion_options.values(), selection.selection_id)
+            if companion_options.keys() != expected or len(ids) != len(set(ids)) or any(
+                    not isinstance(value, str) or not value or len(value) > 160 or "\n" in value or "\r" in value
+                    for value in ids):
+                raise LeyuError("incomplete_native_market_group")
+            latest_query["idList"].extend(selection.market_request() | {"oddsId": option_id, "oddsType": code}
+                                          for code, option_id in sorted(companion_options.items()))
         limit_detail = {"marketId": selection.market_instance_id, "matchId": selection.match_id, "playId": selection.play_id,
                         "playOptionId": selection.selection_id, "oddsValue": str(int(selection.price * ODDS_SCALE)), "matchType": match_type, "deviceType": 3}
         try:
@@ -463,6 +473,9 @@ class AccountProtocolClient:
         checked_at = datetime.now(timezone.utc).isoformat()
         markets = [row for row in _rows(latest) if str(row.get("id")) == selection.market_instance_id
                    and str(row.get("matchInfoId")) == selection.match_id and str(row.get("playId")) == selection.play_id]
+        if companion_options:
+            markets = [row for row in markets if any(str(option.get("oddsType")) == selection.selection_code
+                                                     for option in _rows(row.get("marketOddsList")))]
         if len(markets) != 1:
             raise LeyuError("selected_native_market_not_unique")
         market = markets[0]
@@ -493,6 +506,14 @@ class AccountProtocolClient:
             raise LeyuError("selected_native_quote_changed")
         if line != selection.line:
             raise LeyuError("selected_native_quote_changed")
+        market_prices = ()
+        if companion_options:
+            try:
+                observation = self.market_group_evidence(selection, latest, checked_at)
+            except LeyuError:
+                pass  # The selected option has already passed its normal preflight checks.
+            else:
+                market_prices = tuple(sorted(observation["prices"].items()))
         # The expert's price is informational. Query limits with the current
         # provider price discovered immediately above.
         limit_detail["oddsValue"] = str(int(price * ODDS_SCALE))
@@ -530,7 +551,7 @@ class AccountProtocolClient:
         if len(self._issued_prepared) >= 128:
             raise LeyuError("prepared_order_budget_exceeded")
         self._issued_prepared[digest] = encoded, expires, checked_at
-        return PreparedBet(self.scope, encoded, digest, expires, checked_at)
+        return PreparedBet(self.scope, encoded, digest, expires, checked_at, market_prices)
 
     async def submit_once(self, prepared: PreparedBet, permit: SubmissionPermit) -> dict[str, Any]:
         if not self.live_orders_enabled:
