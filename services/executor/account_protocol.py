@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 import hashlib
 import json
 import logging
@@ -26,6 +27,8 @@ LATEST_MARKET_PATH = "/yewu13/v1/betOrder/client/queryLatestMarketInfo"
 LIMITS_PATH = "/yewu13/v1/betOrder/client/queryMarketMaxMinBetMoney"
 BET_PATH = "/yewu13/v1/betOrder/client/bet"
 QUOTE_VALID_SECONDS = 15
+OUTCOME_CODES = {"winner": frozenset({"1", "2", "X"}), "handicap": frozenset({"1", "2"}),
+                 "total": frozenset({"Over", "Under"})}
 
 log = logging.getLogger("platform.executor.account_protocol")
 REQUEST_OPERATIONS = {
@@ -80,6 +83,11 @@ def _rows(value: Any) -> list[Mapping[str, Any]]:
     return value
 
 
+def outcome_codes(kind: str, sport_id: str) -> frozenset[str]:
+    codes = OUTCOME_CODES[kind]
+    return codes - {"X"} if sport_id == "2" else codes
+
+
 @dataclass(frozen=True)
 class NativeSelection:
     match_id: str
@@ -109,8 +117,7 @@ class NativeSelection:
         if (not native_execution_market_supported(self.sport_id, self.chpid, self.kind, self.period)
                 or self.selection_code not in {"1", "2", "X", "Over", "Under"}):
             raise LeyuError("unsupported_native_selection")
-        allowed = {"winner": {"1", "2", "X"}, "handicap": {"1", "2"}, "total": {"Over", "Under"}}
-        if self.selection_code not in allowed[self.kind] or self.sport_id == "2" and self.selection_code == "X":
+        if self.selection_code not in outcome_codes(self.kind, self.sport_id):
             raise LeyuError("native_selection_direction_mismatch")
         line = None if self.kind == 'winner' and self.line is None else number(self.line)
         if self.kind == 'winner':
@@ -120,6 +127,15 @@ class NativeSelection:
         price = number(self.price, minimum=Decimal("0"))
         object.__setattr__(self, "line", line)
         object.__setattr__(self, "price", price)
+
+    def market_key(self):
+        return (self.match_id, self.market_instance_id, self.play_id, self.chpid,
+                self.sport_id, self.kind, self.period, self.line, self.phase)
+
+    def market_request(self):
+        return {"marketId": self.market_instance_id, "matchInfoId": self.match_id,
+                "oddsId": self.selection_id, "oddsType": self.selection_code, "playId": self.play_id,
+                "chpid": self.chpid, "matchType": native_match_type(self.phase), "sportId": int(self.sport_id)}
 
 
 @dataclass(frozen=True, repr=False)
@@ -381,6 +397,54 @@ class AccountProtocolClient:
                                 "scan_complete": complete and not ambiguous, "ambiguous": ambiguous, "absence_proves_rejection": False}
         return result
 
+    async def read_market_group(self, selections: tuple[NativeSelection, ...]) -> dict[str, Any]:
+        """Read every option using one account request, without preparing an order."""
+        if not 2 <= len(selections) <= 3:
+            raise LeyuError("incomplete_native_market_group")
+        reference = selections[0]
+        expected = outcome_codes(reference.kind, reference.sport_id)
+        key = reference.market_key()
+        if (native_match_type(reference.phase) is None or len(selections) != len(expected)
+                or {option.selection_code for option in selections} != expected
+                or len({option.selection_id for option in selections}) != len(expected)
+                or any(option.market_key() != key for option in selections)):
+            raise LeyuError("incomplete_native_market_group")
+        response = await self._request(LATEST_MARKET_PATH, {"idList": [option.market_request() for option in selections]})
+        received = datetime.now(timezone.utc).isoformat()
+        prices: dict[str, Decimal] = {}
+        selection_ids: set[str] = set()
+        phases = set()
+        expected_phase = "0" if reference.phase == "scheduled" else "1"
+        permitted_phases = {"0", "110"} if reference.phase == "scheduled" else {"1"}
+        for row in _rows(response):
+            phase = str(row.get("matchStatus"))
+            raw_line = row.get("marketValue")
+            line = parse_line(raw_line)
+            line_matches = (raw_line in (None, "") or line == 0) if reference.kind == "winner" else line == reference.line
+            if ((str(row.get("matchInfoId")), str(row.get("id")), str(row.get("playId"))) != key[:3]
+                    or not line_matches or phase not in permitted_phases
+                    or str(row.get("status")) != "0" or str(row.get("matchHandicapStatus")) != "0"
+                    or str(row.get("matchOver", "0")) != "0"):
+                raise LeyuError("native_market_group_changed")
+            phases.add(phase)
+            for option in _rows(row.get("marketOddsList")):
+                code = str(option.get("oddsType"))
+                identifier = str(option.get("id") or "")
+                scaled_price = number(option.get("oddsValue"))
+                if (code not in expected or code in prices or str(option.get("oddsStatus")) not in {"0", "1"}
+                        or not identifier or len(identifier) > 160 or "\n" in identifier or "\r" in identifier
+                        or identifier in selection_ids or scaled_price <= ODDS_SCALE or scaled_price % 1):
+                    raise LeyuError("incomplete_native_market_group")
+                selection_ids.add(identifier)
+                prices[code] = scaled_price / ODDS_SCALE
+        if prices.keys() != expected or len(phases) != 1:
+            raise LeyuError("incomplete_native_market_group")
+        margin = sum(Fraction(1) / Fraction(price) for price in prices.values()) - 1
+        return {"received_at": received, "native_quote_at": None, "match_status": next(iter(phases)),
+                "preflight_phase_matches": phases == {expected_phase},
+                "prices": {code: str(price) for code, price in prices.items()},
+                "overround": str(Decimal(margin.numerator) / Decimal(margin.denominator))}
+
     async def preflight(self, selection: NativeSelection, stake: Decimal, *, device_imei: str = "") -> PreparedBet:
         match_type = native_match_type(selection.phase)
         if match_type is None:
@@ -388,9 +452,7 @@ class AccountProtocolClient:
         amount = number(stake, minimum=Decimal("0.01"))
         if amount != amount.quantize(Decimal("0.01")):
             raise LeyuError("invalid_account_stake_precision")
-        latest_query = {"idList": [{"marketId": selection.market_instance_id, "matchInfoId": selection.match_id,
-                        "oddsId": selection.selection_id, "oddsType": selection.selection_code, "playId": selection.play_id,
-                        "chpid": selection.chpid, "matchType": match_type, "sportId": int(selection.sport_id)}]}
+        latest_query = {"idList": [selection.market_request()]}
         limit_detail = {"marketId": selection.market_instance_id, "matchId": selection.match_id, "playId": selection.play_id,
                         "playOptionId": selection.selection_id, "oddsValue": str(int(selection.price * ODDS_SCALE)), "matchType": match_type, "deviceType": 3}
         try:

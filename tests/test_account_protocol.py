@@ -254,6 +254,53 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
         self.assertEqual(("2.35", "235000"), (detail["oddFinally"], detail["odds"]))
 
+    async def test_one_market_read_returns_both_options_without_authorizing_an_order(self):
+        over = selection(phase="scheduled", line="3.75")
+        under = replace(over, selection_code="Under", selection_id="under")
+        row = latest()[0] | {"matchStatus": 110, "marketValue": "3.5/4"}
+        self.responses[LATEST_MARKET_PATH] = [
+            row | {"marketOddsList": [{"id": identifier, "oddsType": direction, "oddsStatus": 1, "oddsValue": price}]}
+            for identifier, direction, price in (("option", "Over", "183000"), ("under", "Under", "203000"))
+        ]
+        result = await self.client.read_market_group((over, under))
+        self.assertEqual({"Over": "1.83", "Under": "2.03"}, result["prices"])
+        self.assertEqual(Decimal(1451) / Decimal(37149), Decimal(result["overround"]))
+        self.assertEqual("110", result["match_status"])
+        self.assertIsNone(result["native_quote_at"])
+        self.assertFalse(result["preflight_phase_matches"])
+        self.assertEqual([LATEST_MARKET_PATH], [request.url.path for request in self.requests])
+        self.assertEqual(["Over", "Under"],
+                         [item["oddsType"] for item in json.loads(self.requests[0].content)["idList"]])
+        self.assertEqual({}, self.client._issued_prepared)
+
+    async def test_market_group_validates_a_complete_and_consistent_winner_book(self):
+        home = selection(kind="winner", line=None, play_id="1", chpid="1", selection_code="1")
+        away = replace(home, selection_code="2", selection_id="away")
+        draw = replace(home, selection_code="X", selection_id="draw")
+        row = latest()[0] | {"playId": "1", "marketValue": ""}
+        books = [{"id": option.selection_id, "oddsType": option.selection_code, "oddsStatus": 1, "oddsValue": "300000"}
+                 for option in (home, away, draw)]
+        with self.assertRaisesRegex(LeyuError, "incomplete_native_market_group"):
+            await self.client.read_market_group((home, replace(away, play_id="another"), draw))
+        self.assertEqual([], self.requests)
+        self.responses[LATEST_MARKET_PATH] = [row | {"marketOddsList": books}]
+        result = await self.client.read_market_group((home, away, draw))
+        self.assertEqual({"1": "3", "2": "3", "X": "3"}, result["prices"])
+        self.assertEqual("0", result["overround"])
+        self.assertTrue(result["preflight_phase_matches"])
+        for invalid in (row | {"marketOddsList": books[:-1]},
+                        row | {"marketOddsList": books + [books[-1]]},
+                        row | {"marketOddsList": books[:-1] + [books[-1] | {"id": "away"}]},
+                        row | {"marketOddsList": books, "matchStatus": 0},
+                        row | {"marketOddsList": books, "marketValue": "unknown"},
+                        row | {"marketOddsList": books, "id": "other-market"},
+                        row | {"marketOddsList": books, "status": 1}):
+            with self.subTest(invalid=invalid):
+                self.responses[LATEST_MARKET_PATH] = [invalid]
+                with self.assertRaises(LeyuError):
+                    await self.client.read_market_group((home, away, draw))
+        self.assertEqual({LATEST_MARKET_PATH}, {request.url.path for request in self.requests})
+
     async def test_quote_validity_includes_limits_and_authorization_time(self):
         self.client.live_orders_enabled = True
         clock = SimpleNamespace(monotonic=Mock(side_effect=[100, 111, 115]))
