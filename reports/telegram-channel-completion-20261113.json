@@ -1,0 +1,399 @@
+{
+  "stage": "channel_identity_collection_and_bounded_recovery_production_accepted",
+  "initial_source_revision": "611be25caba0caaa8864664c6d66d1234dfe14c1",
+  "source_revision": "80a97e434b8c4276c13871e79882f71848f7936d",
+  "source_sha256": {
+    "services/api/app/routes/telegram.py": "5cef5e99ed28d384d25b8a31b4b28e0bde09253fa671953789adf9309a966a6e",
+    "services/api/app/routes/admin.py": "57795b3b3ebee526d6366fd8455a31bfbdef307978d5d54ec5ffbe50d7040a21",
+    "services/collector/telegram.py": "0c17ce4aaeb1b8254d878a7d054be63351d6b4848aad92519560812d7f433c23",
+    "services/collector/telegram_common.py": "b70178a2a68c61092ad3d3db3d99f8b7977b2a6ab8a94b65b98977ff1abb68a7",
+    "web/app/admin.js": "fdb082687bb8142c4344f330b09d8eb8867e70225529f8c3d40918643e1077b0"
+  },
+  "schema_changes": 0,
+  "migrations_before": 38,
+  "migrations_after": 38,
+  "baseline": {
+    "tests": 14,
+    "failures": 6,
+    "errors": 3,
+    "exit_code": 1
+  },
+  "backend": {
+    "tests": 224,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 33.927
+  },
+  "backend_exit_code": 0,
+  "isolated_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "passed": true,
+        "explicit_trust_writes": 1,
+        "negative_identity_preserved": true,
+        "overflow": false
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "explicit_trust_writes": 1,
+        "negative_identity_preserved": true,
+        "overflow": false
+      }
+    ],
+    "errors": [],
+    "production_mutations": 0
+  },
+  "production_homepage_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "passed": true,
+        "current_recommended_fixtures": 1,
+        "date_navigation_visible": true,
+        "default_all_dates": true,
+        "explicit_date_request": true,
+        "date_reload": true,
+        "production_mutations": 0
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "current_recommended_fixtures": 1,
+        "date_navigation_visible": true,
+        "default_all_dates": true,
+        "explicit_date_request": true,
+        "date_reload": true,
+        "production_mutations": 0
+      }
+    ],
+    "errors": [],
+    "writes": [],
+    "production_mutations": 0
+  },
+  "configuration_repair": {
+    "new_mappings": 2,
+    "revoked_mappings_reenabled": 0,
+    "new_external_sources": 0,
+    "unconfigured_supergroups_not_trusted": 1,
+    "trust_automatically_granted_by_directory": false,
+    "audit_records_created": 2
+  },
+  "production": {
+    "checked_at": "2026-11-13T14:38:20.202690+00:00",
+    "connected": true,
+    "authorized": true,
+    "artifacts": {
+      "services": {
+        "collector": {
+          "image": "sha256:dd6feb990625900247f7170732666bff933524020f20351b55e56e52de1def0a",
+          "command": [
+            "python",
+            "-m",
+            "collector.worker"
+          ],
+          "entrypoint": null,
+          "mem_limit": 536870912,
+          "memswap_limit": 1073741824,
+          "cpus": 0.5
+        },
+        "api": {
+          "image": "sha256:d2e3b742231656dec0d5a19cdbe9a740bfafbce53941f943ec444b7160723359",
+          "command": [
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--workers",
+            "2",
+            "--proxy-headers",
+            "--no-access-log"
+          ],
+          "entrypoint": [],
+          "mem_limit": 805306368,
+          "memswap_limit": 1610612736,
+          "cpus": 0.4
+        },
+        "web": {
+          "image": "sha256:956247d1a4f96adb4bcfc555f2e47347b10d512231fb4e8556521d278d7d187d",
+          "command": [
+            "nginx",
+            "-g",
+            "daemon off;"
+          ],
+          "entrypoint": [
+            "/docker-entrypoint.sh"
+          ],
+          "mem_limit": 134217728,
+          "memswap_limit": 268435456,
+          "cpus": 0.1
+        }
+      },
+      "x-telegram-channel-release": {
+        "source_revision": "80a97e434b8c4276c13871e79882f71848f7936d",
+        "scope": "explicit-broadcast-identity-and-durable-self-peer-recovery",
+        "schema_changes": 0,
+        "existing_automatic_betting_permissions_unchanged": true,
+        "image_source_revisions": {
+          "api": "80a97e434b8c4276c13871e79882f71848f7936d",
+          "collector": "611be25caba0caaa8864664c6d66d1234dfe14c1",
+          "web": "611be25caba0caaa8864664c6d66d1234dfe14c1"
+        },
+        "source_peer_realtime_window_seconds": 300
+      }
+    },
+    "api_healthy": true,
+    "review_worker_and_supervisor_unchanged": true,
+    "source_rows": [
+      {
+        "source_number": 1,
+        "newly_repaired": true,
+        "enabled": true,
+        "events": {
+          "n": 137,
+          "ready": 111,
+          "latest_received": "2026-11-13 14:34:09.384258+00:00",
+          "received_after_release": 137
+        },
+        "backfill_completed": true,
+        "backfill_progressed": true,
+        "review_jobs": [
+          {
+            "state": "unresolved",
+            "last_error": "detection_deadline_exceeded",
+            "n": 51
+          },
+          {
+            "state": "unresolved",
+            "last_error": "historical_backlog_auto_suppressed_by_operator",
+            "n": 60
+          }
+        ],
+        "decision_rows_after_release": 1
+      },
+      {
+        "source_number": 4,
+        "newly_repaired": false,
+        "enabled": true,
+        "events": {
+          "n": 18,
+          "ready": 17,
+          "latest_received": "2026-11-13 12:55:58.691479+00:00",
+          "received_after_release": 0
+        },
+        "backfill_completed": true,
+        "backfill_progressed": true,
+        "review_jobs": [
+          {
+            "state": "failed",
+            "last_error": "source_edited",
+            "n": 5
+          },
+          {
+            "state": "succeeded",
+            "last_error": null,
+            "n": 4
+          },
+          {
+            "state": "unresolved",
+            "last_error": "detection_deadline_exceeded",
+            "n": 4
+          },
+          {
+            "state": "unresolved",
+            "last_error": null,
+            "n": 4
+          }
+        ],
+        "decision_rows_after_release": 0
+      },
+      {
+        "source_number": 9,
+        "newly_repaired": false,
+        "enabled": true,
+        "events": {
+          "n": 59,
+          "ready": 49,
+          "latest_received": "2026-11-13 12:45:28.643646+00:00",
+          "received_after_release": 0
+        },
+        "backfill_completed": true,
+        "backfill_progressed": true,
+        "review_jobs": [
+          {
+            "state": "failed",
+            "last_error": "source_edited",
+            "n": 12
+          },
+          {
+            "state": "succeeded",
+            "last_error": null,
+            "n": 7
+          },
+          {
+            "state": "unresolved",
+            "last_error": "detection_deadline_exceeded",
+            "n": 7
+          },
+          {
+            "state": "unresolved",
+            "last_error": null,
+            "n": 23
+          }
+        ],
+        "decision_rows_after_release": 0
+      },
+      {
+        "source_number": 10,
+        "newly_repaired": true,
+        "enabled": true,
+        "events": {
+          "n": 14,
+          "ready": 14,
+          "latest_received": "2026-11-13 14:36:43.983443+00:00",
+          "received_after_release": 14
+        },
+        "backfill_completed": true,
+        "backfill_progressed": true,
+        "review_jobs": [
+          {
+            "state": "succeeded",
+            "last_error": null,
+            "n": 1
+          },
+          {
+            "state": "unresolved",
+            "last_error": "detection_deadline_exceeded",
+            "n": 5
+          },
+          {
+            "state": "unresolved",
+            "last_error": "historical_backlog_auto_suppressed_by_operator",
+            "n": 6
+          },
+          {
+            "state": "unresolved",
+            "last_error": null,
+            "n": 2
+          }
+        ],
+        "decision_rows_after_release": 1
+      }
+    ],
+    "read_only_probes": {
+      "at": "2026-11-13T14:38:49.024307+00:00",
+      "policy_probes": [
+        {
+          "source_peer": true,
+          "posted_age_seconds": 60,
+          "state": "queued",
+          "review_mode": "real_time",
+          "persisted": false
+        },
+        {
+          "source_peer": true,
+          "posted_age_seconds": 600,
+          "state": "unresolved",
+          "review_mode": "historical_replay",
+          "persisted": false
+        },
+        {
+          "source_peer": false,
+          "posted_age_seconds": 600,
+          "state": "queued",
+          "review_mode": "real_time",
+          "persisted": false
+        }
+      ],
+      "web_asset_prefix": "/assets/v9e2be8f56bf24f88b4dca4d065e2ba6b368ac7b565ddba7526d9d83b0d0f58c4/",
+      "web_admin_normalized_sha256": "fdb082687bb8142c4344f330b09d8eb8867e70225529f8c3d40918643e1077b0",
+      "public_homepage_status": 200,
+      "public_recommended_matches": 1,
+      "deploy_windows": [
+        {
+          "start": "2026-11-13T14:25:19Z",
+          "end": "2026-11-13T14:25:45Z",
+          "detected_jobs": []
+        },
+        {
+          "start": "2026-11-13T14:37:13Z",
+          "end": "2026-11-13T14:37:34Z",
+          "detected_jobs": []
+        }
+      ],
+      "queued_source_peer_history": 0,
+      "read_only": "on",
+      "orders_submitted_by_probe": 0
+    },
+    "source_and_running_module_hashes_verified": true
+  },
+  "historical_admission_incident": {
+    "initial_24h_window_allowed_recovered_history_into_realtime": true,
+    "initial_readback_historical_deadline_failures": 36,
+    "retained_new_source_deadline_failures_at_final_readback": 56,
+    "fix": "Source peer posts older than existing 300-second freshness window stay historical_replay unresolved; personal-author policy unchanged.",
+    "detection_times_reset": false,
+    "old_jobs_replayed": false
+  },
+  "known_limitations": [
+    "Historical unresolved/deadline failures remain; backfill cursor completion is not successful interpretation of every post.",
+    "No claim of global <=20-second recommendation latency: deployment intervals had no newly detected review jobs.",
+    "Other supergroup sources have existing version_content_conflict and Telegram FloodWait; real backoff is retained, not reported as healthy.",
+    "One configured supergroup has no trusted author and remains excluded until a stable speaker is explicitly configured.",
+    "Source event counts include versions and are not unique posts or actionable recommendation counts."
+  ],
+  "orders_submitted_by_probe": 0,
+  "production_synthetic_messages": 0,
+  "commands": [
+    {
+      "command": "sh infra/test/run.sh test_telegram_channel_identity test_telegram_collector test_telegram_recent_recovery test_telegram_directory test_telegram_sources test_telegram_api test_telegram_author_before_album test_telegram_detection_timing test_telegram_profile_batch test_telegram_reconciliation_claims",
+      "exit_code": 0,
+      "working_tree": ".runtime/tg79-channel-identity",
+      "runner": "Docker isolated temporary PostgreSQL"
+    },
+    {
+      "command": "sh .runtime/tg-channel-completion-20261113/build.sh",
+      "exit_code": 0,
+      "limits": "network none, CPU quota 30000/100000, memory 256m; serial role builds"
+    },
+    {
+      "command": "sh .runtime/tg-channel-completion-20261113/deploy.sh",
+      "exit_code": 0
+    },
+    {
+      "command": "sh .runtime/tg-channel-completion-20261113/history-release/deploy.sh",
+      "first_exit_code": 42,
+      "final_exit_code": 0
+    },
+    {
+      "command": "docker exec -i ai-football-v2-api-1 python - < .runtime/tg-channel-completion-20261113/production-readback.py",
+      "exit_code": 0
+    },
+    {
+      "command": "docker exec -i ai-football-v2-api-1 python - < .runtime/tg-channel-completion-20261113/final-api-probes.py",
+      "exit_code": 0
+    }
+  ],
+  "browser_entrypoints": {
+    "isolated": "tests/browser/telegram-channel-identity.mjs",
+    "live_read_only": ".runtime/tg-channel-completion-20261113/live-homepage.mjs",
+    "runner": "Docker Playwright at 1440 and 390 CSS pixels",
+    "exit_codes": [
+      0,
+      0
+    ]
+  },
+  "failure_history": [
+    "Missing guessed read paths: exit 2; subsequently located actual files.",
+    "Private evidence read as non-root denied: exit 1; permissions retained and bounded root reader used.",
+    "New test fixtures expected wrong exception and used service token for admin operation: corrected; original checks rerun.",
+    "Browser selector required explicit submit type; default-submit button verified and same test rerun.",
+    "Legacy Docker build --cpus unsupported: exit 125; equivalent CPU quota used, no resource bypass.",
+    "Read-only API rootfs blocked copying plan; unchanged rootfs, safely serialized stdin plan used.",
+    "Bare asyncpg JSONB codec audit failure: transaction rolled back, mapping counts read back unchanged, codec fixed and repair retried."
+  ]
+}

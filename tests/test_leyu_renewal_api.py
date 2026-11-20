@@ -14,7 +14,7 @@ import httpx
 from services.api.app import database
 from services.api.app.database import apply_migrations
 from services.api.app.routes import renewal
-from services.api.app.security import decrypt_secret
+from services.api.app.security import decrypt_secret, encrypt_secret
 
 
 @unittest.skipUnless(os.environ.get("LEYU_RENEWAL_TEST_DSN"), "需要显式隔离数据库连接，禁止生产默认值")
@@ -51,6 +51,46 @@ class RenewalAPITests(unittest.IsolatedAsyncioTestCase):
 
     async def claim(self, account=None):
         return await self.client.post("/internal/collector/renewal/claim", json={"account_hash": account or self.account, "expected_version": 1})
+
+    async def test_config_revision_and_values_share_atomic_snapshot_during_update(self):
+        await self.pool.execute("INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES('leyu_request_id',$1)", encrypt_secret(b'k'*32, 'old-session'))
+        async with self.pool.acquire() as writer:
+            async with writer.transaction():
+                await writer.execute("UPDATE v2_configuration_revisions SET revision=2 WHERE namespace='leyu'")
+                await writer.execute("UPDATE v2_admin_settings SET encrypted_value=$1 WHERE setting_key='leyu_request_id'", encrypt_secret(b'k'*32, 'new-session'))
+                old = await self.client.get('/internal/collector/renewal/config')
+                self.assertEqual(200, old.status_code, old.text)
+                self.assertEqual({'version': 1, 'items': {'leyu_request_id': 'old-session'}}, old.json())
+        new = await self.client.get('/internal/collector/renewal/config')
+        self.assertEqual(200, new.status_code, new.text)
+        self.assertEqual({'version': 2, 'items': {'leyu_request_id': 'new-session'}}, new.json())
+
+    async def test_config_whitelist_and_revocation_are_immediate_without_cached_credentials(self):
+        for key in ('leyu_request_id', 'hermes_provider_key', 'telegram_session'):
+            await self.pool.execute('INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES($1,$2)', key, encrypt_secret(b'k'*32, key+'-private'))
+        response = await self.client.get('/internal/collector/renewal/config')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual({'leyu_request_id': 'leyu_request_id-private'}, response.json()['items'])
+        async with self.pool.acquire() as writer, writer.transaction():
+            await writer.execute("DELETE FROM v2_admin_settings WHERE setting_key='leyu_request_id'")
+            await writer.execute("UPDATE v2_configuration_revisions SET revision=2 WHERE namespace='leyu'")
+        response = await self.client.get('/internal/collector/renewal/config')
+        self.assertEqual({'version': 2, 'items': {}}, response.json())
+
+    async def test_config_missing_revision_or_bad_ciphertext_fails_closed(self):
+        await self.pool.execute("INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES('leyu_request_id','not-a-valid-ciphertext')")
+        bad = await self.client.get('/internal/collector/renewal/config')
+        self.assertEqual(503, bad.status_code)
+        self.assertNotIn('not-a-valid-ciphertext', bad.text)
+        await self.pool.execute("DELETE FROM v2_configuration_revisions WHERE namespace='leyu'")
+        try:
+            missing = await self.client.get('/internal/collector/renewal/config')
+            self.assertEqual(503, missing.status_code)
+            self.assertNotIn('not-a-valid-ciphertext', missing.text)
+        finally:
+            # This fixture intentionally shares one isolated role/database;
+            # restore its migration seed before the next test begins.
+            await self.pool.execute("INSERT INTO v2_configuration_revisions(namespace,revision) VALUES('leyu',1)")
 
     async def test_claim_persist_encrypted_config_and_finish_idempotent(self):
         response = await self.claim()

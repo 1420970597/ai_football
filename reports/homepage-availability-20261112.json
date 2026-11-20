@@ -1,0 +1,170 @@
+{
+  "status": "passed",
+  "at": "2026-11-12T10:00:47.525644+00:00",
+  "source_revision": "fd8ccf76a8ad21735e1ddf77d38ba5f5453970d8",
+  "api_image": "sha256:a6debc6b0401b2ffbcc2e8ec6283d52f1e89b5eb51438eb2f93a30b82ef79616",
+  "version": "2.0.0-dev-availability.20261112.1",
+  "scope": [
+    "pending homepage availability",
+    "manual eligibility at reservation and final recheck"
+  ],
+  "unchanged": [
+    "automatic five-minute eligibility",
+    "web and nine other service containers",
+    "schema 038",
+    "account permissions and limits"
+  ],
+  "test_result": {
+    "tests": 39,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "test_evidence": ".runtime/test-evidence/2044608/backend-tests.json",
+  "source_and_config": {
+    "status": "passed",
+    "config_changed": [
+      "services.api.image"
+    ],
+    "app_changed": [
+      "app/orders.py",
+      "app/routes/public.py"
+    ],
+    "source_sha256": {
+      "app/orders.py": "0ea974bbb425dff1e50d87b44ac99c06466fd278e8d47f6e9a7d2f67a03332ea",
+      "app/routes/public.py": "f6dd7d2ffee5ff1fd67acbde69bca27bc396a29d2c79e79c5abe5c6f35eb322b"
+    },
+    "isolated_tests": 39,
+    "frozen_test_source_verified": true,
+    "candidate_image": "sha256:a6debc6b0401b2ffbcc2e8ec6283d52f1e89b5eb51438eb2f93a30b82ef79616"
+  },
+  "final_runtime": {
+    "status": "passed",
+    "api_health": "healthy",
+    "other_services_unchanged": 9,
+    "image": "sha256:a6debc6b0401b2ffbcc2e8ec6283d52f1e89b5eb51438eb2f93a30b82ef79616",
+    "restart_count": 0
+  },
+  "candidate_production_read_only": {
+    "at": "2026-11-12T09:54:09.267932+00:00",
+    "read_only": true,
+    "production_writes": 0,
+    "results": [
+      {
+        "sport": "football",
+        "http": 200,
+        "matches": 2,
+        "eligible_signals_verified": 2,
+        "all_matches": 200,
+        "ms": 290
+      },
+      {
+        "sport": "basketball",
+        "http": 200,
+        "matches": 2,
+        "eligible_signals_verified": 9,
+        "all_matches": 200,
+        "ms": 139
+      }
+    ],
+    "existing_pending_age_summary": {
+      "pending": 105,
+      "older_than_order_window": 105
+    }
+  },
+  "final_api": {
+    "status": "passed",
+    "at": "2026-11-12T09:59:31.638121+00:00",
+    "production_writes": 0,
+    "api_checks": [
+      {
+        "entry": "3003",
+        "sport": "football",
+        "http": 200,
+        "matches": 1,
+        "recommendations": 1,
+        "ms": 137
+      },
+      {
+        "entry": "3003",
+        "sport": "basketball",
+        "http": 200,
+        "matches": 2,
+        "recommendations": 9,
+        "ms": 91
+      },
+      {
+        "entry": "public",
+        "sport": "football",
+        "http": 200,
+        "matches": 1,
+        "recommendations": 1,
+        "ms": 80
+      },
+      {
+        "entry": "public",
+        "sport": "basketball",
+        "http": 200,
+        "matches": 2,
+        "recommendations": 9,
+        "ms": 98
+      }
+    ]
+  },
+  "final_browser": {
+    "status": "passed",
+    "results": [
+      {
+        "width": 1440,
+        "sport": "football",
+        "matches": 1,
+        "recommendations": 1,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      },
+      {
+        "width": 1440,
+        "sport": "basketball",
+        "matches": 2,
+        "recommendations": 9,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      },
+      {
+        "width": 390,
+        "sport": "football",
+        "matches": 1,
+        "recommendations": 1,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      },
+      {
+        "width": 390,
+        "sport": "basketball",
+        "matches": 2,
+        "recommendations": 9,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      }
+    ],
+    "real_production_reads": true,
+    "production_writes": 0,
+    "errors": [],
+    "writes": []
+  },
+  "production_writes_by_acceptance": 0,
+  "funded_test_orders": 0,
+  "database_migrations": 0,
+  "failures_preserved": [
+    "runner not executable:126; same script through sh passed",
+    "protected evidence directory nonroot read denied:2; offline verifier user0 passed; business user unchanged",
+    "final overlay ordering restored old API temporarily; fail-fast command sequencing and last fixed api.yml corrected; complete runtime/API/browser rechecks passed",
+    "optional volumes comparison KeyError:1; optional-key comparison passed"
+  ],
+  "rollback_api": "sha256:7dd693d6eb5fe41a4a045379d8fa34ea28204a4ab37d405edfabd193fba6e369",
+  "limitations": [
+    "production order execution not tested with real funds",
+    "counts depend on current fixtures and markets",
+    "platform remains development candidate"
+  ]
+}

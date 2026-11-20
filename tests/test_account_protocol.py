@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import gzip
 import json
+from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 import uuid
 
 import httpx
@@ -17,6 +18,7 @@ from services.executor.account_protocol import (
     AMOUNT_PATH, ORDERS_PATH, LATEST_MARKET_PATH, LIMITS_PATH, BET_PATH, normalize_order, order_page,
 )
 from services.executor.account_session import AccountScope, AccountSessionManager, RenewalHooks, VenueSession
+from services.executor.worker import Executor
 
 
 def scope(revision=1):
@@ -140,21 +142,99 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
     async def prepare(self):
         return await self.client.preflight(selection(), Decimal("2"), device_imei="user-device")
 
+    async def test_transport_failure_logs_operation_without_request_contents(self):
+        self.responses[AMOUNT_PATH] = httpx.ConnectTimeout('private timeout context')
+        with self.assertLogs('platform.executor.account_protocol', level='WARNING') as logs:
+            with self.assertRaisesRegex(LeyuError, '^account_transport_failure$'):
+                await self.client.balance()
+        self.assertEqual([
+            'WARNING:platform.executor.account_protocol:account transport failure operation=balance error_type=ConnectTimeout',
+        ], logs.output)
+        self.assertEqual(1, len(self.requests))
+
+    async def test_balance_connection_retry_recovers_once(self):
+        def balance(_):
+            if len(self.requests) == 1:
+                raise httpx.ConnectTimeout('private timeout context')
+            return {'amount': '37.50'}
+
+        self.responses[AMOUNT_PATH] = balance
+        with self.assertLogs('platform.executor.account_protocol', level='INFO') as logs:
+            result = await self.client.balance(retry_connect_timeout=True)
+        self.assertEqual('37.50', result['available'])
+        self.assertEqual([AMOUNT_PATH, AMOUNT_PATH], [request.url.path for request in self.requests])
+        self.assertTrue(logs.output[-1].endswith('account balance recovered after connect timeout'))
+
+    async def test_balance_connection_retry_stops_on_second_failure(self):
+        self.responses[AMOUNT_PATH] = httpx.ConnectTimeout('private timeout context')
+        with self.assertLogs('platform.executor.account_protocol', level='WARNING') as logs:
+            with self.assertRaisesRegex(LeyuError, '^account_transport_failure$'):
+                await self.client.balance(retry_connect_timeout=True)
+        self.assertEqual(2, len(self.requests))
+        self.assertEqual(2, len(logs.output))
+
+    async def test_account_worker_identifies_initial_balance_transport_failure(self):
+        self.responses[AMOUNT_PATH] = httpx.ReadTimeout('private timeout context')
+        executor = Executor(None, 'https://isolated.invalid', client_factory=lambda *_: self.client)
+        with patch.object(executor, 'manager', return_value=SimpleNamespace(scope=self.owner, venue_session=lambda: self.session)), \
+                patch.object(executor, 'finish', new_callable=AsyncMock) as finish, \
+                self.assertLogs('platform.executor', level='WARNING') as logs:
+            await executor.account_job({'job_id': 'job', 'attempt_id': 'attempt',
+                                        'config': {'leyu_request_id': 'private', 'leyu_api_base': 'https://isolated.invalid'}})
+        self.assertTrue(any(line.endswith('stage=initial_balance') for line in logs.output))
+        self.assertFalse(any('private' in line for line in logs.output))
+        self.assertEqual(1, len(self.requests))
+        finish.assert_awaited_once_with('/jobs/job/finish', {
+            'attempt_id': 'attempt', 'status': 'failed', 'category': 'account_transport_failure', 'provider_code': '',
+        })
+
+    async def test_account_worker_reuses_one_client_for_balance_and_history(self):
+        factory = Mock(return_value=self.client)
+        executor = Executor(None, 'https://isolated.invalid', client_factory=factory)
+        manager = SimpleNamespace(scope=self.owner, venue_session=lambda: self.session)
+        with patch.object(executor, 'manager', return_value=manager), \
+                patch.object(executor, 'finish', new_callable=AsyncMock) as finish:
+            await executor.account_job({'job_id': 'job', 'attempt_id': 'attempt',
+                                        'config': {'leyu_request_id': 'session', 'leyu_api_base': 'https://isolated.invalid'},
+                                        'orders': [{'id': 'order', 'provider_order_no': 'missing-order',
+                                                    'created_at': '2026-11-18T11:00:00Z'}]})
+        factory.assert_called_once_with(self.owner, self.session)
+        self.assertEqual([AMOUNT_PATH, ORDERS_PATH, ORDERS_PATH, AMOUNT_PATH],
+                         [request.url.path for request in self.requests])
+        self.assertTrue(self.client.http.is_closed)
+        self.assertEqual('success', finish.await_args.args[1]['status'])
+
+    async def test_account_worker_does_not_report_balance_when_client_close_fails(self):
+        executor = Executor(None, 'https://isolated.invalid', client_factory=lambda *_: self.client)
+        manager = SimpleNamespace(scope=self.owner, venue_session=lambda: self.session)
+        with patch.object(self.client, 'aclose', side_effect=RuntimeError), \
+                patch.object(executor, 'manager', return_value=manager), \
+                patch.object(executor, 'finish', new_callable=AsyncMock) as finish:
+            await executor.account_job({'job_id': 'job', 'attempt_id': 'attempt',
+                                        'config': {'leyu_request_id': 'session', 'leyu_api_base': 'https://isolated.invalid'}})
+        finish.assert_awaited_once_with('/jobs/job/finish', {
+            'attempt_id': 'attempt', 'status': 'failed', 'category': 'RuntimeError', 'provider_code': '',
+        })
+
     def permit(self, prepared, **changes):
         return SubmissionPermit(**{"scope": self.owner, "execution_id": str(uuid.uuid4()), "prepared_digest": prepared.digest, **changes})
 
     async def test_balance_plain_and_wrapped_zero_distinguished_from_missing(self):
-        self.assertEqual("111.86", (await self.client.balance())["available"])
+        balance = await self.client.balance()
+        self.assertEqual("111.86", balance["available"])
+        self.assertIsNone(balance["currency"])
         self.responses[AMOUNT_PATH] = {"code": "0", "data": {"amount": "0"}}
-        self.assertEqual("0", (await self.client.balance())["available"])
+        balance = await self.client.balance()
+        self.assertEqual("0", balance["available"])
+        self.assertIsNone(balance["currency"])
         for invalid in ({}, {"amount": "NaN"}, {"amount": -1}, {"amount": "2", "balance": "3"}):
             self.responses[AMOUNT_PATH] = invalid
             with self.assertRaises(LeyuError):
                 await self.client.balance()
 
-    async def test_preflight_three_reads_concurrent_exact_native_request(self):
+    async def test_preflight_reads_current_price_before_limits_and_submission(self):
         prepared = await self.prepare()
-        self.assertEqual(3, self.peak)
+        self.assertEqual(2, self.peak)
         self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
         detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
         self.assertEqual(("2.00", "1.95", "195000", "2.5", "1:0"),
@@ -166,6 +246,97 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         altered = prepared.payload
         altered["seriesOrders"].clear()
         self.assertEqual(1, len(prepared.payload["seriesOrders"]))
+
+    async def test_expert_price_is_not_a_price_lock(self):
+        self.responses[LATEST_MARKET_PATH] = latest()
+        self.responses[LATEST_MARKET_PATH][0]["marketOddsList"][0]["oddsValue"] = "235000"
+        prepared = await self.prepare()
+        detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
+        self.assertEqual(("2.35", "235000"), (detail["oddFinally"], detail["odds"]))
+
+    async def test_one_market_read_returns_both_options_without_authorizing_an_order(self):
+        over = selection(phase="scheduled", line="3.75")
+        under = replace(over, selection_code="Under", selection_id="under")
+        row = latest()[0] | {"matchStatus": 110, "marketValue": "3.5/4"}
+        self.responses[LATEST_MARKET_PATH] = [
+            row | {"marketOddsList": [{"id": identifier, "oddsType": direction, "oddsStatus": 1, "oddsValue": price}]}
+            for identifier, direction, price in (("option", "Over", "183000"), ("under", "Under", "203000"))
+        ]
+        result = await self.client.read_market_group((over, under))
+        self.assertEqual({"Over": "1.83", "Under": "2.03"}, result["prices"])
+        self.assertEqual(Decimal(1451) / Decimal(37149), Decimal(result["overround"]))
+        self.assertEqual("110", result["match_status"])
+        self.assertIsNone(result["native_quote_at"])
+        self.assertFalse(result["preflight_phase_matches"])
+        self.assertEqual([LATEST_MARKET_PATH], [request.url.path for request in self.requests])
+        self.assertEqual(["Over", "Under"],
+                         [item["oddsType"] for item in json.loads(self.requests[0].content)["idList"]])
+        self.assertEqual({}, self.client._issued_prepared)
+
+    async def test_market_group_validates_a_complete_and_consistent_winner_book(self):
+        home = selection(kind="winner", line=None, play_id="1", chpid="1", selection_code="1")
+        away = replace(home, selection_code="2", selection_id="away")
+        draw = replace(home, selection_code="X", selection_id="draw")
+        row = latest()[0] | {"playId": "1", "marketValue": ""}
+        books = [{"id": option.selection_id, "oddsType": option.selection_code, "oddsStatus": 1, "oddsValue": "300000"}
+                 for option in (home, away, draw)]
+        with self.assertRaisesRegex(LeyuError, "incomplete_native_market_group"):
+            await self.client.read_market_group((home, replace(away, play_id="another"), draw))
+        self.assertEqual([], self.requests)
+        self.responses[LATEST_MARKET_PATH] = [row | {"marketOddsList": books}]
+        result = await self.client.read_market_group((home, away, draw))
+        self.assertEqual({"1": "3", "2": "3", "X": "3"}, result["prices"])
+        self.assertEqual("0", result["overround"])
+        self.assertTrue(result["preflight_phase_matches"])
+        for invalid in (row | {"marketOddsList": books[:-1]},
+                        row | {"marketOddsList": books + [books[-1]]},
+                        row | {"marketOddsList": books[:-1] + [books[-1] | {"id": "away"}]},
+                        row | {"marketOddsList": books, "matchStatus": 0},
+                        row | {"marketOddsList": books, "marketValue": "unknown"},
+                        row | {"marketOddsList": books, "id": "other-market"},
+                        row | {"marketOddsList": books, "status": 1}):
+            with self.subTest(invalid=invalid):
+                self.responses[LATEST_MARKET_PATH] = [invalid]
+                with self.assertRaises(LeyuError):
+                    await self.client.read_market_group((home, away, draw))
+        self.assertEqual({LATEST_MARKET_PATH}, {request.url.path for request in self.requests})
+
+    async def test_incomplete_companion_quote_does_not_replace_the_selected_preflight(self):
+        prepared = await self.client.preflight(selection(), Decimal('2'), companion_options={'Under': 'under'})
+        self.assertEqual((), prepared.market_prices)
+        self.assertEqual('1.95', prepared.payload['seriesOrders'][0]['orderDetailList'][0]['oddFinally'])
+        market_requests = [request for request in self.requests if request.url.path == LATEST_MARKET_PATH]
+        request, = market_requests
+        self.assertEqual(['Over', 'Under'], [item['oddsType'] for item in json.loads(request.content)['idList']])
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
+    async def test_quote_validity_includes_limits_and_authorization_time(self):
+        self.client.live_orders_enabled = True
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[100, 111, 115]))
+        with patch('services.executor.account_protocol.time', clock):
+            prepared = await self.prepare()
+            self.assertEqual(115, prepared.expires_monotonic)
+            with self.assertRaisesRegex(LeyuError, 'execution_permit_invalid_or_expired'):
+                await self.client.submit_once(prepared, self.permit(prepared))
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
+    async def test_quote_expired_during_preflight_is_never_issued(self):
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[100, 115]))
+        with patch('services.executor.account_protocol.time', clock):
+            with self.assertRaisesRegex(LeyuError, 'account_quote_expired'):
+                await self.prepare()
+        self.assertEqual({}, self.client._issued_prepared)
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
+    async def test_live_option_id_rotation_uses_current_option_for_limits_and_order(self):
+        self.responses[LATEST_MARKET_PATH] = latest()
+        self.responses[LATEST_MARKET_PATH][0]["marketOddsList"][0]["id"] = "option-current"
+        self.responses[LIMITS_PATH] = [{"code": 0, "playOptionsId": "option-current", "minBet": "1", "orderMaxPay": "10"}]
+        prepared = await self.prepare()
+        detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
+        self.assertEqual("option-current", detail["playOptionsId"])
+        request = next(request for request in self.requests if request.url.path == LIMITS_PATH)
+        self.assertEqual("option-current", json.loads(request.content)["orderMaxBetMoney"][0]["playOptionId"])
 
     async def test_changed_native_identity_quote_state_direction_and_limits_rejected(self):
         cases = [(LATEST_MARKET_PATH, "id", "other"), (LATEST_MARKET_PATH, "matchInfoId", "other"),
@@ -179,16 +350,16 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
             self.responses[path][0][key] = value
             with self.subTest(key=key, value=value), self.assertRaises(LeyuError):
                 await self.prepare()
-        for key, value in (("id", "other"), ("oddsType", "Under"), ("oddsStatus", 3), ("oddsValue", "195001")):
+        for key, value in (("oddsType", "Under"), ("oddsStatus", 3)):
             self.responses[LATEST_MARKET_PATH], self.responses[LIMITS_PATH] = latest(), limits()
             self.responses[LATEST_MARKET_PATH][0]["marketOddsList"][0][key] = value
             with self.subTest(option=key), self.assertRaises(LeyuError):
                 await self.prepare()
         self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
 
-    async def test_prematch_and_invalid_stake_never_guess_or_request(self):
-        for stage in ("scheduled", "finished", "unknown"):
-            with self.assertRaisesRegex(LeyuError, "prematch_execution_protocol_unverified"):
+    async def test_unsupported_phase_and_invalid_stake_never_guess_or_request(self):
+        for stage in ("finished", "cancelled", "unknown"):
+            with self.assertRaisesRegex(LeyuError, "unsupported_execution_phase"):
                 await self.client.preflight(selection(phase=stage), Decimal("2"))
         for stake in (Decimal("0"), Decimal("-1"), Decimal("NaN"), Decimal("1.001")):
             with self.assertRaises(LeyuError):
@@ -251,6 +422,7 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
                  ({"code": 0, "data": {"orderDetailRespList": [{"orderStatusCode": 1}]}}, SubmissionUnknown),
                  ({"code": 0, "data": {"orderDetailRespList": [{"orderStatusCode": 9, "orderNo": "O"}]}}, SubmissionUnknown),
                  ({"code": None}, SubmissionUnknown), ({"code": True}, SubmissionUnknown),
+                 (httpx.Response(401, json={"code": "0401013", "msg": "private-session"}), SubmissionUnknown),
                  (httpx.Response(403, text="private-refusal-body"), SubmissionUnknown),
                  (httpx.Response(200, text="private-invalid-json"), SubmissionUnknown)]
         for response, error in cases:
@@ -267,6 +439,35 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AuthExpired):
             await self.client.balance()
         self.assertEqual(1, len(self.requests))
+
+    async def test_http_auth_code_identifies_expiry_without_retrying_the_read(self):
+        for status in (401, 403):
+            for code in ("0401013", "0401014"):
+                with self.subTest(status=status, code=code):
+                    before = len(self.requests)
+                    self.responses[AMOUNT_PATH] = httpx.Response(status, json={"code": code, "msg": "private-session"})
+                    with self.assertRaises(AuthExpired) as caught:
+                        await self.client.balance()
+                    self.assertEqual(("session_expired", code), (caught.exception.category, caught.exception.code))
+                    self.assertNotIn("private-session", str(caught.exception))
+                    self.assertEqual(before + 1, len(self.requests))
+                    self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
+    async def test_http_status_without_explicit_expiry_never_authorizes_renewal(self):
+        cases = [(401, {}), (401, {"code": "0401015"}), (403, {"code": "0401015"}),
+                 (429, {"code": "0401013"}), (503, {"code": "0401013"}), (401, ["0401013"])]
+        for status, body in cases:
+            with self.subTest(status=status, body=body):
+                self.responses[AMOUNT_PATH] = httpx.Response(status, json=body)
+                with self.assertRaises(LeyuError) as caught:
+                    await self.client.balance()
+                self.assertNotIsInstance(caught.exception, AuthExpired)
+                self.assertEqual(("account_http_rejected", str(status)), (caught.exception.category, caught.exception.code))
+        self.responses[AMOUNT_PATH] = httpx.Response(401, text="private-invalid-json")
+        with self.assertRaises(LeyuError) as caught:
+            await self.client.balance()
+        self.assertNotIsInstance(caught.exception, AuthExpired)
+        self.assertNotIn("private-invalid-json", str(caught.exception))
 
     async def test_compressed_order_page_has_explicit_window_and_no_fake_pnl(self):
         data = {"total": 1, "records": [{"day": "2026-10-20", "data": [
@@ -311,6 +512,26 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["scan_complete"])
         self.assertFalse(result["absence_proves_rejection"])
 
+    async def test_lookup_many_reads_pages_once_and_keeps_conflicts_order_scoped(self):
+        def records(request):
+            settled=json.loads(request.content)['orderStatus']==1
+            return {'total':3 if settled else 0,'records':[
+                {'orderNo':'FIRST','profitAmount':'1.90'},
+                {'orderNo':'OTHER','profitAmount':'1'},
+                {'orderNo':'OTHER','profitAmount':'-1'},
+            ] if settled else []}
+        self.responses[ORDERS_PATH]=records
+        result=await self.client.lookup_many(['FIRST','OTHER'],begin=self.begin,end=self.end,max_pages=2)
+        self.assertEqual(2,len(self.requests))
+        self.assertTrue(result['FIRST']['found'])
+        self.assertEqual('1.90',result['FIRST']['receipt']['net_profit'])
+        self.assertTrue(result['OTHER']['ambiguous'])
+        self.assertFalse(result['OTHER']['found'])
+        self.assertFalse(result['OTHER']['absence_proves_rejection'])
+        for order_nos in ([],['FIRST','FIRST'],['A','B','C'],['']):
+            with self.subTest(order_nos=order_nos),self.assertRaises(LeyuError):
+                await self.client.lookup_many(order_nos,begin=self.begin,end=self.end)
+
     async def test_conflicting_target_receipts_never_selected_as_authoritative(self):
         self.responses[ORDERS_PATH] = {"total": 2, "records": [
             {"orderNo": "TARGET", "profitAmount": "1"}, {"orderNo": "TARGET", "profitAmount": "-1"}]}
@@ -322,11 +543,28 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OrderNormalizationTests(unittest.TestCase):
+    def test_official_decimal_price_and_currency_remain_evidence_based(self):
+        row = normalize_order({'orderNo':'O','oddFinally':'1.975','odds':'197500','currencyCode':'CNY'}, 'settled')
+        self.assertEqual(('1.975','CNY'), (row['price'],row['currency']))
+        for payload in ({'odds':'197500'}, {'oddFinally':'1'}, {'oddFinally':'NaN'}):
+            self.assertIsNone(normalize_order({'orderNo':'O',**payload},'settled')['price'])
+        self.assertIsNone(normalize_order({'orderNo':'O','currency':'untrusted'},'settled')['currency'])
+
     def test_invalid_and_unknown_profit_never_become_zero(self):
         for row in ({"orderNo": "O", "winAmount": "3", "betAmount": "2"}, {"orderNo": "O", "profitAmount": "NaN", "betAmount": "2", "backAmount": "4"}):
             self.assertIsNone(normalize_order(row, "settled")["net_profit"])
         self.assertEqual("0", normalize_order({"orderNo": "O", "profitAmount": 0}, "settled")["net_profit"])
         self.assertIsNone(normalize_order({"orderNo": "O"}, "settled")["settled_at"])
+
+    def test_settlement_codes_preserve_zero_and_only_native_numeric_fields(self):
+        row = {"orderNo": "O", "orderStatus": "4", "detailList": [
+            {"betResult": 0, "betStatus": "5", "cancelType": "41", "settleType": 7},
+        ]}
+        self.assertEqual({"betResult": 0, "betStatus": 5, "orderStatus": 4, "cancelType": 41},
+                         normalize_order(row, "settled")["provider_settlement_codes"])
+        self.assertNotIn("provider_settlement_codes", normalize_order(row, "unsettled"))
+        invalid = {"orderNo": "O", "betResult": True, "betStatus": "-1", "orderStatus": 4.0, "cancelType": "10000"}
+        self.assertNotIn("provider_settlement_codes", normalize_order(invalid, "settled"))
 
     def test_duplicate_missing_and_malformed_records_are_explicit(self):
         result = order_page({"total": 4, "records": [{"orderNo": "O"}, {"orderNo": "O"}, {}, "invalid"]}, "settled", 1, 100)
@@ -335,7 +573,7 @@ class OrderNormalizationTests(unittest.TestCase):
         self.assertFalse(result["absence_proves_rejection"])
 
     def test_invalid_native_price_and_direction_rejected(self):
-        for changes in ({"price": Decimal("NaN")}, {"price": Decimal("1.950001")}, {"selection_code": "1"}, {"selection_id": ""}):
+        for changes in ({"price": Decimal("NaN")}, {"price": Decimal("-0.01")}, {"selection_code": "1"}, {"selection_id": ""}):
             with self.assertRaises(LeyuError):
                 selection(**changes)
 

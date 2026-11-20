@@ -1,0 +1,64 @@
+{
+  "schema": "safe-unified-visual-intent-candidate-v1",
+  "source_commit": "875028c27be043f469d05624f9a02987306dde70",
+  "validation_stage": "isolated_and_original_image_review_passed",
+  "full_suite": {
+    "source_parent_commit": "875028c27be043f469d05624f9a02987306dde70",
+    "committed_source_verified": true,
+    "tests": 1935,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1338.168
+  },
+  "fixed_framework_native_exit_code": 0,
+  "actual_original_image_replays": 9,
+  "all_nine_full_final_texts_primary_manually_reviewed": true,
+  "all_nine_actual_final_transactions_verified": true,
+  "replay_production_writes": 0,
+  "replay_signals": 0,
+  "replay_orders": 0,
+  "semantic_evidence": "visual-intent-original-nine-20261108.json",
+  "images": {
+    "api": {
+      "image_name": "ai-football-api:2.0.0-dev-e1585-875028c",
+      "image_id": "sha256:429535156f61867f74b9fc4728b1d54e5721e67a73fd6d6a95f2ff14e124f435",
+      "python_version": "3.12.15",
+      "installed_package_count": 37,
+      "installed_dependency_snapshot_sha256": "c8ea0399f0a3b2b45f19741c1ae28a1204194b5420a91b14634ccd7f67ad99d1",
+      "source_content_verification": {
+        "source_commit": "875028c27be043f469d05624f9a02987306dde70",
+        "component": "api",
+        "exact_service_files": 108,
+        "requirements_exact": true,
+        "shared_contract_sha256": "83939e29bd9ecbb8a8c08456a614885fbdfc810f99df591f67f3d761426d9575"
+      }
+    },
+    "hermes-mcp": {
+      "image_name": "ai-football-hermes-mcp:2.0.0-dev-e1585-875028c",
+      "image_id": "sha256:27ad200d784f3552d2918439610eb3a7fa59e7505897e1b72113875546ed3c58",
+      "python_version": "3.12.15",
+      "installed_package_count": 32,
+      "installed_dependency_snapshot_sha256": "0f7c5a640a75a0ba469ba0825eaaa2efb4ae9a3d07d9009d6fa704a93224ce81",
+      "source_content_verification": {
+        "server_and_requirements_exact": true,
+        "server_sha256": "3ea69179cb499e5ef6cfe2d19459a7665147e9faac234e353659bfd07312d8da"
+      }
+    }
+  },
+  "effective_compose_precheck": {
+    "only_api_worker_mcp_images_and_hermes_skill_mount_change": true,
+    "model_config_runner_context_identical": true,
+    "other_effective_configuration_unchanged": true,
+    "rollback_from_actual_configuration": true
+  },
+  "not_a_release_completion_claim": true,
+  "not_a_positive_natural_recommendation_claim": true,
+  "three_second_target_passed": false,
+  "provider_configuration_modified": false,
+  "remaining_efficiency_gaps": [
+    "Some cases still repeat a complete zero-inventory read.",
+    "e1580 preserves original split line but adds a mathematically correct 1.25 magnitude despite the instruction to omit conversion prose."
+  ],
+  "previous_failed_frozen_candidates_retained": true
+}

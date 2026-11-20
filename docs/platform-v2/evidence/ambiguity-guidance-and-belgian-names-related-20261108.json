@@ -1,0 +1,136 @@
+{
+  "schema": "safe-verification-evidence-v1",
+  "recorded_at_utc": "2026-11-08T16:03:18.088670+00:00",
+  "stage": "isolated related validation; clean final full and repeated real model acceptance pending",
+  "ambiguity_contract_before": {
+    "tests": 4,
+    "seconds": 4.335,
+    "native_exit": 1,
+    "result": "FAILED (errors=4)"
+  },
+  "ambiguity_prompt_before": {
+    "tests": 2,
+    "seconds": 0.007,
+    "native_exit": 1,
+    "result": "FAILED (failures=2)"
+  },
+  "ambiguity_related_after": {
+    "tests": 58,
+    "seconds": 52.192,
+    "native_exit": 0,
+    "result": "OK"
+  },
+  "regional_names_before": {
+    "tests": 3,
+    "seconds": 4.508,
+    "native_exit": 1,
+    "result": "FAILED (failures=3)"
+  },
+  "combined_related_after": {
+    "tests": 107,
+    "seconds": 111.491,
+    "native_exit": 0,
+    "result": "OK"
+  },
+  "clean_discovery": {
+    "discovered_tests": 1847,
+    "discovery_errors": 0
+  },
+  "previous_double_image_failure": {
+    "model": "deepseek-v4.1-flash",
+    "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+    "fixture_count": 7056,
+    "bound_fixtures": [
+      "leyu:5803626"
+    ],
+    "completion_verified": true,
+    "completion_rounds": 1,
+    "elapsed_ms": 24619.838,
+    "signal_count": 0,
+    "order_count": 0
+  },
+  "previous_mixed_image_failure": {
+    "model": "deepseek-v4.1-flash",
+    "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+    "fixture_count": 7101,
+    "bound_fixtures": [],
+    "completion_verified": true,
+    "completion_rounds": 1,
+    "elapsed_ms": 15237.457,
+    "signal_count": 0,
+    "order_count": 0
+  },
+  "same_pair_ambiguity_still_blocks_automatic_binding": true,
+  "hint_limit": 20,
+  "truncation_explicit": true,
+  "additional_database_statements": 0,
+  "alias_scope": "football exact Chinese whole labels only",
+  "registry_version": "2026-11-08.3",
+  "publisher": "7M",
+  "primary_same_id_name_evidence": [
+    {
+      "team_id": "7",
+      "language": "gb",
+      "page_url": "https://www.7m.hk/football/data/zh-cn/teams/7",
+      "page_status": 200,
+      "page_title": "根特(K.A.A. Gent)_球队资料_球员名单_赛程_赛果_新闻_赛事统计信息_7M体育网",
+      "page_sha256": "0702a2542397c0fdfe5f58707530da813f3c1ca8b18f41b1976590c77028039e",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=7&lang=gb",
+      "status": 200,
+      "bytes": 3245,
+      "sha256": "5a4816d3cdbe9e6f3b00454bcdd6182615886df07016d99d003fb799f16b1fac",
+      "exact_team_name": "根特",
+      "english_team_name": "K.A.A. Gent"
+    },
+    {
+      "team_id": "7",
+      "language": "big",
+      "page_url": "https://www.7m.hk/football/data/teams/7",
+      "page_status": 200,
+      "page_title": "真特(K.A.A. Gent)_球隊資料_球員名單_賽程_賽果_新聞_賽事統計信息_7M體育網",
+      "page_sha256": "439b775c23fe3390f26f1699ceee8b663eaac4e1e5d080b41df3ccab62fe01e1",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=7&lang=big",
+      "status": 200,
+      "bytes": 3221,
+      "sha256": "6ea4c5830117c299ffbc710133725a99708ac5064742253eaebbcbe80a90be07",
+      "exact_team_name": "真特",
+      "english_team_name": "K.A.A. Gent"
+    },
+    {
+      "team_id": "1609",
+      "language": "gb",
+      "page_url": "https://www.7m.hk/football/data/zh-cn/teams/1609",
+      "page_status": 200,
+      "page_title": "科特赖克(K.V. Kortrijk)_球队资料_球员名单_赛程_赛果_新闻_赛事统计信息_7M体育网",
+      "page_sha256": "ed654cc1ab5c1bd2392113865ad259cc18d9edb39220f632d2fe5d86dd18cbb3",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=1609&lang=gb",
+      "status": 200,
+      "bytes": 2602,
+      "sha256": "b5d60f313c3f84f96cb0eb48de7c441db3867a411d87a88beb7e298992a68260",
+      "exact_team_name": "科特赖克",
+      "english_team_name": "K.V. Kortrijk"
+    },
+    {
+      "team_id": "1609",
+      "language": "big",
+      "page_url": "https://www.7m.hk/football/data/teams/1609",
+      "page_status": 200,
+      "page_title": "哥積克(K.V. Kortrijk)_球隊資料_球員名單_賽程_賽果_新聞_賽事統計信息_7M體育網",
+      "page_sha256": "f1247ee7f45d50025d32a68f61029c2f85b9c0c21bb361a5dbcf780463643259",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=1609&lang=big",
+      "status": 200,
+      "bytes": 2541,
+      "sha256": "ea3206f567acb4034f856e9fb9a1a27f884bf35f04c144b79b5534df5ba33329",
+      "exact_team_name": "哥積克",
+      "english_team_name": "K.V. Kortrijk"
+    }
+  ],
+  "rights": "Factual names only; no images, branding, biographies or player data reused.",
+  "preserved_files_secret_scan": {
+    "files_checked": 28,
+    "secret_value_occurrences": 0
+  },
+  "provider_or_gateway_configuration_writes": 0,
+  "production_data_writes": 0,
+  "funded_tests": 0
+}

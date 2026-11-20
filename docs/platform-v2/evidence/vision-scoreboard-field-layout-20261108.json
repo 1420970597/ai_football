@@ -1,0 +1,138 @@
+{
+  "model": "deepseek-v4.1-flash",
+  "gateway_changed": false,
+  "production_job": false,
+  "funded_test": false,
+  "original_image_sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+  "cases": {
+    "e1009": [
+      {
+        "name": "original",
+        "size": [
+          807,
+          390
+        ],
+        "bytes": 54172,
+        "sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+        "observed_at": "2026-11-08T12:12:00.276348+00:00",
+        "expected_answer_in_prompt": false,
+        "http_status": 200,
+        "elapsed_ms": 4725.859,
+        "recognized_fields": {
+          "联赛": null,
+          "比赛分钟": "75",
+          "主队": "捷内",
+          "比分": "2-2",
+          "客队": "卡拉夫"
+        }
+      },
+      {
+        "name": "full_2x",
+        "size": [
+          1614,
+          780
+        ],
+        "bytes": 765588,
+        "sha256": "258fa715a5b5c8297ee8cff54341dd35700d993aafed27d45762f5578cd72dff",
+        "observed_at": "2026-11-08T12:12:05.002507+00:00",
+        "expected_answer_in_prompt": false,
+        "http_status": 200,
+        "elapsed_ms": 7732.446,
+        "recognized_fields": {
+          "联赛": "贺拉戴克B队",
+          "比赛分钟": null,
+          "主队": "捷丙",
+          "比分": "2-2",
+          "客队": "卡拉夫"
+        }
+      },
+      {
+        "name": "header_4x",
+        "size": [
+          3228,
+          176
+        ],
+        "bytes": 291326,
+        "sha256": "1fc90c95595e1b032b72aeed4e0d5a6be10c3558e1571c8df5ca25e87d852f43",
+        "observed_at": "2026-11-08T12:12:12.735272+00:00",
+        "expected_answer_in_prompt": false,
+        "http_status": 200,
+        "elapsed_ms": 8572.798,
+        "recognized_fields": {
+          "联赛": null,
+          "比赛分钟": "75",
+          "主队": "捷丙",
+          "比分": "2-2",
+          "客队": "贺拉戴克B队"
+        }
+      }
+    ],
+    "e1010": [
+      {
+        "name": "original",
+        "size": [
+          807,
+          390
+        ],
+        "bytes": 54172,
+        "sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+        "observed_at": "2026-11-08T12:12:57.688595+00:00",
+        "expected_answer_in_prompt": false,
+        "http_status": 200,
+        "elapsed_ms": 4788.396,
+        "recognized_fields": {
+          "联赛": "捷丙",
+          "开球时间": "17:15",
+          "比赛分钟": "75",
+          "主队": "贺拉戴克B队",
+          "比分": "2-2",
+          "客队": "卡拉夫"
+        }
+      },
+      {
+        "name": "full_2x",
+        "size": [
+          1614,
+          780
+        ],
+        "bytes": 765588,
+        "sha256": "258fa715a5b5c8297ee8cff54341dd35700d993aafed27d45762f5578cd72dff",
+        "observed_at": "2026-11-08T12:13:02.477272+00:00",
+        "expected_answer_in_prompt": false,
+        "http_status": 200,
+        "elapsed_ms": 8847.568,
+        "recognized_fields": {
+          "联赛": "捷丙",
+          "开球时间": "17:15",
+          "比赛分钟": "75",
+          "主队": "贺拉戴克B队",
+          "比分": "2-2",
+          "客队": "卡拉夫"
+        }
+      },
+      {
+        "name": "header_4x",
+        "size": [
+          3228,
+          176
+        ],
+        "bytes": 291326,
+        "sha256": "1fc90c95595e1b032b72aeed4e0d5a6be10c3558e1571c8df5ca25e87d852f43",
+        "observed_at": "2026-11-08T12:13:11.325168+00:00",
+        "expected_answer_in_prompt": false,
+        "http_status": 200,
+        "elapsed_ms": 5289.178,
+        "recognized_fields": {
+          "联赛": "捷丙",
+          "开球时间": "17:15",
+          "比赛分钟": "75",
+          "主队": "贺拉戴克B队",
+          "比分": "2-2",
+          "客队": "卡拉夫"
+        }
+      }
+    ]
+  },
+  "diagnostic_scope": "Spatial field guidance only; no expected names or identifiers in requests. Image recognition does not prove fixture binding.",
+  "all_functionality_verified": false
+}

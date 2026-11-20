@@ -53,6 +53,7 @@ ACCOUNT_CONFIG_KEYS = frozenset({
     "leyu_app_login_name", "leyu_app_login_password", "leyu_app_signature", "leyu_app_login_signature",
     "leyu_app_signing_config", "leyu_app_discovery_config", "leyu_venue", "leyu_login_proxy_url",
     "leyu_login_proxy_password_template",
+    "leyu_app_authorization_code",
 })
 ACCOUNT_PERSIST_KEYS = frozenset({"leyu_api_base", "leyu_origin", "leyu_request_id", "leyu_app_host", "leyu_app_token"})
 
@@ -65,6 +66,7 @@ class AccountSessionManager:
         self._config = dict(private_config)
         self.hooks = hooks
         self.renewal_options = renewal_options
+        self.last_renewal_status = None
 
     def venue_session(self) -> VenueSession:
         return VenueSession(self.scope, str(self._config.get("leyu_api_base") or ""),
@@ -86,8 +88,11 @@ class AccountSessionManager:
             self.scope = replace(self.scope, revision=revision)
 
         async def finish(attempt: str, status: str, metadata: dict[str, Any]) -> None:
+            self.last_renewal_status = status
             await self.hooks.finish(self.scope, attempt, status, metadata)
 
-        renewer = AppSessionRenewer(self._config, claim=claim, persist=persist, finish=finish, **self.renewal_options)
+        renewal_config = dict(self._config)
+        self._config.pop('leyu_app_authorization_code', None)
+        renewer = AppSessionRenewer(renewal_config, claim=claim, persist=persist, finish=finish, **self.renewal_options)
         await renewer.renew(reason)
         return self.venue_session()

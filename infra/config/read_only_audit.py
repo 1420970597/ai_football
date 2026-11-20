@@ -54,7 +54,7 @@ REQUIRED_KEYS = {
 
 URL_KEYS = {"DATABASE_URL", "S3_ENDPOINT_URL", "HERMES_PROVIDER_BASE_URL"}
 BOOL_KEYS = {"COOKIE_SECURE", "LIVE_ORDERS_ENABLED", "EXECUTOR_LIVE_ORDERS_ENABLED"}
-INT_KEYS = {"QUOTE_MAX_AGE_SECONDS", "REVIEW_WORKER_CONCURRENCY"}
+INT_KEYS = {"QUOTE_MAX_AGE_SECONDS", "REVIEW_WORKER_CONCURRENCY", "REVIEW_EXPERT_CONCURRENCY_FLOOR"}
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -204,12 +204,20 @@ def _check_runtime_env(path: Path, project_root: Path) -> dict[str, Any]:
         candidate = Path(values[key])
         if not candidate.is_absolute():
             candidate = project_root / candidate
+        if project_root.resolve() not in candidate.resolve().parents:
+            invalid.append({"key": key, "reason": "referenced_path_outside_project"})
+            referenced_files.append({"key": key, "present": False, "kind": "unapproved_reference"})
+            continue
         if not candidate.exists():
             invalid.append({"key": key, "reason": "referenced_file_missing"})
             referenced_files.append({"key": key, "present": False, "kind": "file"})
         elif not candidate.is_file():
             invalid.append({"key": key, "reason": "referenced_path_not_file"})
             referenced_files.append({"key": key, "present": True, "kind": "non_file"})
+        elif (key!="S3_CA_FILE" and candidate.stat().st_uid==0 and candidate.stat().st_gid==10005
+              and candidate.stat().st_mode & 0o777==0o440):
+            referenced_files.append({"key": key,"present": True,"kind": "secret_file",
+                                     "private_mode": False,"restricted_group": 10005})
         elif key != "S3_CA_FILE" and candidate.stat().st_mode & 0o077:
             invalid.append({"key": key, "reason": "referenced_secret_file_not_private"})
             referenced_files.append({

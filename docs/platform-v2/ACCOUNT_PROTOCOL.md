@@ -2,6 +2,8 @@
 
 日期：2026-10-26。当前阶段：协议证据已复核，隔离实现与 Fake HTTP 验证通过；真实联调尚未验证。没有连接真实账号或执行真实投注。全部源证据取自本仓库 Git 历史，不读取其它目录、旧远端配置或真实抓包秘密。
 
+后续更新（2026-11-10）：下文保留10月26日的历史基线。赛前与篮球普通全场市场已在原链路实现，本人既有会话的赛前报价及限额只读联调、104项隔离测试及本人确认页面验证已通过，尚未发布；当前阶段和取代“赛前未核验”的证据详见[未开赛自动投注协议与状态链路](PREMATCH_AUTO_BETTING_20261110.md)。没有使用资金测试或替用户开启投注。
+
 ## 现有证据
 
 | 能力 | 仓库内历史来源 | 已证实的契约 | 未证实的边界 |
@@ -33,12 +35,14 @@ finish(scope, attempt_id, status, safe_metadata) -> None
 `AccountProtocolClient(scope, session, transport=None, live_orders_enabled=False)` 支持异步上下文及关闭。默认关闭写入。仅提供有限路径，没有任意 URL/SQL/代理能力：
 
 ```text
-balance() -> {available, currency, observed_at}
+balance() -> {available, currency|null, observed_at}
 orders(state, page, size, begin, end) -> {items,total,has_more,malformed_records,...}
 lookup(order_no, begin, end, max_pages) -> {found,receipt,scan_complete,absence_proves_rejection:false}
 preflight(NativeSelection, Decimal stake, device_imei="") -> PreparedBet
 submit_once(PreparedBet, SubmissionPermit) -> {state,order_no,provider_status,provider_code,execution_id}
 ```
+
+余额响应只提供金额时，币种为未知。已核对的金额响应没有币种字段，bet 请求中的 `currencyCode` 常量不能用来推断账户余额币种。
 
 `NativeSelection` 接受系统已绑定的原生比赛、盘口实例、玩法、选项、方向、项目、盘口分类、期间、十进制线及系统价格，禁止用 TG 原文赔率。预检并发读取三个无资金接口，精确校验后生成 15 秒有效的不可变准备结果。只使用原始当前盘口的请求线；市场显示格式变化用十进制比较，不能改成其它盘口。数据读取和下单网络异常不内联续期或重放。
 
@@ -124,5 +128,7 @@ docker run --rm --cpus=0.5 --memory=512m \
 跨层场景包含：真实共享续期实现通过 Fake App HTTP 完成本人密码登录、两次加密 CAS、场馆会话与余额校验；采集身份没有进入用户任务；并发幂等及限额；私有续期锁、重新绑定使旧写入失效；来源/会员/陈旧报价拒绝；本人订单隔离；重算摘要仍无法篡改金额及盘口；资金接口全部 Fake 的一次提交、未知不重排、发送中取消、租约过期敞口保留；紧急停止及在途身份保护；官方精确回执核对与幂等终态。
 
 执行器使用独立构建入口，基础 Python 固定摘要，进程命令为 `python -m services.executor.worker`。只需要 API 服务令牌、`PLATFORM_EXECUTOR_API` 和被管理员批准的签名/发现材料只读引用；不接收数据库连接或模型密钥。`EXECUTOR_LIVE_ORDERS_ENABLED=false` 为执行器默认值，API 的实际交易开关也默认 false；管理员开关、本人许可及两侧运行开关全部有效才可能执行交易。隔离测试显式启用的分支始终使用 Fake HTTP，不构成真实资金授权。
+
+`EXECUTOR_OBSERVE_MARKET_GROUP` 默认关闭。开启后，已获本人许可的自动单可在原有的一次原生取价请求中读取同盘的完整选项。所选方向仍走正常预检。若其他方向缺失或不一致，仅保留所选方向的证据。完整价格组进入同次预检证据，来源时点未知时沿用本地接收时间。需要经远端 API 桥的部署应同时升级桥、API 和执行器。报价观察用于评估规则，启用该配置不会增加投注许可或赔率门槛。
 
 生产 Docker 部署、有效本人配置验证、当前协议和网络接受性、失败恢复及正式发布仍须单独验收。本报告没有声称真实账户可登录、订单已成交或项目盈利。

@@ -1,0 +1,44 @@
+{
+  "schema": "safe-verification-evidence-v1",
+  "recorded_at_utc": "2026-11-08T15:05:00Z",
+  "stage": "targeted isolated only; broader clean full and actual replays pending",
+  "real_failure": {
+    "model": "deepseek-v4.1-flash",
+    "fixture_count": 7056,
+    "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+    "bound_fixtures": [
+      "leyu:5803626",
+      "leyu:5803628"
+    ],
+    "completion_verified": false,
+    "completion_rounds": 3,
+    "elapsed_ms": 45212.049,
+    "signal_count": 0,
+    "order_count": 0
+  },
+  "real_failure_native_exit": 1,
+  "first_turn_false_unbound_pairs": 3,
+  "first_turn_unread_searches": 0,
+  "regression_before": {
+    "tests": 2,
+    "seconds": 4.941,
+    "failures": 2,
+    "native_exit": 1
+  },
+  "completion_contracts_after": {
+    "tests": 24,
+    "seconds": 50.287,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "claim_boundaries_preserved": true,
+  "same_attempt_real_pair_binding_required": true,
+  "explicit_unbound_ids_still_checked": true,
+  "other_attempt_binding_rejected": true,
+  "new_database_round_trips": 0,
+  "quote_or_financial_guards_changed": false,
+  "shared_gateway_or_provider_configuration_written": false,
+  "production_writes": 0,
+  "funded_tests": 0
+}

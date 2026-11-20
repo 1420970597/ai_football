@@ -1,0 +1,82 @@
+{
+  "window_start": "2026-11-08T22:46:08.226375+00:00",
+  "window_last_database_sample": "2026-11-08T23:16:09.363815+00:00",
+  "database_samples": 55,
+  "market_samples": 61,
+  "messages_final": {
+    "created_versions": 196,
+    "published_posts": 20,
+    "older_posts_revised": 176,
+    "published_ready": 18,
+    "published_pending": 0,
+    "published_unsupported": 2
+  },
+  "reviews_final": {
+    "eligible": 18,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 18,
+    "missing_receipt": 0
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "event_latency_final": {
+    "event_versions": 20,
+    "avg_ms": "4716.0",
+    "p95_ms": "15618.2",
+    "within_3s": 11,
+    "older_backlog_versions_received": 176
+  },
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T23:15:47.218298+00:00",
+    "last_poll_elapsed_ms": 19825.7,
+    "last_complete_at": null,
+    "freshness": "partial",
+    "fresh_active_quotes": 7,
+    "known_time_active_quotes": 22511,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 14.2,
+    "oldest_quote_age_seconds": 359578.0,
+    "failed_batches": 0
+  },
+  "schema": "natural_tg_observation_v2",
+  "source_commit": "27cb7dee5039c1b5c49b46fa657369c8a132415e",
+  "native_exit": 0,
+  "official_sources_complete": 6,
+  "official_raw_posts": 25,
+  "normalized_posts": 20,
+  "matched": 20,
+  "missing": 0,
+  "observer_samples": 91,
+  "observer_read_errors": 0,
+  "health_all_200": true,
+  "telegram_all_healthy": true,
+  "health_non_200_samples": [],
+  "includes_successful_api_handoff": false,
+  "dedicated_post_api_release_window": true,
+  "whole_database_freshness_claim": false,
+  "three_second_acceptance": false,
+  "original_summary_not_overwritten": true,
+  "manual_original_and_media_match_e1743": true,
+  "overlapping_posts_not_counted_again": true,
+  "reviewed_messages": 18,
+  "additional_unique_manual_samples_relative_to_e1743": 0,
+  "raw_sha256": {
+    "e1780-watch-summary.json": "83134918345c2b2952d0ceaba66c2b5a8449b0d94434be18b0be8470a00e7a08",
+    "e1780-official-scan.json": "5c6a81f028ae297b5834bd1edcaf3286544c93312a3c097cf8b36ed8693b5285",
+    "e1780-official-reconcile.json": "f1119c9012e26ddda1287bfe9ff2689d10ffacc8be2cb6fa431d3b10f1cb4851",
+    "e1780-natural-audit.json": "6af383d493d4d813cb2846414c634b161117ef93437719737ac09aab5ac95f8f",
+    "e1781-composition-readonly.jsonl": "788f435d654eb3363a51c2781a0c7e5f32a72e108d67e6c3784b8ea989897773"
+  }
+}

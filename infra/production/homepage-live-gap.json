@@ -1,0 +1,28 @@
+{
+  "services": {
+    "api": {
+      "image": "sha256:4f68b3a80cbad7d96aa1b761214f8ded8d25e24ba610f46c0d24797d383b8136",
+      "command": [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "2",
+        "--proxy-headers",
+        "--no-access-log"
+      ],
+      "entrypoint": [],
+      "mem_limit": 805306368,
+      "memswap_limit": 1610612736,
+      "cpus": 0.4
+    }
+  },
+  "x-homepage-live-gap-release": {
+    "source_revision": "3a034d5b970eb3a491d7e4017370bf6eeaad7765",
+    "scope": "api-only-tied-score-native4-compatibility",
+    "previous_image": "sha256:eec79eb0213eab6f6b0592aa450625eb356a5c02c86490ecd2c5f38dcfe37dad"
+  }
+}

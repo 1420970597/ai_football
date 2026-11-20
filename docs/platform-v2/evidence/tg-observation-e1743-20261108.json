@@ -1,0 +1,564 @@
+{
+  "window_start": "2026-11-08T22:28:01.827575+00:00",
+  "window_last_database_sample": "2026-11-08T22:58:02.907894+00:00",
+  "database_samples": 55,
+  "market_samples": 61,
+  "messages_final": {
+    "created_versions": 195,
+    "published_posts": 20,
+    "older_posts_revised": 175,
+    "published_ready": 18,
+    "published_pending": 0,
+    "published_unsupported": 2
+  },
+  "reviews_final": {
+    "eligible": 18,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 18,
+    "missing_receipt": 0
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "event_latency_final": {
+    "event_versions": 20,
+    "avg_ms": "4716.0",
+    "p95_ms": "15618.2",
+    "within_3s": 11,
+    "older_backlog_versions_received": 175
+  },
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T22:57:36.246093+00:00",
+    "last_poll_elapsed_ms": 24096.9,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 22385,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 20.8,
+    "oldest_quote_age_seconds": 358491.2,
+    "failed_batches": 0
+  },
+  "schema": "natural_tg_observation_v2",
+  "source_commit": "27cb7dee5039c1b5c49b46fa657369c8a132415e",
+  "native_exit": 0,
+  "official_sources_complete": 6,
+  "official_raw_posts": 25,
+  "normalized_posts": 20,
+  "matched": 20,
+  "missing": 0,
+  "observer_samples": 91,
+  "observer_read_errors": 0,
+  "health_all_200": true,
+  "telegram_all_healthy": true,
+  "health_non_200_samples": [],
+  "includes_successful_api_handoff": false,
+  "dedicated_post_api_release_window": true,
+  "whole_database_freshness_claim": false,
+  "three_second_acceptance": false,
+  "original_summary_not_overwritten": true,
+  "manual_original_and_media_match_e1743": true,
+  "overlapping_posts_not_counted_again": true,
+  "full_original_reply_and_model_texts_manually_read": 18,
+  "unique_original_images_manually_viewed": 9,
+  "accepted_posts": 7,
+  "accepted_signals": 11,
+  "distinct_selected_markets": 6,
+  "individually_published_six_images_reposted_in_one_album": true,
+  "immutable_origin_attempt_evidence_and_receipts_verified": true,
+  "read_price_may_differ_from_final_confirmation": true,
+  "source_odds_not_matching_gate_examples": [
+    {
+      "alias": 8,
+      "source_odds": "1.71",
+      "system_price": "1.79"
+    },
+    {
+      "alias": 10,
+      "source_odds": "1.78",
+      "system_price": "1.81"
+    }
+  ],
+  "manual_binding_evidence": {
+    "read_only": true,
+    "production_writes": 0,
+    "messages": [
+      {
+        "alias": 1,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 2,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 3,
+        "state": "succeeded",
+        "receipt_present": true,
+        "signals": [
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "0.500",
+            "selection": "over",
+            "phase": "live",
+            "recommendation_price": "1.83000",
+            "score_basis": "unknown",
+            "score_baseline": {
+              "away": 0,
+              "home": 0,
+              "half_away": 0,
+              "half_home": 0
+            },
+            "outcome": "pending",
+            "home_team": "科尔多瓦中央",
+            "away_team": "拉努斯",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.83000",
+            "current_confirmation_price": "1.83000"
+          }
+        ],
+        "record_results": [
+          {
+            "accepted_count": 1,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          }
+        ],
+        "media_count": 1
+      },
+      {
+        "alias": 4,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 5,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 1
+      },
+      {
+        "alias": 6,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 7,
+        "state": "succeeded",
+        "receipt_present": true,
+        "signals": [
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "0.750",
+            "selection": "over",
+            "phase": "scheduled",
+            "recommendation_price": "1.50000",
+            "score_basis": "full_period",
+            "score_baseline": {
+              "away": null,
+              "home": null,
+              "half_away": null,
+              "half_home": null
+            },
+            "outcome": "pending",
+            "home_team": "康塞普森",
+            "away_team": "奥希金斯",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.50000",
+            "current_confirmation_price": "1.50000"
+          }
+        ],
+        "record_results": [
+          {
+            "accepted_count": 1,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          }
+        ],
+        "media_count": 1
+      },
+      {
+        "alias": 8,
+        "state": "succeeded",
+        "receipt_present": true,
+        "signals": [
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "0.500",
+            "selection": "over",
+            "phase": "live",
+            "recommendation_price": "1.79000",
+            "score_basis": "unknown",
+            "score_baseline": {
+              "away": 0,
+              "home": 0,
+              "half_away": 0,
+              "half_home": 0
+            },
+            "outcome": "pending",
+            "home_team": "泰里尼登斯",
+            "away_team": "阿梅利亚诺",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.77000",
+            "current_confirmation_price": "1.79000"
+          }
+        ],
+        "record_results": [
+          {
+            "accepted_count": 1,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          }
+        ],
+        "media_count": 1
+      },
+      {
+        "alias": 9,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 10,
+        "state": "succeeded",
+        "receipt_present": true,
+        "signals": [
+          {
+            "market_kind": "total",
+            "period": "full_time",
+            "line": "2.750",
+            "selection": "over",
+            "phase": "live",
+            "recommendation_price": "1.81000",
+            "score_basis": "unknown",
+            "score_baseline": {
+              "away": 1,
+              "home": 1,
+              "half_away": 1,
+              "half_home": 1
+            },
+            "outcome": "pending",
+            "home_team": "瓜亚基尔巴塞罗那",
+            "away_team": "基多大学",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.81000",
+            "current_confirmation_price": "1.81000"
+          }
+        ],
+        "record_results": [
+          {
+            "accepted_count": 1,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          }
+        ],
+        "media_count": 1
+      },
+      {
+        "alias": 11,
+        "state": "succeeded",
+        "receipt_present": true,
+        "signals": [
+          {
+            "market_kind": "total",
+            "period": "full_time",
+            "line": "1.500",
+            "selection": "over",
+            "phase": "live",
+            "recommendation_price": "1.78000",
+            "score_basis": "unknown",
+            "score_baseline": {
+              "away": 0,
+              "home": 1,
+              "half_away": 0,
+              "half_home": 1
+            },
+            "outcome": "loss",
+            "home_team": "玻利瓦尔",
+            "away_team": "最强者",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.76000",
+            "current_confirmation_price": "1.78000"
+          }
+        ],
+        "record_results": [
+          {
+            "accepted_count": 1,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          }
+        ],
+        "media_count": 1
+      },
+      {
+        "alias": 12,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 13,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 14,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 1
+      },
+      {
+        "alias": 15,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 0
+      },
+      {
+        "alias": 16,
+        "state": "succeeded",
+        "receipt_present": true,
+        "signals": [
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "1.250",
+            "selection": "under",
+            "phase": "scheduled",
+            "recommendation_price": "1.76000",
+            "score_basis": "full_period",
+            "score_baseline": {
+              "away": null,
+              "home": null,
+              "half_away": null,
+              "half_home": null
+            },
+            "outcome": "pending",
+            "home_team": "查塔努加",
+            "away_team": "洛杉矶FC B队",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.76000",
+            "current_confirmation_price": "1.76000"
+          }
+        ],
+        "record_results": [
+          {
+            "accepted_count": 1,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          }
+        ],
+        "media_count": 1
+      },
+      {
+        "alias": 17,
+        "state": "succeeded",
+        "receipt_present": true,
+        "signals": [
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "1.250",
+            "selection": "under",
+            "phase": "scheduled",
+            "recommendation_price": "1.76000",
+            "score_basis": "full_period",
+            "score_baseline": {
+              "away": null,
+              "home": null,
+              "half_away": null,
+              "half_home": null
+            },
+            "outcome": "pending",
+            "home_team": "查塔努加",
+            "away_team": "洛杉矶FC B队",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": false,
+            "reviewed_price": "1.76000",
+            "current_confirmation_price": "1.76000"
+          },
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "0.750",
+            "selection": "over",
+            "phase": "scheduled",
+            "recommendation_price": "1.51000",
+            "score_basis": "full_period",
+            "score_baseline": {
+              "away": null,
+              "home": null,
+              "half_away": null,
+              "half_home": null
+            },
+            "outcome": "pending",
+            "home_team": "康塞普森",
+            "away_team": "奥希金斯",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.51000",
+            "current_confirmation_price": "1.51000"
+          },
+          {
+            "market_kind": "total",
+            "period": "full_time",
+            "line": "1.500",
+            "selection": "over",
+            "phase": "live",
+            "recommendation_price": "2.02000",
+            "score_basis": "unknown",
+            "score_baseline": {
+              "away": 0,
+              "home": 1,
+              "half_away": 0,
+              "half_home": 1
+            },
+            "outcome": "loss",
+            "home_team": "玻利瓦尔",
+            "away_team": "最强者",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "1.98000",
+            "current_confirmation_price": "2.02000"
+          },
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "0.500",
+            "selection": "over",
+            "phase": "live",
+            "recommendation_price": "2.00000",
+            "score_basis": "unknown",
+            "score_baseline": {
+              "away": 0,
+              "home": 0,
+              "half_away": 0,
+              "half_home": 0
+            },
+            "outcome": "pending",
+            "home_team": "泰里尼登斯",
+            "away_team": "阿梅利亚诺",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": false,
+            "reviewed_price": "1.94000",
+            "current_confirmation_price": "2.00000"
+          },
+          {
+            "market_kind": "total",
+            "period": "first_half",
+            "line": "0.500",
+            "selection": "over",
+            "phase": "live",
+            "recommendation_price": "2.26000",
+            "score_basis": "unknown",
+            "score_baseline": {
+              "away": 0,
+              "home": 0,
+              "half_away": 0,
+              "half_home": 0
+            },
+            "outcome": "pending",
+            "home_team": "科尔多瓦中央",
+            "away_team": "拉努斯",
+            "original_attempt_quote_evidence_and_receipt_verified": true,
+            "same_as_latest_attempt": true,
+            "reviewed_price": "2.26000",
+            "current_confirmation_price": "2.26000"
+          }
+        ],
+        "record_results": [
+          {
+            "accepted_count": 2,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          },
+          {
+            "accepted_count": 1,
+            "unresolved_count": 0,
+            "rejected_count": 0
+          }
+        ],
+        "media_count": 6
+      },
+      {
+        "alias": 18,
+        "state": "unresolved",
+        "receipt_present": true,
+        "signals": [],
+        "record_results": [],
+        "media_count": 1
+      }
+    ],
+    "accepted_signals": 11,
+    "accepted_posts": 7,
+    "distinct_selected_markets": 6,
+    "album_is_same_author_and_source_distinct_post": true,
+    "album_six_images_equal_individual_six": true,
+    "album_five_accepted_are_same_markets": true,
+    "not_eleven_independent_recommendations": true
+  },
+  "free_text_limitations": [
+    "Album initial attempt produced a self-questioning sentence; the final system receipt and accepted snapshots remain authoritative.",
+    "One transient provider failure recovered on a subsequent attempt; its original failure remains recorded."
+  ],
+  "real_browser_scenarios": 8,
+  "real_browser_native_exit": 0,
+  "real_browser_production_writes": 0,
+  "real_browser_response_rewriting": false,
+  "desktop_source_roi_screenshots_pending": false,
+  "raw_sha256": {
+    "e1743-watch-summary.json": "dd00baca00b8d8996d8d6b7903aab1c205966fb02d4940d380f2bb0d45823fff",
+    "e1743-official-scan.json": "5826a78a1a1e5ef66c54186d8a294a951075f66876825e3be965e80808e4af2b",
+    "e1743-official-reconcile.json": "f1119c9012e26ddda1287bfe9ff2689d10ffacc8be2cb6fa431d3b10f1cb4851",
+    "e1743-natural-audit.json": "c20af67a92695869b48547be592c15266b892cfbb6138b5e7d38d5d0aafda413",
+    "e1744-composition-readonly.jsonl": "99622c05446800b1f2771c9a1eb1cd7d6fb3dd9d676b712b8041df9f349e216e"
+  },
+  "additional_real_browser_scenarios": 12,
+  "additional_browser_evidence": "natural-six-original-browser-20261108.json"
+}

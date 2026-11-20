@@ -1,0 +1,327 @@
+{
+  "cases": {
+    "e1028": {
+      "isolated_real_model": true,
+      "production_writes": false,
+      "funded_tests": false,
+      "model": "deepseek-v4.1-flash",
+      "original_image_sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+      "fixture_export_window": [
+        "2026-11-06T00:00:00Z",
+        "2026-11-11T00:00:00Z"
+      ],
+      "fixture_count": 86,
+      "target_id_disclosed_to_model": false,
+      "historical_post_not_rewritten": true,
+      "bound_fixtures": [],
+      "searches": [
+        {
+          "team_query": "",
+          "competition_query": "捷丙",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "贺拉戴克b队",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "卡拉夫",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 1
+        },
+        {
+          "team_query": "贺拉戴克",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        }
+      ],
+      "signal_count": 0,
+      "order_count": 0,
+      "image_count": 1,
+      "completion_verified": true,
+      "completion_rounds": 1,
+      "usage": {
+        "prompt_tokens": 73982,
+        "completion_tokens": 1347,
+        "total_tokens": 75329
+      },
+      "elapsed_ms": 65996.684,
+      "target_candidate_bound": false,
+      "passed": false
+    },
+    "e1033": {
+      "isolated_real_model": true,
+      "production_writes": false,
+      "funded_tests": false,
+      "model": "deepseek-v4.1-flash",
+      "original_image_sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+      "fixture_export_window": [
+        "2026-11-06T00:00:00Z",
+        "2026-11-11T00:00:00Z"
+      ],
+      "fixture_count": 86,
+      "target_id_disclosed_to_model": false,
+      "historical_post_not_rewritten": true,
+      "bound_fixtures": [
+        "leyu:5809480"
+      ],
+      "searches": [
+        {
+          "team_query": "卡拉夫",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 1
+        }
+      ],
+      "signal_count": 0,
+      "order_count": 0,
+      "image_count": 1,
+      "completion_verified": true,
+      "completion_rounds": 1,
+      "usage": {
+        "prompt_tokens": 43434,
+        "completion_tokens": 837,
+        "total_tokens": 44271
+      },
+      "elapsed_ms": 30851.41,
+      "target_candidate_bound": true,
+      "passed": true
+    },
+    "e1034": {
+      "isolated_real_model": true,
+      "production_writes": false,
+      "funded_tests": false,
+      "model": "deepseek-v4.1-flash",
+      "original_image_sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+      "fixture_export_window": [
+        "2026-11-06T00:00:00Z",
+        "2026-11-11T00:00:00Z"
+      ],
+      "fixture_count": 86,
+      "target_id_disclosed_to_model": false,
+      "historical_post_not_rewritten": true,
+      "bound_fixtures": [],
+      "searches": [
+        {
+          "team_query": "贺拉戴克b队",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        }
+      ],
+      "signal_count": 0,
+      "order_count": 0,
+      "image_count": 1,
+      "completion_verified": true,
+      "completion_rounds": 1,
+      "usage": {
+        "prompt_tokens": 27637,
+        "completion_tokens": 410,
+        "total_tokens": 28047
+      },
+      "elapsed_ms": 15226.646,
+      "target_candidate_bound": false,
+      "passed": false
+    },
+    "e1040": {
+      "isolated_real_model": true,
+      "production_writes": false,
+      "funded_tests": false,
+      "model": "deepseek-v4.1-flash",
+      "original_image_sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+      "fixture_export_window": [
+        "2026-11-06T00:00:00Z",
+        "2026-11-11T00:00:00Z"
+      ],
+      "fixture_count": 86,
+      "target_id_disclosed_to_model": false,
+      "historical_post_not_rewritten": true,
+      "bound_fixtures": [
+        "leyu:5809480"
+      ],
+      "searches": [
+        {
+          "team_query": "",
+          "competition_query": "捷甲",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "",
+          "competition_query": "捷克甲级联赛",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 8
+        },
+        {
+          "team_query": "卡拉夫",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 1
+        },
+        {
+          "team_query": "弗拉戴魏茨",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 1
+        },
+        {
+          "team_query": "弗拉戴",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        }
+      ],
+      "signal_count": 0,
+      "order_count": 0,
+      "image_count": 1,
+      "completion_verified": true,
+      "completion_rounds": 1,
+      "usage": {
+        "prompt_tokens": 112212,
+        "completion_tokens": 1846,
+        "total_tokens": 114058
+      },
+      "elapsed_ms": 62214.509,
+      "target_candidate_bound": true,
+      "passed": true
+    },
+    "e1041": {
+      "isolated_real_model": true,
+      "production_writes": false,
+      "funded_tests": false,
+      "model": "deepseek-v4.1-flash",
+      "original_image_sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+      "fixture_export_window": [
+        "2026-11-06T00:00:00Z",
+        "2026-11-11T00:00:00Z"
+      ],
+      "fixture_count": 86,
+      "target_id_disclosed_to_model": false,
+      "historical_post_not_rewritten": true,
+      "bound_fixtures": [
+        "leyu:5809480"
+      ],
+      "searches": [
+        {
+          "team_query": "",
+          "competition_query": "捷丙",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "",
+          "competition_query": "捷克",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 31
+        },
+        {
+          "team_query": "塔拉威克b队",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "",
+          "competition_query": "捷克丙组联赛",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        }
+      ],
+      "signal_count": 0,
+      "order_count": 0,
+      "image_count": 1,
+      "completion_verified": true,
+      "completion_rounds": 1,
+      "usage": {
+        "prompt_tokens": 88122,
+        "completion_tokens": 1825,
+        "total_tokens": 89947
+      },
+      "elapsed_ms": 57623.717,
+      "target_candidate_bound": true,
+      "passed": true
+    },
+    "e1042": {
+      "isolated_real_model": true,
+      "production_writes": false,
+      "funded_tests": false,
+      "model": "deepseek-v4.1-flash",
+      "original_image_sha256": "9c31c0ab2d5bf6c93dc78489022cd8908244df829b16e76a970bdfc5c5932a60",
+      "fixture_export_window": [
+        "2026-11-06T00:00:00Z",
+        "2026-11-11T00:00:00Z"
+      ],
+      "fixture_count": 86,
+      "target_id_disclosed_to_model": false,
+      "historical_post_not_rewritten": true,
+      "bound_fixtures": [],
+      "searches": [
+        {
+          "team_query": "卡拉夫",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "",
+          "competition_query": "捷丙",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "捷内",
+          "competition_query": "",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        },
+        {
+          "team_query": "",
+          "competition_query": "捷克足球丙级联赛",
+          "complete": true,
+          "page_count": 1,
+          "total_candidates": 0
+        }
+      ],
+      "signal_count": 0,
+      "order_count": 0,
+      "image_count": 1,
+      "completion_verified": false,
+      "completion_rounds": 3,
+      "usage": {
+        "prompt_tokens": 106824,
+        "completion_tokens": 1897,
+        "total_tokens": 108721
+      },
+      "elapsed_ms": 52755.173,
+      "target_candidate_bound": false,
+      "passed": false
+    }
+  },
+  "production_writes": false,
+  "gateway_changed": false,
+  "all_functionality_verified": false,
+  "scope": "Successes and failures retained across source revisions; not a claim of consecutive stable success."
+}

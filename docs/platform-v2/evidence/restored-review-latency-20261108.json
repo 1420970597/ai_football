@@ -1,0 +1,82 @@
+{
+  "observed_at": "2026-11-08T11:09:39.040010+00:00",
+  "read_only": true,
+  "new_orders_from_original_posts_older_than_5_minutes": 0,
+  "provider_transient_failures_after_1050": 0,
+  "fresh_post_result_limit": 15,
+  "results": [
+    {
+      "message_id": "1cd8b36f-a4d5-47d5-b402-1063e433f65c",
+      "posted_at": "2026-11-08 11:02:28+00:00",
+      "persisted_at": "2026-11-08 11:03:09.359511+00:00",
+      "conclusion_at": "2026-11-08 11:03:46.264193+00:00",
+      "posted_to_conclusion_ms": "78264.193000",
+      "recorded_persisted_to_conclusion_ms": "38428.387",
+      "accepted_count": "1"
+    },
+    {
+      "message_id": "011be070-016f-4c74-9e3f-6ddf71755ef0",
+      "posted_at": "2026-11-08 11:02:31+00:00",
+      "persisted_at": "2026-11-08 11:02:43.189978+00:00",
+      "conclusion_at": "2026-11-08 11:03:12.067068+00:00",
+      "posted_to_conclusion_ms": "41067.068000",
+      "recorded_persisted_to_conclusion_ms": "30106.200",
+      "accepted_count": "0"
+    },
+    {
+      "message_id": "3374dc4b-56a4-4c47-b066-558b441164bc",
+      "posted_at": "2026-11-08 10:51:47+00:00",
+      "persisted_at": "2026-11-08 10:52:02.300896+00:00",
+      "conclusion_at": "2026-11-08 10:53:26.112630+00:00",
+      "posted_to_conclusion_ms": "99112.630000",
+      "recorded_persisted_to_conclusion_ms": "85295.020",
+      "accepted_count": "1"
+    },
+    {
+      "message_id": "361ec74a-1b65-49ae-8100-99469576dbb7",
+      "posted_at": "2026-11-08 10:49:40+00:00",
+      "persisted_at": "2026-11-08 10:49:42.815637+00:00",
+      "conclusion_at": "2026-11-08 10:52:04.143889+00:00",
+      "posted_to_conclusion_ms": "144143.889000",
+      "recorded_persisted_to_conclusion_ms": "143045.828",
+      "accepted_count": "0"
+    },
+    {
+      "message_id": "96ecf175-cd1a-4a0b-8acb-adb978726cde",
+      "posted_at": "2026-11-08 10:49:06+00:00",
+      "persisted_at": "2026-11-08 10:49:21.193410+00:00",
+      "conclusion_at": "2026-11-08 10:51:17.602592+00:00",
+      "posted_to_conclusion_ms": "131602.592000",
+      "recorded_persisted_to_conclusion_ms": "117877.928",
+      "accepted_count": "0"
+    },
+    {
+      "message_id": "ea272be8-8840-4386-aff7-038cc43ce38d",
+      "posted_at": "2026-11-08 10:49:11+00:00",
+      "persisted_at": "2026-11-08 10:49:21.212761+00:00",
+      "conclusion_at": "2026-11-08 10:51:07.263191+00:00",
+      "posted_to_conclusion_ms": "116263.191000",
+      "recorded_persisted_to_conclusion_ms": "107596.238",
+      "accepted_count": "1"
+    },
+    {
+      "message_id": "813cd7a9-65d2-4536-a307-d533e67dd2a8",
+      "posted_at": "2026-11-08 10:49:09+00:00",
+      "persisted_at": "2026-11-08 10:49:21.556622+00:00",
+      "conclusion_at": "2026-11-08 10:49:45.325409+00:00",
+      "posted_to_conclusion_ms": "36325.409000",
+      "recorded_persisted_to_conclusion_ms": "25282.474",
+      "accepted_count": "0"
+    },
+    {
+      "message_id": "d59b887b-7867-4784-9880-f35886e2a32a",
+      "posted_at": "2026-11-08 10:49:21+00:00",
+      "persisted_at": "2026-11-08 10:49:22.535426+00:00",
+      "conclusion_at": "2026-11-08 10:49:34.881309+00:00",
+      "posted_to_conclusion_ms": "13881.309000",
+      "recorded_persisted_to_conclusion_ms": "13822.476",
+      "accepted_count": "0"
+    }
+  ],
+  "latency_note": "posted_to_conclusion_ms is calculated from trace created_at, a transaction timestamp rather than an independently observed commit timestamp; event_to_conclusion_ms is measured inside completion from message.created_at, not Telegram posted_at."
+}

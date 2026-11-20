@@ -1,0 +1,103 @@
+{
+  "window_start": "2026-11-08T11:05:37.141001+00:00",
+  "window_last_database_sample": "2026-11-08T11:35:37.963069+00:00",
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [
+    {
+      "observed_at": "2026-11-08T11:19:01.673465+00:00",
+      "health": {
+        "healthz": null,
+        "readyz": null
+      }
+    }
+  ],
+  "telegram_degraded_samples": [],
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 170,
+    "published_posts": 17,
+    "older_posts_revised": 153,
+    "published_ready": 14,
+    "published_pending": 0,
+    "published_unsupported": 3
+  },
+  "reviews_final": {
+    "eligible": 14,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 1,
+    "with_receipt": 13,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 17,
+    "avg_ms": "4361.1",
+    "p95_ms": "10681.6",
+    "within_3s": 8,
+    "older_backlog_versions_received": 153
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 147
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 147
+    }
+  ],
+  "market_samples": 61,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T11:35:00.840826+00:00",
+    "last_poll_elapsed_ms": 30527.2,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 37721,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 21.3,
+    "oldest_quote_age_seconds": 317542.3,
+    "failed_batches": 0
+  },
+  "official_reconcile": {
+    "read_only": true,
+    "official_posts": 19,
+    "normalized_posts": 17,
+    "matched": 17,
+    "missing": []
+  },
+  "exits": {
+    "e960-official-reconcile": 0,
+    "e960-official-scan": 0,
+    "e960-scheduled-window": 0,
+    "e960-completion-audit": 0,
+    "e960-market-native": 0,
+    "e960-natural-audit": 0,
+    "e960-independent-native": 0
+  },
+  "observer_exits": {
+    "e961-observer-controller": 0,
+    "e961-schedule-observer": 0,
+    "e961-observer-native": 0
+  },
+  "all_functionality_verified": false,
+  "production_writes": false,
+  "raw_original_messages_included": false,
+  "maintenance_health_failure_preserved": true
+}

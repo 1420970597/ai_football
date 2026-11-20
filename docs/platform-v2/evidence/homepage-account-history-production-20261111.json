@@ -1,0 +1,247 @@
+{
+  "recorded_at": "2026-11-11T02:59:53.772493+00:00",
+  "feature_commit": "1bedbf7c0b17eb94912ca12ecb16cecf5ecf7ce8",
+  "deployment_bridge_commit": "2d2a88e5a4010a4861b9bde2b6590e8c92c92682",
+  "scope": "read-only personal seven-day history display",
+  "production_deployed": true,
+  "real_wagers_submitted_by_validation": 0,
+  "upstream_personal_history_requested_by_validation": false,
+  "original_database_location_change": "completed independently; preserve current local TLS runtime configuration",
+  "migrations": {
+    "applied": [
+      "032_account_history.sql"
+    ],
+    "schema_verified": true,
+    "tls_verified": true,
+    "new_table_dml_granted": true,
+    "runtime_ddl_denied": true
+  },
+  "runtime_images": [
+    {
+      "role": "api",
+      "runtime_configuration_preserved": true,
+      "image": "sha256:98c4d9b263270cf03fc9c13c9495336e082b9f7e9d4d9dd37119609c6bd1cd3c",
+      "running": true,
+      "restart_count": 0
+    },
+    {
+      "role": "review-worker",
+      "runtime_configuration_preserved": true,
+      "image": "sha256:6795bc7860a8edcbaf14ef6cd92d9fc0fb9edfa663563e2652357504b7127797",
+      "running": true,
+      "restart_count": 0
+    },
+    {
+      "role": "web",
+      "runtime_configuration_preserved": true,
+      "image": "sha256:732bdfeaffcf3df3c57b2126931dd6c4a2bb5fcc92705d697181407cbcc5caea",
+      "running": true,
+      "restart_count": 0
+    },
+    {
+      "role": "local-mcp-api",
+      "runtime_configuration_preserved": true,
+      "image": "sha256:32efdbb5e1301f2ae8a6e32ad40d2ab750b982cb3fde5ecf65c8d2ddff671315",
+      "running": true,
+      "restart_count": 0
+    },
+    {
+      "service": "executor",
+      "runtime_preserved": true,
+      "container_recreated": true,
+      "image": "sha256:8070934dd3e991360d46e479616cb79e77894794d0d2a6084c560a39e16e1a9b"
+    },
+    {
+      "service": "api-bridge",
+      "runtime_preserved": true,
+      "container_recreated": false,
+      "image": "sha256:0eb00929a9534f57c5f06433f1a68791681c8883e5d04ce8759c0d969864d734"
+    },
+    {
+      "service": "collector",
+      "runtime_preserved": true,
+      "container_recreated": false,
+      "image": "sha256:84b2d8282e760fc08712f76391cf30fcbc0bf782e67bf8389d063c17da3ef1de"
+    }
+  ],
+  "api": {
+    "GET /healthz": 200,
+    "GET /readyz": 200,
+    "GET /api/v1/accounts/history": 401,
+    "POST /api/v1/accounts/history/refresh": 401,
+    "schema_versions": 32,
+    "new_table_runtime_dml": true,
+    "runtime_ddl_denied": true
+  },
+  "bridge": {
+    "checks": [
+      {
+        "role": "executor",
+        "method": "POST",
+        "query": false,
+        "status": 422,
+        "passed": true
+      },
+      {
+        "role": "collector",
+        "method": "POST",
+        "query": false,
+        "status": 403,
+        "passed": true
+      },
+      {
+        "role": "executor",
+        "method": "GET",
+        "query": false,
+        "status": 403,
+        "passed": true
+      },
+      {
+        "role": "executor",
+        "method": "POST",
+        "query": true,
+        "status": 403,
+        "passed": true
+      }
+    ],
+    "only_invalid_payload_sent": true,
+    "job_mutations": 0
+  },
+  "isolated_checks": {
+    "bridge_contract_tests": 31,
+    "history_tests": 14,
+    "production_executor_sample_tests": 3,
+    "combined_032_033_migration_orders_passed": true
+  },
+  "candidate_file_deltas": {
+    "api": {
+      "changed_files": [
+        "app/account_history.py",
+        "app/main.py",
+        "app/routes/account_history.py",
+        "app/routes/accounts.py",
+        "migrations/032_account_history.sql"
+      ],
+      "existing_storage_code_unchanged": true,
+      "manual_betting_migration_excluded": true
+    },
+    "worker": {
+      "changed_files": [
+        "migrations/032_account_history.sql"
+      ],
+      "existing_storage_code_unchanged": true,
+      "manual_betting_migration_excluded": true
+    },
+    "tools": {
+      "changed_files": [
+        "migrations/032_account_history.sql"
+      ],
+      "existing_storage_code_unchanged": true,
+      "manual_betting_migration_excluded": true
+    },
+    "web": {
+      "changed_files": [
+        "/usr/share/nginx/html/assets/account-history.js",
+        "/usr/share/nginx/html/assets/app.css",
+        "/usr/share/nginx/html/assets/app.js",
+        "/usr/share/nginx/html/index.html"
+      ]
+    }
+  },
+  "backups": {
+    "scope": "full schema plus users/accounts/account-jobs/schema-versions; complements separate full storage snapshot",
+    "restore": {
+      "restored_schema_versions": 31,
+      "users": 2,
+      "accounts": 1,
+      "account_jobs": 9648,
+      "history_table_absent": true
+    },
+    "sha256": {
+      "pre032-schema.sql": "4daa812e47c5649dd7150a819350a2bee0e9a7b0849aaecbdd092116ef5d6a3d",
+      "pre032-account-scope.dump": "1316183453cfb7cbba06a35d06802e2b1f7e160fb7204d22ee3444ba081d7377"
+    }
+  },
+  "production_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "sport": "football",
+        "matches": 26,
+        "recommendations": 71,
+        "passed": true
+      },
+      {
+        "width": 1440,
+        "sport": "basketball",
+        "matches": 6,
+        "recommendations": 25,
+        "passed": true
+      },
+      {
+        "width": 390,
+        "sport": "football",
+        "matches": 26,
+        "recommendations": 71,
+        "passed": true
+      },
+      {
+        "width": 390,
+        "sport": "basketball",
+        "matches": 6,
+        "recommendations": 25,
+        "passed": true
+      }
+    ],
+    "real_production_reads": true,
+    "production_writes": 0
+  },
+  "screenshots": [
+    "output/playwright/homepage-history-production-20261111/production-viewport-1440.png",
+    "output/playwright/homepage-history-production-20261111/production-viewport-390.png"
+  ],
+  "visual_review": "both screenshots reviewed; new summary visible, no clipping or horizontal overflow",
+  "limits": "Guest production reads and invalid internal payload forwarding verified. Authenticated personal provider retrieval has not been initiated by deployment checks.",
+  "commands": [
+    {
+      "command": "docker build --memory 512m --cpu-period 100000 --cpu-quota 50000 -f <role>-localdb.Dockerfile -t <candidate> <frozen-release>",
+      "exit_code": 0
+    },
+    {
+      "command": "docker run --rm --network bridge --link <task-postgres>:ai-football-v2-pgtest --cpus .75 --memory 768m <candidate-api> python -m unittest test_account_history -q",
+      "exit_code": 0,
+      "passed": 14
+    },
+    {
+      "command": "docker run --rm --network none --cpus .5 --memory 256m <remote-candidate> python /task/smoke.py",
+      "exit_code": 0,
+      "passed": 3
+    },
+    {
+      "command": "docker run --rm <isolated-database-link> <candidate-api> python /task/test-combined-migrations.py",
+      "exit_code": 0
+    },
+    {
+      "command": "docker exec <local-postgres> pg_dump --schema-only --no-owner --no-acl; docker exec <local-postgres> pg_dump --format=custom --table=<affected-tables>",
+      "exit_code": 0
+    },
+    {
+      "command": "docker exec <task-postgres> psql <schema>; docker exec <task-postgres> pg_restore --data-only --table=<parent-before-child>",
+      "exit_code": 0
+    },
+    {
+      "command": "docker run --rm --network ai-football-v2_storage-private --env-file <protected-migration-env> --cpus .5 --memory 256m <candidate-api> python /task/migrate-local.py",
+      "exit_code": 0
+    },
+    {
+      "command": "<role-specific-existing-compose-chain> -f <protected-candidate-overlay> up -d --no-deps --no-build <role>",
+      "exit_code": 0
+    },
+    {
+      "command": "docker run --rm --network ai-football-v2_edge-private --cpus .5 --memory 768m ai-football-browser:v2.0.0-dev /work/probe.mjs",
+      "exit_code": 0,
+      "passed": 4
+    }
+  ],
+  "initial_failures": "Preserved in progress record: archive read permission; read-only tunnel filesystem; smoke PYTHONPATH; backup FK restore order; Docker environment array ordering."
+}

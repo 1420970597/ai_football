@@ -1,0 +1,23 @@
+{
+  "source_parent_commit": "9343fded7735ed4af5cc67a934251cc6e47420ea",
+  "committed_source_verified": true,
+  "tests": 1781,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 1190.639,
+  "scope": "isolated fixtures; no live providers or money",
+  "source_inventory_sha256": "84910b61d549920b3085b4e95fcf2a626491b4efce46b847d9d41e7123a40608",
+  "selected_source_sha256": {
+    "services/api/app/orders.py": "5f4c670b1681c416a00e70ded4c29692e5fcb274f1cc6a9a228537676b2b1c6e",
+    "services/api/app/routes/accounts.py": "4b8a0ff71f1234b29907f960376f429c06605880d944d65cef543ec3971d1294",
+    "tests/test_model_recovery_order_age.py": "76ff45a5c529d99ef9cf806fcd86a86e8c73af6b5e3cc7fcb0a5e6ffcc850c1f"
+  },
+  "native_exit": 0,
+  "controller_exit": 0,
+  "framework_first_attempt_exit": 1,
+  "first_framework_failure": "Docker private address pools exhausted",
+  "owned_database_and_network_retirement_exit": 0,
+  "deployed": false,
+  "real_money_tested": false
+}

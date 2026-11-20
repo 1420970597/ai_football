@@ -1,0 +1,1174 @@
+{
+  "recorded_at": "2026-11-08T23:41:50.616787+00:00",
+  "api_source_commit": "27cb7dee5039c1b5c49b46fa657369c8a132415e",
+  "read_only": true,
+  "production_writes": 0,
+  "three_second_acceptance": false,
+  "natural_messages": {
+    "read_only": true,
+    "production_writes": 0,
+    "messages": [
+      {
+        "alias": 1,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 2681.075,
+              "queue_wait_ms": 2750.52,
+              "message_age_seconds": 4.762
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 749.708
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.058,
+              "provider_elapsed_ms": 4656.149,
+              "model_elapsed_ms": 8967.709,
+              "event_to_result_ms": 11649.046,
+              "claim_to_result_ms": 8967.971,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 14246.302,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 2,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 2390.473,
+              "queue_wait_ms": 2518.276,
+              "message_age_seconds": 3.727
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 493.58
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.056,
+              "provider_elapsed_ms": 5747.516,
+              "model_elapsed_ms": 9036.884,
+              "event_to_result_ms": 11427.584,
+              "claim_to_result_ms": 9037.111,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 13962.161,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 3,
+        "state": "succeeded",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 9968.239,
+              "queue_wait_ms": 10259.303,
+              "message_age_seconds": 14.042
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 1563.926
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 1563.145,
+              "provider_elapsed_ms": 43202.087,
+              "model_elapsed_ms": 47083.516,
+              "event_to_result_ms": 57051.809,
+              "claim_to_result_ms": 47083.57,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 60004.78,
+              "accepted_count": 1
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 4409.111,
+              "max_ms": 4409.111
+            },
+            "sum_elapsed_ms_not_critical_path": 4409.111
+          },
+          "mcp_list_match_markets": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 12247.292,
+              "max_ms": 12247.292
+            },
+            "sum_elapsed_ms_not_critical_path": 12247.292
+          },
+          "mcp_record_expert_signals": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 9359.77,
+              "max_ms": 9359.77
+            },
+            "sum_elapsed_ms_not_critical_path": 9359.77
+          }
+        }
+      },
+      {
+        "alias": 4,
+        "state": "unresolved",
+        "attempts": 2,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 1494.575,
+              "queue_wait_ms": 1657.171,
+              "message_age_seconds": 4.287
+            },
+            {
+              "event_to_claim_ms": 67276.63,
+              "queue_wait_ms": 67440.055,
+              "message_age_seconds": 70.07
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 373.801
+            },
+            {
+              "preflight_elapsed_ms": 617.922
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.055,
+              "provider_elapsed_ms": 4687.079,
+              "model_elapsed_ms": 9237.706,
+              "event_to_result_ms": 76514.397,
+              "claim_to_result_ms": 9237.767,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [
+            {
+              "elapsed_ms": 2930.933
+            }
+          ],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 78753.652,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 5,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 5974.178,
+              "queue_wait_ms": 6188.26,
+              "message_age_seconds": 10.782
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 751.53
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 351.945,
+              "provider_elapsed_ms": 7155.358,
+              "model_elapsed_ms": 10315.922,
+              "event_to_result_ms": 16290.176,
+              "claim_to_result_ms": 10315.998,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 18108.095,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 6,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 2703.772,
+              "queue_wait_ms": 2868.732,
+              "message_age_seconds": 7.724
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 630.981
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.048,
+              "provider_elapsed_ms": 3987.614,
+              "model_elapsed_ms": 6952.601,
+              "event_to_result_ms": 9656.434,
+              "claim_to_result_ms": 6952.662,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 11551.145,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 7,
+        "state": "succeeded",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 13053.672,
+              "queue_wait_ms": 13216.586,
+              "message_age_seconds": 18.072
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 889.513
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 888.763,
+              "provider_elapsed_ms": 41267.076,
+              "model_elapsed_ms": 44594.764,
+              "event_to_result_ms": 57648.501,
+              "claim_to_result_ms": 44594.829,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 60470.088,
+              "accepted_count": 1
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 2,
+            "elapsed": {
+              "count": 2,
+              "median_ms": 3801.389,
+              "max_ms": 4170.509
+            },
+            "sum_elapsed_ms_not_critical_path": 7602.778
+          },
+          "mcp_list_match_markets": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 10003.835,
+              "max_ms": 10003.835
+            },
+            "sum_elapsed_ms_not_critical_path": 10003.835
+          },
+          "mcp_record_expert_signals": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 7206.263,
+              "max_ms": 7206.263
+            },
+            "sum_elapsed_ms_not_critical_path": 7206.263
+          }
+        }
+      },
+      {
+        "alias": 8,
+        "state": "succeeded",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 20868.293,
+              "queue_wait_ms": 21035.68,
+              "message_age_seconds": 23.685
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 904.473
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 903.607,
+              "provider_elapsed_ms": 59227.146,
+              "model_elapsed_ms": 62409.845,
+              "event_to_result_ms": 83278.212,
+              "claim_to_result_ms": 62409.919,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 85677.4,
+              "accepted_count": 1
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 3864.057,
+              "max_ms": 3864.057
+            },
+            "sum_elapsed_ms_not_critical_path": 3864.057
+          },
+          "mcp_list_match_markets": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 10935.589,
+              "max_ms": 10935.589
+            },
+            "sum_elapsed_ms_not_critical_path": 10935.589
+          },
+          "mcp_record_expert_signals": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 7907.109,
+              "max_ms": 7907.109
+            },
+            "sum_elapsed_ms_not_critical_path": 7907.109
+          }
+        }
+      },
+      {
+        "alias": 9,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 10909.535,
+              "queue_wait_ms": 11075.663,
+              "message_age_seconds": 13.833
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 741.092
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.051,
+              "provider_elapsed_ms": 3114.832,
+              "model_elapsed_ms": 6187.535,
+              "event_to_result_ms": 17097.141,
+              "claim_to_result_ms": 6187.606,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 19378.659,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 10,
+        "state": "succeeded",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 5897.478,
+              "queue_wait_ms": 6065.141,
+              "message_age_seconds": 7.896
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 500.871
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 474.637,
+              "provider_elapsed_ms": 53209.705,
+              "model_elapsed_ms": 55860.105,
+              "event_to_result_ms": 61757.66,
+              "claim_to_result_ms": 55860.182,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 64469.04,
+              "accepted_count": 1
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 2719.698,
+              "max_ms": 2719.698
+            },
+            "sum_elapsed_ms_not_critical_path": 2719.698
+          },
+          "mcp_list_match_markets": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 9769.545,
+              "max_ms": 9769.545
+            },
+            "sum_elapsed_ms_not_critical_path": 9769.545
+          },
+          "mcp_record_expert_signals": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 10338.546,
+              "max_ms": 10338.546
+            },
+            "sum_elapsed_ms_not_critical_path": 10338.546
+          }
+        }
+      },
+      {
+        "alias": 11,
+        "state": "succeeded",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 72209.639,
+              "queue_wait_ms": 72378.358,
+              "message_age_seconds": 78.032
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 738.913
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 714.317,
+              "provider_elapsed_ms": 49442.56,
+              "model_elapsed_ms": 52270.652,
+              "event_to_result_ms": 124480.356,
+              "claim_to_result_ms": 52270.717,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 127132.265,
+              "accepted_count": 1
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 3872.828,
+              "max_ms": 3872.828
+            },
+            "sum_elapsed_ms_not_critical_path": 3872.828
+          },
+          "mcp_list_match_markets": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 13503.391,
+              "max_ms": 13503.391
+            },
+            "sum_elapsed_ms_not_critical_path": 13503.391
+          },
+          "mcp_record_expert_signals": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 11155.502,
+              "max_ms": 11155.502
+            },
+            "sum_elapsed_ms_not_critical_path": 11155.502
+          }
+        }
+      },
+      {
+        "alias": 12,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 40356.311,
+              "queue_wait_ms": 40525.158,
+              "message_age_seconds": 58.043
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 449.477
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.046,
+              "provider_elapsed_ms": 3476.996,
+              "model_elapsed_ms": 6458.583,
+              "event_to_result_ms": 46814.972,
+              "claim_to_result_ms": 6458.661,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 48812.805,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 13,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 30492.132,
+              "queue_wait_ms": 30658.948,
+              "message_age_seconds": 46.177
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 494.409
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.057,
+              "provider_elapsed_ms": 3101.76,
+              "model_elapsed_ms": 6180.562,
+              "event_to_result_ms": 36672.762,
+              "claim_to_result_ms": 6180.63,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 38912.11,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 14,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 24183.76,
+              "queue_wait_ms": 24345.017,
+              "message_age_seconds": 26.963
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 764.507
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 763.694,
+              "provider_elapsed_ms": 74898.983,
+              "model_elapsed_ms": 78079.675,
+              "event_to_result_ms": 102263.48,
+              "claim_to_result_ms": 78079.72,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 104661.45,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 7,
+            "elapsed": {
+              "count": 7,
+              "median_ms": 2036.911,
+              "max_ms": 3698.652
+            },
+            "sum_elapsed_ms_not_critical_path": 17715.411
+          }
+        }
+      },
+      {
+        "alias": 15,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 11140.158,
+              "queue_wait_ms": 11304.159,
+              "message_age_seconds": 12.946
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 623.911
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 0.045,
+              "provider_elapsed_ms": 6598.477,
+              "model_elapsed_ms": 9481.415,
+              "event_to_result_ms": 20621.632,
+              "claim_to_result_ms": 9481.474,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 22833.181,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      },
+      {
+        "alias": 16,
+        "state": "succeeded",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 48094.415,
+              "queue_wait_ms": 48264.925,
+              "message_age_seconds": 49.183
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 619.592
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 471.617,
+              "provider_elapsed_ms": 59968.439,
+              "model_elapsed_ms": 62789.023,
+              "event_to_result_ms": 110883.493,
+              "claim_to_result_ms": 62789.078,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 113007.629,
+              "accepted_count": 1
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 2399.859,
+              "max_ms": 2399.859
+            },
+            "sum_elapsed_ms_not_critical_path": 2399.859
+          },
+          "mcp_list_match_markets": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 5908.186,
+              "max_ms": 5908.186
+            },
+            "sum_elapsed_ms_not_critical_path": 5908.186
+          },
+          "mcp_record_expert_signals": {
+            "calls": 1,
+            "elapsed": {
+              "count": 1,
+              "median_ms": 8808.628,
+              "max_ms": 8808.628
+            },
+            "sum_elapsed_ms_not_critical_path": 8808.628
+          }
+        }
+      },
+      {
+        "alias": 17,
+        "state": "succeeded",
+        "attempts": 2,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 27712.839,
+              "queue_wait_ms": 27866.389,
+              "message_age_seconds": 29.956
+            },
+            {
+              "event_to_claim_ms": 197093.233,
+              "queue_wait_ms": 197262.425,
+              "message_age_seconds": 199.352
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 1180.652
+            },
+            {
+              "preflight_elapsed_ms": 496.97
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 1179.828,
+              "provider_elapsed_ms": 143161.943,
+              "model_elapsed_ms": 146633.179,
+              "event_to_result_ms": 174346.083,
+              "claim_to_result_ms": 146633.244,
+              "completion_rounds": 1
+            },
+            {
+              "input_prepare_elapsed_ms": 1299.823,
+              "provider_elapsed_ms": 117472.028,
+              "model_elapsed_ms": 124020.643,
+              "event_to_result_ms": 321114.053,
+              "claim_to_result_ms": 124020.82,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 177030.215,
+              "accepted_count": 2
+            },
+            {
+              "event_to_conclusion_ms": 323568.069,
+              "accepted_count": 5
+            }
+          ]
+        },
+        "tools": {
+          "mcp_search_matches": {
+            "calls": 10,
+            "elapsed": {
+              "count": 10,
+              "median_ms": 2389.865,
+              "max_ms": 3714.941
+            },
+            "sum_elapsed_ms_not_critical_path": 26124.768
+          },
+          "mcp_list_match_markets": {
+            "calls": 10,
+            "elapsed": {
+              "count": 10,
+              "median_ms": 7314.514,
+              "max_ms": 9687.02
+            },
+            "sum_elapsed_ms_not_critical_path": 73287.694
+          },
+          "mcp_record_expert_signals": {
+            "calls": 3,
+            "elapsed": {
+              "count": 3,
+              "median_ms": 13042.56,
+              "max_ms": 23545.491
+            },
+            "sum_elapsed_ms_not_critical_path": 42513.06
+          }
+        }
+      },
+      {
+        "alias": 18,
+        "state": "unresolved",
+        "attempts": 1,
+        "stages": {
+          "attempt_claimed": [
+            {
+              "event_to_claim_ms": 23384.008,
+              "queue_wait_ms": 23544.071,
+              "message_age_seconds": 25.477
+            }
+          ],
+          "hermes_request": [
+            {
+              "preflight_elapsed_ms": 494.863
+            }
+          ],
+          "hermes_result": [
+            {
+              "input_prepare_elapsed_ms": 479.506,
+              "provider_elapsed_ms": 6394.325,
+              "model_elapsed_ms": 9327.397,
+              "event_to_result_ms": 32711.473,
+              "claim_to_result_ms": 9327.465,
+              "completion_rounds": 1
+            }
+          ],
+          "hermes_partial_result": [],
+          "review_failure": [],
+          "system_review_result": [
+            {
+              "event_to_conclusion_ms": 34582.65,
+              "accepted_count": 0
+            }
+          ]
+        },
+        "tools": {}
+      }
+    ],
+    "summary": {
+      "attempt_claimed.event_to_claim_ms": {
+        "count": 20,
+        "median_ms": 16960.983,
+        "max_ms": 197093.233
+      },
+      "hermes_request.preflight_elapsed_ms": {
+        "count": 20,
+        "median_ms": 627.446,
+        "max_ms": 1563.926
+      },
+      "hermes_result.input_prepare_elapsed_ms": {
+        "count": 19,
+        "median_ms": 471.617,
+        "max_ms": 1563.145
+      },
+      "hermes_result.provider_elapsed_ms": {
+        "count": 19,
+        "median_ms": 7155.358,
+        "max_ms": 143161.943
+      },
+      "hermes_result.model_elapsed_ms": {
+        "count": 19,
+        "median_ms": 10315.922,
+        "max_ms": 146633.179
+      },
+      "system_review_result.event_to_conclusion_ms": {
+        "count": 19,
+        "median_ms": 60004.78,
+        "max_ms": 323568.069
+      }
+    },
+    "tool_elapsed_sums_are_not_critical_path": true,
+    "provider_elapsed_includes_framework_tools_and_model_turns": true
+  },
+  "database_probe": {
+    "read_only": true,
+    "production_writes": 0,
+    "connect_ms": 1151.964,
+    "select_one_client_ms": [
+      412.293,
+      123.356,
+      123.184,
+      123.209,
+      245.448,
+      246.101,
+      245.521
+    ],
+    "select_one_median_ms": 245.448,
+    "active_job_query_shape_without_row_lock": true,
+    "not_a_lock_contention_benchmark": true,
+    "explain_client_ms": 586.691,
+    "server_planning_ms": 4.284,
+    "server_execution_ms": 0.921,
+    "plan_nodes": [
+      {
+        "Node Type": "Nested Loop",
+        "Actual Total Time": 0.636,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 27,
+        "Shared Read Blocks": 22
+      },
+      {
+        "Node Type": "Nested Loop",
+        "Actual Total Time": 0.236,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 9,
+        "Shared Read Blocks": 5
+      },
+      {
+        "Node Type": "Nested Loop",
+        "Actual Total Time": 0.202,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 8,
+        "Shared Read Blocks": 4
+      },
+      {
+        "Node Type": "Nested Loop",
+        "Actual Total Time": 0.164,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 6,
+        "Shared Read Blocks": 4
+      },
+      {
+        "Node Type": "Nested Loop",
+        "Actual Total Time": 0.108,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 5,
+        "Shared Read Blocks": 3
+      },
+      {
+        "Node Type": "Index Scan",
+        "Relation Name": "v2_analysis_jobs",
+        "Actual Total Time": 0.073,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 2,
+        "Shared Read Blocks": 2
+      },
+      {
+        "Node Type": "Index Scan",
+        "Relation Name": "v2_expert_messages",
+        "Actual Total Time": 0.033,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 3,
+        "Shared Read Blocks": 1
+      },
+      {
+        "Node Type": "Index Scan",
+        "Relation Name": "v2_experts",
+        "Actual Total Time": 0.053,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 1,
+        "Shared Read Blocks": 1
+      },
+      {
+        "Node Type": "Index Scan",
+        "Relation Name": "v2_expert_sources",
+        "Actual Total Time": 0.036,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 2,
+        "Shared Read Blocks": 0
+      },
+      {
+        "Node Type": "Index Scan",
+        "Relation Name": "v2_source_experts",
+        "Actual Total Time": 0.032,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 1,
+        "Shared Read Blocks": 1
+      },
+      {
+        "Node Type": "Limit",
+        "Actual Total Time": 0.348,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 15,
+        "Shared Read Blocks": 17
+      },
+      {
+        "Node Type": "Sort",
+        "Actual Total Time": 0.347,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 15,
+        "Shared Read Blocks": 17
+      },
+      {
+        "Node Type": "Bitmap Heap Scan",
+        "Relation Name": "v2_analysis_traces",
+        "Actual Total Time": 0.268,
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 12,
+        "Shared Read Blocks": 17
+      },
+      {
+        "Node Type": "Bitmap Index Scan",
+        "Actual Total Time": 0.036,
+        "Actual Rows": 58,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 3,
+        "Shared Read Blocks": 0
+      },
+      {
+        "Node Type": "Nested Loop",
+        "Actual Total Time": 0.0,
+        "Actual Rows": 0,
+        "Actual Loops": 0,
+        "Shared Hit Blocks": 0,
+        "Shared Read Blocks": 0
+      },
+      {
+        "Node Type": "Index Scan",
+        "Relation Name": "v2_expert_messages",
+        "Actual Total Time": 0.0,
+        "Actual Rows": 0,
+        "Actual Loops": 0,
+        "Shared Hit Blocks": 0,
+        "Shared Read Blocks": 0
+      },
+      {
+        "Node Type": "Index Only Scan",
+        "Relation Name": "v2_expert_messages",
+        "Actual Total Time": 0.0,
+        "Actual Rows": 0,
+        "Actual Loops": 0,
+        "Shared Hit Blocks": 0,
+        "Shared Read Blocks": 0
+      },
+      {
+        "Node Type": "Index Only Scan",
+        "Relation Name": "v2_expert_messages",
+        "Actual Total Time": 0.041,
+        "Actual Rows": 0,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 3,
+        "Shared Read Blocks": 0
+      }
+    ]
+  },
+  "older_time_versions": {
+    "read_only": true,
+    "production_writes": 0,
+    "window_start": "2026-11-08T23:11:10.545784+00:00",
+    "older_versions": 164,
+    "distinct_posts": 164,
+    "posts_with_multiple_versions": 0,
+    "max_versions_per_post": 1,
+    "source_edited_in_window": 0,
+    "earlier_source_time": 164,
+    "first_saved_version": 164,
+    "later_saved_version": 0
+  },
+  "limits": [
+    "Eighteen source posts include retries: attempts and receipts are not independent recommendations.",
+    "Framework provider duration includes tool calls and model turns; summing overlapping tools is not a critical path.",
+    "Database EXPLAIN removed the row lock and is not a lock contention or pool benchmark.",
+    "Only a small single-connection read-only round-trip sample; no causal performance claim.",
+    "Older received versions in this window are first saves, not source edits or a revision storm."
+  ],
+  "native_exits": {
+    "e1833-natural-stage-latency-readonly": 0,
+    "e1835-database-roundtrip-readonly": 0,
+    "e1837-older-versions-readonly": 0
+  },
+  "raw_sha256": {
+    "e1833-natural-stage-latency-readonly": "5cf587a998daba36853f45d56fd70dfed0d5851e5e0e3ec6ec2897604a700dd3",
+    "e1835-database-roundtrip-readonly": "40222e054d094e765b08b120935a9bef6ab93cb17ab56d59d6ec16e82c4da977",
+    "e1837-older-versions-readonly": "b718223dc18b3a7b423b025ea0d2126cd226a8915242de5a78c3530866baa6a7"
+  }
+}

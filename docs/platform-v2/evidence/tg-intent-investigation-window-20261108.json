@@ -1,0 +1,94 @@
+{
+  "window_start": "2026-11-08T12:39:44.089049+00:00",
+  "window_last_database_sample": "2026-11-08T13:09:45.886665+00:00",
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 212,
+    "published_posts": 55,
+    "older_posts_revised": 154,
+    "published_ready": 48,
+    "published_pending": 0,
+    "published_unsupported": 7
+  },
+  "reviews_final": {
+    "eligible": 48,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 48,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 58,
+    "avg_ms": "5656.6",
+    "p95_ms": "15529.2",
+    "within_3s": 24,
+    "older_backlog_versions_received": 155
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 48
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 48
+    }
+  ],
+  "market_samples": 61,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T13:09:07.858933+00:00",
+    "last_poll_elapsed_ms": 24396.9,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 34698,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 18.9,
+    "oldest_quote_age_seconds": 323183.2,
+    "failed_batches": 0
+  },
+  "official_reconcile": {
+    "read_only": true,
+    "official_posts": 57,
+    "normalized_posts": 55,
+    "matched": 55,
+    "missing": []
+  },
+  "exits": {
+    "e1016-completion-audit": 0,
+    "e1016-natural-audit": 0,
+    "e1016-scheduled-window": 0,
+    "e1016-independent-native": 0,
+    "e1016-official-scan": 0,
+    "e1016-market-native": 0,
+    "e1016-official-reconcile": 0
+  },
+  "observer_exits": {
+    "e1017-observer-controller": 0,
+    "e1017-observer-native": 0,
+    "e1017-schedule-observer": 0
+  },
+  "all_functionality_verified": false,
+  "production_writes": false,
+  "raw_original_messages_included": false
+}

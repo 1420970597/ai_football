@@ -1,0 +1,13 @@
+# Keep schema-checking roles compatible with applied migration 038.
+# These role images preserve their application code and add catalogue files only.
+x-production-review-schema:
+  source_revision: 3049c0503e51d45bf76eb43d082c80e0358944b2
+  artifact_version: 2.0.0-dev-manual-intents.20261112.1
+  schema: 038_manual_buy_intents.sql
+  mcp_catalogue_repair: 037_correct_legacy_sport_labels.sql
+
+services:
+  review-worker:
+    image: sha256:0716a73ccc2466417eba6ed0c3cdc8660db498cc2a10fdb8eace3017f950a96c
+  local-mcp-api:
+    image: sha256:a88e2b101f74698db85e0b1b6b9cacb8c67631ff7f39aad59a5cde8eee3d412d

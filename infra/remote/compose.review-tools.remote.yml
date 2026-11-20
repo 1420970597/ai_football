@@ -1,0 +1,25 @@
+# Standalone project overlay: does not recreate the collector or executor.
+services:
+  review-tools-api:
+    image: ${REVIEW_TOOLS_API_IMAGE:?Pin verified API image by digest}
+    user: '10001:10001'
+    command: [uvicorn, app.mcp_app:app, --host, '127.0.0.1', --port, '18094', --workers, '1', --no-access-log]
+    env_file: [./.runtime/review-tools/service.env]
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=16m']
+    # Four concurrent reviews share this process; 0.2 cores throttled the
+    # validated search/read workload. Keep a bounded 0.4-core allowance.
+    cpus: .4
+    mem_limit: 256m
+    pids_limit: 64
+    healthcheck:
+      test: [CMD, python, -c, "import json,urllib.request;d=json.load(urllib.request.urlopen('http://127.0.0.1:18094/readyz',timeout=2));assert d['status']=='ready' and d['role']=='mcp'"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+      start_period: 15s
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}

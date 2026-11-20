@@ -5,12 +5,16 @@ import java.io.InputStreamReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -27,7 +31,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
-/** Local TLS fixture only; no production URLs, passwords, accounts or trust bypass in the APK. */
+/** Local HTTP/TLS fixtures only; no production URLs, accounts or trust bypass in the APK. */
 public final class ServerProbeTest {
     private static final String IDENTITY="{\"product_id\":\"ai-football-experts\",\"api_version\":2,\"min_android_version_code\":1,\"version\":\"2.0.0-dev\"}";
     private static Path keyFile;
@@ -70,8 +74,8 @@ public final class ServerProbeTest {
         });
         origin="https://localhost:"+server.getLocalPort();
     }
-    private void respond(SSLSocket accepted) throws IOException {
-        try (SSLSocket socket=accepted) {
+    private void respond(Socket accepted) throws IOException {
+        try (Socket socket=accepted) {
             socket.setSoTimeout(5000);
             BufferedReader input=new BufferedReader(new InputStreamReader(socket.getInputStream(),StandardCharsets.US_ASCII));
             String line=input.readLine();
@@ -92,6 +96,34 @@ public final class ServerProbeTest {
         server.close(); handlers.shutdownNow();
     }
     private void trustOnlyFixtureForThisTest() { HttpsURLConnection.setDefaultSSLSocketFactory(context.getSocketFactory()); }
+    private String probePlainHttp() throws Exception {
+        try (ServerSocket plain = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            plain.setSoTimeout(5000);
+            Future<?> response = handlers.submit(() -> {
+                try { respond(plain.accept()); }
+                catch (IOException failure) { throw new java.io.UncheckedIOException(failure); }
+            });
+            try { return new ServerProbe().verify("http://127.0.0.1:" + plain.getLocalPort(), 20000).version; }
+            finally { response.get(5, TimeUnit.SECONDS); }
+        }
+    }
+    @Test public void explicitHttpPairsWithoutTlsOrWebViewCookies() throws Exception {
+        assertEquals("2.0.0-dev", probePlainHttp());
+        assertEquals("/api/v1/public/client-info", seenPath.get());
+        assertNull(seenCookie.get());
+    }
+    @Test public void httpRedirectCannotChangeService() {
+        responseStatus = 302;
+        assertThrows(IOException.class, this::probePlainHttp);
+    }
+    @Test public void httpStillRequiresCompatibleServiceIdentity() {
+        responseBody = "{\"product_id\":\"another-app\"}";
+        assertThrows(IOException.class, this::probePlainHttp);
+    }
+    @Test public void httpHtmlCannotPairAsService() {
+        responseType = "text/html"; responseBody = "<html>proxy</html>";
+        assertThrows(IOException.class, this::probePlainHttp);
+    }
     @Test public void defaultTrustRejectsUnknownCertificate() {
         assertThrows(SSLException.class,() -> new ServerProbe().verify(origin,20000));
         assertNull(seenPath.get());

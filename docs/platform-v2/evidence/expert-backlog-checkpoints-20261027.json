@@ -1,0 +1,56 @@
+{
+  "observed_at_utc": "2026-10-27T17:44:32.635731+00:00",
+  "read_only": true,
+  "sources": [
+    {
+      "source_hash": "78b3c1241281",
+      "historical_checkpoint_is_zero": false,
+      "checked_at": "2026-10-27 17:41:40.843157+00:00",
+      "lease_until": "2026-10-27 17:45:57.312148+00:00",
+      "has_owner": true,
+      "latest_message_persisted_at": "2026-10-27 17:44:22.656355+00:00",
+      "newest_source_message_time": "2026-10-27 15:58:44+00:00"
+    },
+    {
+      "source_hash": "a204f25ed934",
+      "historical_checkpoint_is_zero": false,
+      "checked_at": "2026-10-27 17:44:29.411621+00:00",
+      "lease_until": "2026-10-27 17:45:59.411621+00:00",
+      "has_owner": true,
+      "latest_message_persisted_at": "2026-10-27 17:44:25.639359+00:00",
+      "newest_source_message_time": "2026-10-27 16:52:16+00:00"
+    },
+    {
+      "source_hash": "77e539be1efe",
+      "historical_checkpoint_is_zero": false,
+      "checked_at": "2026-10-27 15:46:24.796361+00:00",
+      "lease_until": "2026-10-27 17:45:42.780829+00:00",
+      "has_owner": true,
+      "latest_message_persisted_at": null,
+      "newest_source_message_time": null
+    },
+    {
+      "source_hash": "f5e1023dc132",
+      "historical_checkpoint_is_zero": false,
+      "checked_at": "2026-10-27 17:42:18.166965+00:00",
+      "lease_until": "2026-10-27 17:45:57.316046+00:00",
+      "has_owner": true,
+      "latest_message_persisted_at": "2026-10-27 17:44:27.316046+00:00",
+      "newest_source_message_time": "2026-10-27 16:13:28+00:00"
+    }
+  ],
+  "latest_ingest_years": [
+    {
+      "message_year": 2021,
+      "persisted_last_10min": 9
+    },
+    {
+      "message_year": 2023,
+      "persisted_last_10min": 23
+    },
+    {
+      "message_year": 2025,
+      "persisted_last_10min": 25
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+# Only merged with the existing browser suite inside its fresh temporary project.
+services:
+  seed:
+    environment:
+      BROWSER_EXTENDED_FIXTURE: 'true'
+  api:
+    environment:
+      LIVE_ORDERS_ENABLED: 'true'
+  account-fixture:
+    image: ${BROWSER_API_IMAGE:-ai-football-api:web-integration-current}
+    environment:
+      DATABASE_URL: postgresql://web_integration:test-only-database-password@pg:5432/web_integration
+    command: [python, /verification/browser_account_fixture.py]
+    volumes:
+      - ../integration/browser_account_fixture.py:/verification/browser_account_fixture.py:ro
+    depends_on:
+      api: {condition: service_healthy}
+    cpus: .125
+    mem_limit: 128m
+    pids_limit: 64
+    networks: [isolated]
+  browser:
+    environment:
+      BROWSER_EXTENDED_FIXTURE: 'true'
+    depends_on:
+      account-fixture: {condition: service_started}

@@ -1,0 +1,35 @@
+name: Android and public edge boundaries
+
+on:
+  pull_request:
+    paths:
+      - android/**
+      - infra/android/**
+      - infra/release/**
+      - tests/android/**
+      - tests/test_release_manifest.py
+      - tests/test_stable_release_plan.py
+      - web/app/nginx.conf
+      - .github/workflows/android-*.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-boundaries-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Reject incomplete or mismatched signed release evidence
+        run: |
+          docker run --rm --cpus=.5 --memory=256m --network none -v "$PWD:/source:ro" -w /source \
+            python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
+            python -m unittest tests.android.test_release_policy tests.android.test_device_contract tests.test_release_manifest tests.test_stable_release_plan -v
+      - name: Exercise the real Nginx request boundary in an isolated Docker network
+        run: sh infra/android/check-edge.sh

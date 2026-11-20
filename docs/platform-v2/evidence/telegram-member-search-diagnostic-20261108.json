@@ -1,0 +1,72 @@
+{
+  "read_only": true,
+  "production_writes": 0,
+  "identities_exported": false,
+  "aliases_local_to_report_only": true,
+  "member_enumeration": [
+    {
+      "source_alias": "source_1",
+      "state": "unavailable",
+      "reason": "member_enumeration_restricted",
+      "item_count": 0,
+      "role_counts": {},
+      "manual_id_allowed": true
+    },
+    {
+      "source_alias": "source_2",
+      "state": "available",
+      "item_count": 6,
+      "role_counts": {
+        "administrator": 5,
+        "owner": 1
+      },
+      "member_scope": "all_visible_members",
+      "manual_id_allowed": true
+    },
+    {
+      "source_alias": "source_3",
+      "state": "unavailable",
+      "reason": "member_enumeration_restricted",
+      "item_count": 0,
+      "role_counts": {},
+      "manual_id_allowed": true
+    },
+    {
+      "source_alias": "source_4",
+      "state": "unavailable",
+      "reason": "member_enumeration_restricted",
+      "item_count": 0,
+      "role_counts": {},
+      "manual_id_allowed": true
+    },
+    {
+      "source_alias": "source_5",
+      "state": "available",
+      "item_count": 11,
+      "role_counts": {
+        "administrator": 10,
+        "owner": 1
+      },
+      "member_scope": "all_visible_members",
+      "manual_id_allowed": true
+    },
+    {
+      "source_alias": "source_6",
+      "state": "available",
+      "item_count": 7,
+      "role_counts": {
+        "administrator": 6,
+        "owner": 1
+      },
+      "member_scope": "all_visible_members",
+      "manual_id_allowed": true
+    }
+  ],
+  "existing_session_own_membership": {
+    "configured_sources": 6,
+    "lookup_successes": 6,
+    "ordinary_roles": 6
+  },
+  "does_not_prove_all_hidden_members_enumerable": true,
+  "trust_or_permissions_changed": false
+}

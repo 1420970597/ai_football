@@ -1,0 +1,57 @@
+{
+  "schema": "hermes-request-context-dedup-isolated-v1",
+  "old_prompt": {
+    "chars": 2032,
+    "utf8_bytes": 4842,
+    "sha256": "ddaf3461d8965b8f258b61260dccbb8140650dd002f96142ab72eef8acb3fd12"
+  },
+  "candidate_prompt": {
+    "chars": 756,
+    "utf8_bytes": 1688,
+    "sha256": "deda2036c76905f2fe540a36c120c5ff6cece05620ae6e24c5a7269dabb12bda"
+  },
+  "request_prompt_byte_reduction_percent": 65.138,
+  "only_api_prompt_literal_changes_ast_verified": true,
+  "unchanged_complete_hermes_profile_sha256": {
+    "integrations/hermes/runner.py": "fbd1402dfebc88e0dbbfebc742c31047459a1f46c287ae24229f9c3c41c28fc0",
+    "integrations/hermes/config.yaml": "c326f8c37333eeb43f5dff9fff4d047666caa8826855a75535e8b3004223bb0d",
+    "integrations/hermes/AGENTS.md": "38eff01156c204b9001fbcb3a55597a85fe223094926c09355665e4a6f089667",
+    "integrations/hermes/skills/expert-review/SKILL.md": "c2162f43ae81aa1e53c4c2a1ef3fd62c01a921b743d663697c3f1126593c7791"
+  },
+  "baseline_new_tests": {
+    "tests": 2,
+    "failures": 1,
+    "errors": 0,
+    "native_exit": 1
+  },
+  "first_candidate_retained": {
+    "tests": 61,
+    "failures": 1,
+    "errors": 0,
+    "native_exit": 1,
+    "cause": "existing_contract_requires_direct_league_and_visual_reminders"
+  },
+  "final_candidate_related_tests": {
+    "tests": 61,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0,
+    "seconds": 11.685
+  },
+  "existing_contract_assertions_unchanged": true,
+  "multimodal_wire_parts_and_task_scope_unchanged": true,
+  "provider_calls": 0,
+  "production_writes": 0,
+  "full_suite_pending": true,
+  "native_framework_pending": true,
+  "real_image_semantics_pending": true,
+  "production_deployment_pending": true,
+  "actual_provider_token_or_latency_reduction_claimed": false,
+  "raw_evidence_sha256": {
+    "e1713-prompt-before.stderr": "5eafea70432a30356070f1558f922894aa59451e9bc6acd96de2d88b30cbad88",
+    "e1714-prompt-candidate.stderr": "47b60ba74651d69e060ec99a06e0cda5d5c3b0bbea234d8fbd7e0deb728c759b",
+    "e1718-prompt-candidate.stderr": "78f74dbc378dd0816adb99b27a175986ac3705cbf36629658624c90b8f316ad3",
+    "e1711-preload-contract.json": "d449b7f01591a90ca6a9220ae3ffccb894b3ddc5a3bab0a45ca97d979e3bffb4",
+    "e1718-profile-exact-diff.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

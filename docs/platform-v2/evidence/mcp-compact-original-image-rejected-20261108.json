@@ -1,0 +1,109 @@
+{
+  "passed": false,
+  "source_commit": "7d59e17da43cfa94c5bbefe6440b1379c906de94",
+  "blocking_case": "e1539",
+  "reason": "confirmed_bet_image_and_explicit_can_single_or_parlay_caption_misdescribed_as_no_new_instruction",
+  "final_sha256": "b6711571cb7ae011e59c86908095348c2264d5728481dd4aa37f36dedb046994",
+  "fixture_identity_and_market_evidence_do_not_override_intent_semantics": true,
+  "candidate_deployment_blocked": true,
+  "production_source_unchanged": "19b0157265b9540f4c0d589dffbd6e678736e4d8",
+  "other_replay_cases_still_require_manual_review": false,
+  "three_second_target_passed": false,
+  "cases": [
+    {
+      "case": "e1536",
+      "final_sha256": "20939d66e15ee4ef2faeb9cc93d67788d22ff8edb705d41deda1b1c680ee750b",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 33975.937,
+      "completion_rounds": 1,
+      "semantic_issue": null
+    },
+    {
+      "case": "e1537",
+      "final_sha256": "7feee8bca2a9689463cd083e22a3f6eef4689b91fa0d19f1b705526e89fa107c",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 16983.084,
+      "completion_rounds": 1,
+      "semantic_issue": null
+    },
+    {
+      "case": "e1538",
+      "final_sha256": "d6158a784973a2c018a8980294d283806f897f2ff9a1db20aa0e54cb0c187142",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 21064.437,
+      "completion_rounds": 1,
+      "semantic_issue": null
+    },
+    {
+      "case": "e1539",
+      "final_sha256": "b6711571cb7ae011e59c86908095348c2264d5728481dd4aa37f36dedb046994",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 16327.491,
+      "completion_rounds": 1,
+      "semantic_issue": "explicit_caption_recommendation_intent_denied"
+    },
+    {
+      "case": "e1540",
+      "final_sha256": "b7024762f45547acb707ddbad7e1de21c56efa0c2cb3686b3ca3ff67815f8705",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 29342.831,
+      "completion_rounds": 1,
+      "semantic_issue": null
+    },
+    {
+      "case": "e1541",
+      "final_sha256": "2675e0b73a015cb49dafb3c17473b8ba4bf5c48ce979522f89f5ab74a280b69c",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 30897.375,
+      "completion_rounds": 1,
+      "semantic_issue": null
+    },
+    {
+      "case": "e1542",
+      "final_sha256": "2880d076b76b61fa78ff507602c2689d8789a903a9735bb570f0c6bd95ae9a44",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 16443.995,
+      "completion_rounds": 1,
+      "semantic_issue": null
+    },
+    {
+      "case": "e1543",
+      "final_sha256": "70819497136c78e858178fab15339fb7e7c7eb5bba7a101098056d57ae53c04b",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 25940.18,
+      "completion_rounds": 1,
+      "semantic_issue": "unsupported_european_asian_market_rules_inference"
+    },
+    {
+      "case": "e1544",
+      "final_sha256": "93852caf92f6f90f8864db0b59344a397ee27f09bed0ae6f5454624eaee79c31",
+      "full_final_text_manually_read": true,
+      "phase_and_line_query_passed": true,
+      "elapsed_ms": 13795.935,
+      "completion_rounds": 1,
+      "semantic_issue": null
+    }
+  ],
+  "additional_blocking_case": "e1543",
+  "manual_scope": "all nine full final texts plus actual completion SQL",
+  "no_semantic_pass_from_identity_only": true,
+  "production_writes": 0,
+  "isolated_full_suite": {
+    "source_parent_commit": "7d59e17da43cfa94c5bbefe6440b1379c906de94",
+    "committed_source_verified": true,
+    "tests": 1916,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1296.184
+  },
+  "native_framework_exit_code": 0
+}

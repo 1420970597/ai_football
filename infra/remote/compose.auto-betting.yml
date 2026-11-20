@@ -1,0 +1,9 @@
+# Explicit remote opt-in paired with ../compose.auto-betting.yml on the API.
+# Apply to api-bridge first, executor second, and enable the API last.
+services:
+  api-bridge:
+    environment:
+      EXECUTOR_LIVE_ORDERS_ENABLED: 'true'
+  executor:
+    environment:
+      EXECUTOR_LIVE_ORDERS_ENABLED: 'true'

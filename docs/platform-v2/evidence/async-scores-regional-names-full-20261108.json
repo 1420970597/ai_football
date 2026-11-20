@@ -1,0 +1,15 @@
+{
+  "schema": "safe-frozen-test-evidence-v1",
+  "recorded_at_utc": "2026-11-08T14:54:00Z",
+  "source_parent_commit": "a2ba0349fc62a0694b166b46f136b110e5a44df1",
+  "committed_source_verified": true,
+  "tests": 1830,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 1250.002,
+  "native_exit": 0,
+  "controller_exit": 0,
+  "deployed": false,
+  "does_not_cover_later_period_completion_or_prompt_changes": true
+}

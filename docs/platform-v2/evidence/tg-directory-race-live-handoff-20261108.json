@@ -1,0 +1,308 @@
+{
+  "schema": "safe-directory-generation-web-handoff-v1",
+  "web_source_commit": "16cc2e690774693f3096cbd85428c2d53a91433c",
+  "web_image_id": "sha256:45ae18d5f137e1566fc8e31b754d6fb45f28eb1d1017d48b384d954c8aaf9809",
+  "completed_at": "2026-11-08T21:43:38Z",
+  "rollout_checks": {
+    "only_web_recreated": true,
+    "other_six_local_and_four_remote_unchanged": true,
+    "configuration_budgets_preserved": true
+  },
+  "exact_all_image_assets_checked": true,
+  "exact_served_app_and_admin_checked": true,
+  "isolated_browser_cases_passed": 57,
+  "isolated_race_cases_passed": 8,
+  "old_race_cases_failed": 8,
+  "real_browser_cases_passed": 24,
+  "real_browser_native_and_controller_exits": 0,
+  "real_phase_click_to_rows_ms": {
+    "min": 693,
+    "max": 1759
+  },
+  "real_read_delay_competition_cases": [
+    {
+      "width": 1440,
+      "case": "delayed_real_source_read_preserves_member_search",
+      "status": "passed",
+      "request_delay_only": true,
+      "response_rewrite": false,
+      "production_writes": 0,
+      "source_or_trust_changes": false
+    },
+    {
+      "width": 390,
+      "case": "delayed_real_source_read_preserves_member_search",
+      "status": "passed",
+      "request_delay_only": true,
+      "response_rewrite": false,
+      "production_writes": 0,
+      "source_or_trust_changes": false
+    }
+  ],
+  "real_browser_results": [
+    [
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1759,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 1313,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 1284,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 913,
+        "markets_included": false,
+        "server_items": 1,
+        "dom_rows": 1
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 1004,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1390,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 902,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 693,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 699,
+        "markets_included": false,
+        "server_items": 1,
+        "dom_rows": 1
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 901,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      }
+    ],
+    [
+      {
+        "width": 1440,
+        "passed": true,
+        "rows": 50,
+        "facts_ms": 2198,
+        "summaries_settled_ms": 3596,
+        "summary_responses": [
+          {
+            "status": 200
+          }
+        ],
+        "pending_rows": 0,
+        "focus_preserved": true,
+        "visible_fixture_anchor_preserved": true,
+        "scroll_before": 350,
+        "scroll_after": 389,
+        "anchor_top_before": 27,
+        "anchor_top_after": 27
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "rows": 50,
+        "facts_ms": 1604,
+        "summaries_settled_ms": 3104,
+        "summary_responses": [
+          {
+            "status": 200
+          }
+        ],
+        "pending_rows": 0,
+        "focus_preserved": true,
+        "visible_fixture_anchor_preserved": true,
+        "scroll_before": 350,
+        "scroll_after": 414,
+        "anchor_top_before": 0,
+        "anchor_top_after": 0
+      }
+    ],
+    [
+      {
+        "width": 1440,
+        "case": "expert_ranking_refresh",
+        "status": "passed",
+        "experts": 10
+      },
+      {
+        "width": 1440,
+        "case": "expert_detail_and_tabs",
+        "status": "passed",
+        "settled_count_matches_api": true
+      },
+      {
+        "width": 1440,
+        "case": "telegram_monitoring_sources",
+        "status": "passed",
+        "source_count": 6,
+        "status_http": 200
+      },
+      {
+        "width": 1440,
+        "case": "ordinary_member_search_and_admin_scope",
+        "status": "passed",
+        "available_sources_checked": 0,
+        "restricted_sources_reported": 1,
+        "ordinary_member_found": true,
+        "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+        "trust_or_permissions_changed": false
+      },
+      {
+        "width": 1440,
+        "case": "delayed_real_source_read_preserves_member_search",
+        "status": "passed",
+        "request_delay_only": true,
+        "response_rewrite": false,
+        "production_writes": 0,
+        "source_or_trust_changes": false
+      },
+      {
+        "width": 390,
+        "case": "expert_ranking_refresh",
+        "status": "passed",
+        "experts": 10
+      },
+      {
+        "width": 390,
+        "case": "expert_detail_and_tabs",
+        "status": "passed",
+        "settled_count_matches_api": true
+      },
+      {
+        "width": 390,
+        "case": "telegram_monitoring_sources",
+        "status": "passed",
+        "source_count": 6,
+        "status_http": 200
+      },
+      {
+        "width": 390,
+        "case": "ordinary_member_search_and_admin_scope",
+        "status": "passed",
+        "available_sources_checked": 0,
+        "restricted_sources_reported": 1,
+        "ordinary_member_found": true,
+        "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+        "trust_or_permissions_changed": false
+      },
+      {
+        "width": 390,
+        "case": "delayed_real_source_read_preserves_member_search",
+        "status": "passed",
+        "request_delay_only": true,
+        "response_rewrite": false,
+        "production_writes": 0,
+        "source_or_trust_changes": false
+      }
+    ]
+  ],
+  "production_writes": 0,
+  "response_rewrites": 0,
+  "provider_or_executor_configuration_changes": false,
+  "earlier_real_browser_failure_retained": {
+    "run": "e1668",
+    "native_exit": 1,
+    "cause": "late_source_initialization_overwrote_member_search"
+  },
+  "primary_visually_inspected_screenshots": 7,
+  "three_second_end_to_end_acceptance_passed": false,
+  "raw_evidence_sha256": {
+    "e1698-live-browser/results.json": "c6ed5064992e995c913da4b81f222c31119cef3e754d9f20926464d12f501a0f",
+    "e1699-anchor-production/results.json": "ff339450e666ba218a29dceb87b1278e10e31730af450ede1659ae60087dc6f9",
+    "e1700-live-browser/results.json": "5ac9b4f6a00e8419ce277450eca5c4cf33b7b22370df0a907bd391ed4eae6d2d",
+    "e1698-live-browser/phase-finished-390.png": "47e2528b131dcc4d833ab3863e2cf415d55eb6a7bf816aa9d97dae6cac0fcba3",
+    "e1698-live-browser/original-expanded-1440.png": "688dfc8964dc49ab1b185b4f87fed6a18b69b6d92078a0ec17d0e2ca011d9154",
+    "e1698-live-browser/original-expanded-390.png": "55b700d36c4530eccca525ab79cebeb7793434734808fd48d9e748f0b6a4e8e1",
+    "e1699-anchor-production/settled-summaries-390.png": "9c6bf1f3a0122a1ba9ec27c884668979937bafe7e43b5f7e4eb44af5ffb4abc7",
+    "e1700-live-browser/expert-ranking-1440.png": "6ddf7285b6183d2ce56c9ef279a297ea7a7b4702ea2b2afeb48d443fb1a3bc5f",
+    "e1700-live-browser/tg-member-race-1440.png": "52c55aae933f5562053997672d190c0ac2cba630b4d8ccae4bbd45610461459e",
+    "e1700-live-browser/tg-member-race-390.png": "7e45822c0be11ebb6c6949556b774d77e0f60ff65141ae3556068d0d2c22a174"
+  }
+}

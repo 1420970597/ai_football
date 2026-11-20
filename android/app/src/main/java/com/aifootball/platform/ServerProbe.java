@@ -6,8 +6,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
-import javax.net.ssl.HttpsURLConnection;
 
 final class ServerProbe {
     static final int MAX_BYTES = 16384;
@@ -18,7 +18,7 @@ final class ServerProbe {
 
     Identity verify(String origin, int clientVersion) throws IOException {
         String normalized = UrlPolicy.normalizeService(origin);
-        HttpsURLConnection connection = (HttpsURLConnection) new URL(normalized + "/api/v1/public/client-info").openConnection();
+        HttpURLConnection connection = (HttpURLConnection) new URL(normalized + "/api/v1/public/client-info").openConnection();
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(5000);
         connection.setReadTimeout(5000);

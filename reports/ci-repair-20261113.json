@@ -1,0 +1,79 @@
+{
+  "recorded_at": "2026-11-13T02:17:01.286775+00:00",
+  "status": "local_verified_remote_pending",
+  "pull_request": 78,
+  "branch": "fix/TASK-78-hermes-telegram-sync",
+  "baseline_source_commit": "00be25056e5059761a63fdaa3b014fc36c724db1",
+  "original_run": 43343171538,
+  "original_backend_job": 131616262593,
+  "original_total_tests": 2319,
+  "original_suite_seconds": 1153.687,
+  "original_failures": [
+    "test_history_rate_limit_preserves_fresh_balance_and_other_receipt",
+    "test_history_failure_never_masks_final_balance_failure"
+  ],
+  "baseline_reproduction": {
+    "tests": 2,
+    "failures": 2,
+    "exit_code": 1
+  },
+  "local_account_suite": {
+    "tests": 80,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "exit_code": 0,
+    "seconds": 58.047
+  },
+  "workflow_lint": {
+    "exit_code": 0,
+    "explicit_workflow_files": true,
+    "container_user": 0
+  },
+  "api_image_smoke": {
+    "exit_code": 0,
+    "evidence": {
+      "uid": 10001,
+      "readable_source_files": 123,
+      "quote_witness_sha256": "83939e29bd9ecbb8a8c08456a614885fbdfc810f99df591f67f3d761426d9575",
+      "shared_sports_modules_sha256": {
+        "execution_scope": "ef392a2b8b5e1f18d2bba4adadca55c0e334ceb215243598ae115fc8b70fbc0b",
+        "basketball_scores": "5d774fd95a60769324192ca774b3bcb5eabdb4dd75d13e76f8f29c1cc6b91080"
+      },
+      "migration_count": 33,
+      "api_worker_migrate_imported": true,
+      "credentials_supplied": false,
+      "network_access": false
+    }
+  },
+  "compose_checks": {
+    "exit_code": 0,
+    "fake_configuration_only": true
+  },
+  "tested_source_sha256": {
+    "services/api/app/account_jobs.py": "9e31db350f50d5f2806d144833cc2b75889a3d51732396de91b12a1936cbe17b",
+    "services/executor/account_protocol.py": "85bebfca78925b551ac070c5322b08557cc76344eee3b7158497a67fa7795cd8",
+    "services/executor/worker.py": "22e116d562baa98c79332eafb9d96ac42ce9a95bd641ca50f65f23b19b750cf7",
+    "tests/test_account_protocol.py": "c9782967d4e219007e3bee9d83351d5ea129b62c51c5f8aa554e7101443a936f",
+    ".github/workflows/verify.yml": "6f2f0faca5e3d30c95bdda812bc6ea80718a7e457ef4226a2f28f69dd4ea2de9"
+  },
+  "preexisting_change_patch_sha256": "17b14541ddc95ea970b1c102a56e4be0a77960c2374cb3fc75a70071b4834c7e",
+  "preexisting_four_file_changes_retained_byte_for_byte": true,
+  "backend_timeout_minutes": {
+    "before": 20,
+    "after": 30,
+    "resource_limits_changed": false
+  },
+  "production_services_changed": false,
+  "production_database_writes": 0,
+  "real_orders": 0,
+  "local_harness_failures_preserved": [
+    "baseline-harness-role-error.log",
+    "candidate-harness-module-error.log",
+    "actionlint-archive-discovery-error.log",
+    "actionlint.log"
+  ],
+  "remote": {
+    "status": "awaiting_new_push_and_original_workflow"
+  }
+}

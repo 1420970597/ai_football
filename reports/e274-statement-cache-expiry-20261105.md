@@ -1,0 +1,21 @@
+# E274：准备阶段的批量语句清理
+
+更新于2026-11-05 02:59 UTC。状态：根因假设与只读复现中，生产配置未改。
+
+E267真实超时显示ingest_fixtures在5000ms预算内，准备阶段6728.178ms、执行0.032ms、剩余-1728.21ms。固定asyncpg源码_get_statement在准备后调用_cleanup_stmts；后者逐个close_statement且显式NO_TIMEOUT。默认statement缓存100项、寿命300秒，过期项可能积累后在下一次准备串行清理；远端每次往返数百毫秒，足以在实际执行前耗尽预算。E271发布后约6分钟首次出现此样本与缓存寿命相近，但时间相关性不能证明根因。
+
+责任目录services/api、tests；前置依赖为E267数值证据和固定驱动源码。通过项目容器内独立只读连接，保留默认100/300设置，暖24条仅标量SELECT，异步等待302秒，再记录首次查询及_cleanup_stmts的条数/耗时。仅本任务子类计时，不改生产池、不记录SQL参数、不写业务或凭据。失败保留真实异常类别，连接关闭；后续恢复SELECT确认连接状态。
+
+若复现，候选考虑仅关闭TTL到期（max_cached_statement_lifetime=0），缓存容量仍100，保留容量驱逐和驱动schema失效处理。先对照真实连接、验证schema变更恢复与有限容量，再完整冻结测试和生产自然idle发布。未经复现或完整验证不更改当前E271窗口，也不靠提高超时掩盖故障。
+
+03:06 UTC：默认连接实际复现：24条默认缓存到期，cleanup 5020.506ms，首个查询5197.431ms以TimeoutError失败；后续恢复SELECT成功，probe actual exit0（复现预期故障，不是全部查询通过）。相同24条/等待302秒、仅TTL=0对照首查询342.914ms通过、无批量cleanup，actual exit0；两者均无业务写入，未改变生产池。这证实该驱动默认配置在当前远端路径存在可重现的准备超时机制，不证明每个历史超时都只有这一原因。
+
+候选只增加max_cached_statement_lifetime=0，保持容量100/超时5秒，schema失效和容量驱逐不变。真实临时PG2项0.470秒exit0：105不同参数化查询后容量仍100、JSON/JSONB编码继续有效；缓存查询遇ALTER TABLE结果类型变化能自动重载并连续成功。候选组合已验证E273减少一往返代码，完整回归待启动；拟同时只更新API和worker的同一候选镜像，其他五服务保持不动。实际领取耗时将作为两项改动的组合效果量测，不能分别归因。E271原窗口期间不部署。
+
+03:14 UTC：两条诊断连接结束后只读核查残留0，实际exit0。默认复现JSONLSHAaa2af684d665a6a132f636cf56f439ffcdef708e424f91100068a1e1b9b16514，对照d5596c03b270cfc51db892d29ce727cbebe87618561f8bc64f61b742f7279b39。组合候选cb8425bacb8cc6379b5b71c3bb929a0c76c6c393镜像构建exit0，IDfb647082b606aa65d16ba39cd1077795847d9aa57edfb53553d2effad4e092f9；完整回归仍运行，未上线。发布前后对API/worker分别读取其实际Compose来源，只替换镜像，规范化比较其他五服务及两者环境和预算；失败分别恢复E267 API/E257 worker并释放自然idle gate。
+
+03:19 UTC：cb8425b完整组合1336项616.211秒/报告618.809秒，actual exit0，0failure/error/skip、committed_source_verified=true。证据.runtime/e274-candidate/.runtime/test-evidence/2135837/backend-tests.json SHAfff15e0e0dca1b916baeb18545435e84f73facf9406613025663c58301898116。精确候选/镜像/完整证据/两服务实际合并配置检查actual exit0。主任务分支接入7eefb21，当前容器依旧E267 API/E257 worker，尚未发布。下一步等E271截止与终审，持有自然idle gate后只更换API+worker，复核既有38条快照80台账，再开E275完整30分钟覆盖多轮原300秒寿命。
+
+03:25 UTC：E271完整1802.5秒终审后，03:22:41.359201暂停领取/03:22:44.723364自然idle；API8fe9f8a9于03:23:13.031686534启动，worker4031c3a1于03:23:45.057608013启动，共用精确fb647082镜像。实际函数源码验证含TTL与领取CTE，APIready及原结算版本通过；其余五服务身份/启动/镜像/环境/预算不变，API和worker环境/预算不变，apply及gate actual exit0。38原推荐不可变摘要/80结算台账/结果与单位收益前后核对exit0。补充元数据命令直接取worker.State.Health.Status失败，因为worker没有该键；已用Running/RestartCount核验true/0，不将其声称HTTP就绪。E275从03:24:28.843093起完整30分钟，持续API数字预算/PG等待，尚无发布后稳定结论。
+
+03:48 UTC中途：E275约22分钟未捕获database temporarily unavailable或request failure；API/worker均restart0，既有图片推荐双端原图及finished状态通过。窗口尚未结束且无新发专家帖，不能以此宣称完整图文推荐链路或三秒通过。SDK7次低频小文字探测均200也不等于工具/多模态稳定证明。

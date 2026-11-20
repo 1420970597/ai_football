@@ -6,5 +6,7 @@ COPY services/collector/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt \
     && useradd --system --uid 10003 --create-home collector
 COPY services/collector /app/collector
+COPY --chmod=0444 services/quote_witness.py /app/quote_witness.py
+COPY --chmod=0444 services/basketball_scores.py /app/basketball_scores.py
 USER 10003:10003
 CMD ["python", "-m", "collector.worker"]

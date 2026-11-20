@@ -1,0 +1,99 @@
+{
+  "window_start": "2026-11-08T10:26:46.889206+00:00",
+  "window_last_database_sample": "2026-11-08T10:56:48.987757+00:00",
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 191,
+    "published_posts": 22,
+    "older_posts_revised": 168,
+    "published_ready": 15,
+    "published_pending": 0,
+    "published_unsupported": 7
+  },
+  "reviews_final": {
+    "eligible": 16,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 1,
+    "with_receipt": 15,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 24,
+    "avg_ms": "5388.2",
+    "p95_ms": "13516.1",
+    "within_3s": 11,
+    "older_backlog_versions_received": 167
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 47
+    },
+    {
+      "trace_kind": "review_failure",
+      "failure_category": "provider_transient",
+      "finish_reason": null,
+      "count": 303
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 47
+    }
+  ],
+  "market_samples": 61,
+  "market_degraded_samples": [],
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T10:56:05.058347+00:00",
+    "last_poll_elapsed_ms": 29999.1,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 38555,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 23.9,
+    "oldest_quote_age_seconds": 315205.9,
+    "failed_batches": 0
+  },
+  "official_reconcile": {
+    "read_only": true,
+    "official_posts": 25,
+    "normalized_posts": 22,
+    "matched": 22,
+    "missing": []
+  },
+  "exits": {
+    "e946-independent-native": 0,
+    "e946-market-native": 0,
+    "e946-official-scan": 0,
+    "e946-official-reconcile": 0,
+    "e946-natural-audit": 0,
+    "e946-completion-audit": 0,
+    "e947r2-observer-native": 0,
+    "e947r2-observer-controller": 0
+  },
+  "all_functionality_verified": false,
+  "includes_provider_recovery": true,
+  "contains_original_observer_permission_failure": true,
+  "later_observer_run_separate": true,
+  "production_writes": false
+}

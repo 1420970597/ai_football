@@ -1,0 +1,40 @@
+{
+  "isolated_real_model": true,
+  "original_native_exit": 1,
+  "report_query_error": "nonexistent created_at on v2_match_searches",
+  "report_recovered_without_new_model_call": true,
+  "model_generation_finished": true,
+  "model": "deepseek-v4.1-flash",
+  "bound_fixtures": [],
+  "searches": [
+    {
+      "team_query": "卡拉",
+      "competition_query": "",
+      "complete": true,
+      "page_count": 1,
+      "total_candidates": 1
+    },
+    {
+      "team_query": "赫内",
+      "competition_query": "",
+      "complete": true,
+      "page_count": 1,
+      "total_candidates": 0
+    },
+    {
+      "team_query": "卡拉夫",
+      "competition_query": "",
+      "complete": true,
+      "page_count": 1,
+      "total_candidates": 0
+    }
+  ],
+  "image_count": 1,
+  "completion_verified": true,
+  "signal_count": 0,
+  "order_count": 0,
+  "production_writes": false,
+  "funded_tests": false,
+  "league_expansion_used": false,
+  "acceptance_passed": false
+}

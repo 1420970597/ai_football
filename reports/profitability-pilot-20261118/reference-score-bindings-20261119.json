@@ -1,0 +1,40 @@
+{
+  "leyu:5831469": {
+    "event": "401916974",
+    "league": "uefa.wchampions",
+    "scheduled_start": "2026-11-19T20:00:00Z",
+    "home": "BEN",
+    "away": "ROMA"
+  },
+  "leyu:5831446": {
+    "event": "401916978",
+    "league": "uefa.wchampions",
+    "scheduled_start": "2026-11-19T17:45:00Z",
+    "home": "VIE",
+    "away": "MUN",
+    "kalshi_milestone": "f924b2c7-b3c9-5cd1-8653-044e2d39745d"
+  },
+  "leyu:5816659": {
+    "event": "401841308",
+    "league": "bra.1",
+    "scheduled_start": "2026-11-19T22:30:00Z",
+    "home": "VAS",
+    "away": "INT",
+    "kalshi_milestone": "9ad8504b-0f64-5763-9d07-777f01164e7e"
+  },
+  "leyu:5849324": {
+    "event": "401933535",
+    "league": "usa.1",
+    "scheduled_start": "2026-11-20T00:30:00Z",
+    "home": "ORL",
+    "away": "CIN",
+    "kalshi_milestone": "57142069-94b7-53cb-ba17-d2165114ac34"
+  },
+  "leyu:5849325": {
+    "event": "401933555",
+    "league": "usa.1",
+    "scheduled_start": "2026-11-20T03:00:00Z",
+    "home": "SEA",
+    "away": "RSL"
+  }
+}

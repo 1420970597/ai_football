@@ -1,0 +1,178 @@
+{
+  "window_start": "2026-11-08T19:29:17.015812+00:00",
+  "window_last_database_sample": "2026-11-08T19:59:18.079512+00:00",
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1802.8,
+    "health_all_200": false,
+    "telegram_all_healthy": false,
+    "baseline_live_event_counters": {
+      "received": 107051,
+      "staged": 5751,
+      "deferred": 0,
+      "unmapped_source": 101300
+    },
+    "final_live_event_counters": {
+      "received": 108393,
+      "staged": 5765,
+      "deferred": 0,
+      "unmapped_source": 102628
+    },
+    "live_event_delta": {
+      "received": 1342,
+      "staged": 14,
+      "deferred": 0,
+      "unmapped_source": 1328
+    }
+  },
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [
+    {
+      "observed_at": "2026-11-08T19:30:26.451930+00:00",
+      "health": {
+        "healthz": null,
+        "readyz": null
+      }
+    }
+  ],
+  "telegram_degraded_samples": [],
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 159,
+    "published_posts": 0,
+    "older_posts_revised": 159,
+    "published_ready": 0,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 0,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 0,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 0,
+    "avg_ms": null,
+    "p95_ms": null,
+    "within_3s": 0,
+    "older_backlog_versions_received": 159
+  },
+  "trace_counts_final": [],
+  "market_samples": 61,
+  "market_degraded_samples": [],
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "partial_snapshot",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T19:58:32.975559+00:00",
+    "last_poll_elapsed_ms": 26372.7,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 22557,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 22.0,
+    "oldest_quote_age_seconds": 347750.3,
+    "failed_batches": 0
+  },
+  "includes_successful_api_handoff": false,
+  "whole_database_freshness_claim": false,
+  "schema": "safe-continuous-tg-window-v1",
+  "api_source_commit": "19b0157265b9540f4c0d589dffbd6e678736e4d8",
+  "official_source_scans": [
+    {
+      "source_alias": "source_1",
+      "trusted_sender_count": 0,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_2",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_3",
+      "trusted_sender_count": 2,
+      "scanned": 3,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_4",
+      "trusted_sender_count": 0,
+      "scanned": 5,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_5",
+      "trusted_sender_count": 3,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_6",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    }
+  ],
+  "official_posts": 0,
+  "normalized_posts": 0,
+  "missing_posts": 0,
+  "current_natural_positive_sample": false,
+  "three_second_target_passed": false,
+  "read_only": true,
+  "production_writes": 0,
+  "dedicated_post_release_window": false,
+  "handoff_completed_at": "2026-11-08T19:32:47Z",
+  "paired_observer_failure": {
+    "case": "e1491",
+    "native_exit_code": 2,
+    "controller_exit_code": 1,
+    "reason": "nonroot_script_read_permission",
+    "business_operations_executed": false,
+    "replacement": "e1515",
+    "replacement_is_not_identical_window": true
+  },
+  "evidence_sha256": {
+    "e1490-independent-final.jsonl": "2290c7fda56d1695538d5cebc15071a71e4e6a34ea950fd543409a451e8dbe29",
+    "e1490-market-final.jsonl": "647347e2a6ee515c5df8b922247f33f05b9921d7854a96eab7233b1625cafb50",
+    "e1490-official-scan.json": "d27b62d3939db7ccafb8fcbcd0950a1aefe7af5b346f5a8b3ae685ecf13d739c",
+    "e1490-official-reconcile.json": "415457a6475a4584d6f35a5fbe4eaaeddcf306339112e0d536f8e6ab2f561275",
+    "e1490-natural-audit.json": "0e9684d02911fa21bcea083081ee09f7bc15d4c79ff68db97d6f0de629d13080",
+    "e1490-semantic-compact.json": "6f6d79fd9aac2b086ca3cb37664947031c6f99095c298447786719c20500367f"
+  }
+}

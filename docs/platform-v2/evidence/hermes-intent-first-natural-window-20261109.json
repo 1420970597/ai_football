@@ -1,0 +1,210 @@
+{
+  "window_start": "2026-11-09T09:05:32.610479+00:00",
+  "window_last_database_sample": "2026-11-09T09:35:32.496069+00:00",
+  "database_samples": 55,
+  "market_samples": 61,
+  "event_latency_final": {
+    "event_versions": 24,
+    "avg_ms": "4924.2",
+    "p95_ms": "12374.7",
+    "within_3s": 11,
+    "older_backlog_versions_received": 182
+  },
+  "reviews_final": {
+    "eligible": 18,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 18,
+    "missing_receipt": 0
+  },
+  "market_poll_fresh_samples": 0,
+  "whole_database_freshness_claim": false,
+  "official_reconciliation_exit": 0,
+  "manually_checked_text_messages": 18,
+  "manually_viewed_unique_original_images": 13,
+  "immutable_signal_bindings": [
+    {
+      "alias": 1,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 2,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 3,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 4,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 5,
+      "state": "succeeded",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": [
+        {
+          "period": "first_half",
+          "line": "1.750",
+          "selection": "over",
+          "recommendation_price": "1.60000",
+          "outcome": "pending"
+        }
+      ]
+    },
+    {
+      "alias": 6,
+      "state": "succeeded",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": [
+        {
+          "period": "first_half",
+          "line": "0.750",
+          "selection": "over",
+          "recommendation_price": "1.76000",
+          "outcome": "pending"
+        }
+      ]
+    },
+    {
+      "alias": 7,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 8,
+      "state": "succeeded",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": [
+        {
+          "period": "first_half",
+          "line": "1.750",
+          "selection": "over",
+          "recommendation_price": "1.69000",
+          "outcome": "pending"
+        }
+      ]
+    },
+    {
+      "alias": 9,
+      "state": "succeeded",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": [
+        {
+          "period": "first_half",
+          "line": "1.750",
+          "selection": "over",
+          "recommendation_price": "1.72000",
+          "outcome": "pending"
+        }
+      ]
+    },
+    {
+      "alias": 10,
+      "state": "succeeded",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": [
+        {
+          "period": "first_half",
+          "line": "0.750",
+          "selection": "over",
+          "recommendation_price": "1.90000",
+          "outcome": "pending"
+        }
+      ]
+    },
+    {
+      "alias": 11,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 12,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 13,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 14,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 15,
+      "state": "succeeded",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": [
+        {
+          "period": "first_half",
+          "line": "0.750",
+          "selection": "over",
+          "recommendation_price": "2.11000",
+          "outcome": "pending"
+        }
+      ]
+    },
+    {
+      "alias": 16,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 17,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    },
+    {
+      "alias": 18,
+      "state": "unresolved",
+      "current_attempt_receipt": true,
+      "signal_quote_evidence_verified": true,
+      "signals": []
+    }
+  ],
+  "read_only": true,
+  "production_writes": 0,
+  "natural_orders": 0,
+  "accepted_orders": 0,
+  "current_selected_pairs": 0,
+  "current_user_and_global_live_enabled": true,
+  "current_policy_is_not_historical_proof": true,
+  "ten_second_requirement_verified": false
+}

@@ -1,0 +1,64 @@
+{
+  "schema": "safe-verification-evidence-v1",
+  "recorded_at_utc": "2026-11-08T14:54:00Z",
+  "stage": "component and related isolation; clean full and deployment pending",
+  "delayed_first_half_context": {
+    "tests": 16,
+    "seconds": 16.447,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "rejected_candidate_claims": {
+    "tests": 5,
+    "seconds": 7.277,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "review_worker_receipt_related": {
+    "tests": 277,
+    "seconds": 569.812,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "mixed_feedback_prompt_skill_and_images": {
+    "tests": 34,
+    "seconds": 8.801,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "retained_failures": {
+    "period_before": {
+      "tests": 3,
+      "seconds": 2.511,
+      "failures": 2,
+      "errors": 0,
+      "native_exit": 1
+    },
+    "excluded_claim_before": {
+      "tests": 15,
+      "seconds": 29.62,
+      "failures": 5,
+      "native_exit": 1,
+      "duplicate_discovered_old_cases": 10
+    },
+    "mixed_prompt_before": {
+      "tests": 2,
+      "seconds": 0.007,
+      "failures": 2,
+      "native_exit": 1
+    }
+  },
+  "discovered_clean_full_expected": 1838,
+  "old_v1_period_evidence_still_supported": true,
+  "new_period_evidence_version": "leyu-early-first-half-stage-v2",
+  "source_age_limit_seconds": 300,
+  "quote_freshness_limits_unchanged": true,
+  "prior_positive_fixture_claims_not_erased": true,
+  "shared_gateway_or_provider_configuration_written": false,
+  "production_historical_backfill": false,
+  "funded_tests": 0
+}

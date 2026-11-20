@@ -1,0 +1,43 @@
+{
+  "polymarket": {
+    "uwcl-slb-asr-2026-11-19-slb": {"rules_sha256": "23551d1e4f5198b7cc196279f5ad7556d49dc631d8470d87b2438890da123d89", "selection": "home", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-slb-asr-2026-11-19-draw": {"rules_sha256": "c961cfb350b5707f59bc657c1dfd6e3f758ba6f260b6cf120d75881035226565", "selection": "draw", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-slb-asr-2026-11-19-asr": {"rules_sha256": "a527fc96db22854ba39603b0e371bbbe28beb31369a8f7b2624f7ba5e7e09eeb", "selection": "away", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-slb-asr-2026-11-19-total-2pt5": {"rules_sha256": "6427d0e4040c96e7745c6b40f14b5c4836d5662c32196694875fa8acc2826404", "labels": {"Over": "over", "Under": "under"}},
+    "uwcl-slb-asr-2026-11-19-first-half-total-1pt5": {"rules_sha256": "ebd43be50387f31271c2a0ea6fb9a09989ffa694a125a79341fb31489b37098c", "labels": {"Over": "over", "Under": "under"}},
+    "uwcl-slb-asr-2026-11-19-spread-home-1pt5": {"rules_sha256": "901a76549c3c2ded04e8a49429f680b7511e68819796ebbb3266dc1c571eaf8f", "labels": {"Sport Lisboa e Benfica": "home", "AS Roma": "away"}},
+    "aseanc-svr-por-2026-11-19-svr": {"rules_sha256": "ac1ff64132f1b00f2b651b44922e520de7d3d0ef67b29477ce86affa70c3507f", "selection": "home", "labels": {"Yes": "yes", "No": "no"}},
+    "aseanc-svr-por-2026-11-19-draw": {"rules_sha256": "328f5921b4b221042058bf060734ac2ca3003fc72a7a84a3d1a5a62871cbd338", "selection": "draw", "labels": {"Yes": "yes", "No": "no"}},
+    "aseanc-svr-por-2026-11-19-por": {"rules_sha256": "c2a654bb734766a7dff593c7d49fc280e239f3b7c39a5cecc12da9cf23faf05e", "selection": "away", "labels": {"Yes": "yes", "No": "no"}},
+    "aseanc-svr-por-2026-11-19-total-2pt5": {"rules_sha256": "1d08fd8c33d0c12fa0fd516c2ca5335554dda5df11ebbe5e33998e1473426dd4", "labels": {"Over": "over", "Under": "under"}},
+    "aseanc-svr-por-2026-11-19-first-half-total-1pt5": {"rules_sha256": "b035ed50513847a414186681b30afc694c86636945a1d07ecd268415a9291f1d", "labels": {"Over": "over", "Under": "under"}},
+    "aseanc-svr-por-2026-11-19-spread-home-1pt5": {"rules_sha256": "cb0028efe4b906c12d5ce77cf876cb2481b602606d8b37daae252c4c526cfc2c", "labels": {"PKR Svay Rieng": "home", "Port FC": "away"}},
+    "uwcl-faw-bm-2026-11-19-faw": {"rules_sha256": "cfc2e79207fefd2ae3a31d45017e27cb125e74f2503e6989c2d45f75d26db413", "selection": "home", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-faw-bm-2026-11-19-draw": {"rules_sha256": "12d4be042f5edce9e41a27a46599864791eb86aa4e49378d0f13033741e248ef", "selection": "draw", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-faw-bm-2026-11-19-bm": {"rules_sha256": "d8099d4b238f630f1f5b85f26c57ffc701e9f285cb50ea4d42ea5f3a36c3a2a5", "selection": "away", "labels": {"Yes": "yes", "No": "no"}},
+    "uwcl-faw-bm-2026-11-19-total-2pt5": {"rules_sha256": "b5aa4ed0fc8f2a66352d8b6491b9c1cd195f9f0c6471a07f643790dc786f7e13", "labels": {"Over": "over", "Under": "under"}},
+    "uwcl-faw-bm-2026-11-19-first-half-total-1pt5": {"rules_sha256": "c2d67677563f49b923d07096dcca2760cc40500f6fb454339753fe97dc7caf11", "labels": {"Over": "over", "Under": "under"}},
+    "uwcl-faw-bm-2026-11-19-spread-away-1pt5": {"rules_sha256": "f96452aef3184ecd4105f3d088d01db8e47b60910f1dd33fd2a6d40b7b4414f3", "labels": {"FK Austria Wien": "home", "FC Bayern München": "away"}},
+    "bra-vas-int-2026-11-19-vas": {"rules_sha256": "e8b9321cf4d6475422a9cbe632074c36845c35793fab23e0e98a16545b019edc", "selection": "home", "labels": {"Yes": "yes", "No": "no"}},
+    "bra-vas-int-2026-11-19-draw": {"rules_sha256": "718447276522a1262834c02a19205f8bc2d023e40f98645cfe5c76343dbafc11", "selection": "draw", "labels": {"Yes": "yes", "No": "no"}},
+    "bra-vas-int-2026-11-19-int": {"rules_sha256": "8674562cdf77fd0c080207ecabfc280a1e082aab7aa18e214a19e2f689d93e5b", "selection": "away", "labels": {"Yes": "yes", "No": "no"}},
+    "bra-vas-int-2026-11-19-total-2pt5": {"rules_sha256": "621a8b649ac9df0026592847c80fde82cc5de72ff883695fb9583ecc80d949cd", "labels": {"Over": "over", "Under": "under"}},
+    "bra-vas-int-2026-11-19-total-3pt5": {"rules_sha256": "3d54027f6ffe5fc0fd3a56c7b85ae26b58a120015524dc1cbd0e39e1473e9525", "labels": {"Over": "over", "Under": "under"}},
+    "bra-vas-int-2026-11-19-first-half-total-1pt5": {"rules_sha256": "08d0da385a01a397a76cd0ea55077177914e39964145852ccbae8871313f22f9", "labels": {"Over": "over", "Under": "under"}},
+    "bra-vas-int-2026-11-19-spread-home-1pt5": {"rules_sha256": "6ef91a1f2e1d72f35e2fb48700195846754e4e5b7dfef7ed529cb06a2a8bf653", "labels": {"CR Vasco da Gama": "home", "SC Internacional": "away"}}
+  },
+  "polymarket_us": {
+    "atc-uwcl-slb-asr-2026-11-19-slb": {"fixture_id": "leyu:5831469", "rules_sha256": "4b3987cf3c27e147d944f42f21b3662064df58ef2cd7bd0e3f57dbf109701969", "selection": "home", "labels": {"Yes": "yes"}},
+    "atc-uwcl-slb-asr-2026-11-19-draw": {"fixture_id": "leyu:5831469", "rules_sha256": "4b3987cf3c27e147d944f42f21b3662064df58ef2cd7bd0e3f57dbf109701969", "selection": "draw", "labels": {"Yes": "yes"}},
+    "atc-uwcl-slb-asr-2026-11-19-asr": {"fixture_id": "leyu:5831469", "rules_sha256": "4b3987cf3c27e147d944f42f21b3662064df58ef2cd7bd0e3f57dbf109701969", "selection": "away", "labels": {"Yes": "yes"}},
+    "atc-bra-vas-int-2026-11-19-vas": {"fixture_id": "leyu:5816659", "rules_sha256": "bbb930ade5737c174db69736ec2a328ea3f2db66486acc3bf2d239f0d007c25e", "selection": "home", "labels": {"Yes": "yes"}},
+    "atc-bra-vas-int-2026-11-19-draw": {"fixture_id": "leyu:5816659", "rules_sha256": "bbb930ade5737c174db69736ec2a328ea3f2db66486acc3bf2d239f0d007c25e", "selection": "draw", "labels": {"Yes": "yes"}},
+    "atc-bra-vas-int-2026-11-19-int": {"fixture_id": "leyu:5816659", "rules_sha256": "bbb930ade5737c174db69736ec2a328ea3f2db66486acc3bf2d239f0d007c25e", "selection": "away", "labels": {"Yes": "yes"}}
+  },
+  "kalshi": {
+    "KXUCLWTOTAL-26NOV19FAKBMU-3": {"rules_sha256": "f7aaac40fc57cc702029de0d65870c506f54629254e9cb6389a6cc76a9ebfb88", "labels": {"yes": "over"}},
+    "KXUCLWSPREAD-26NOV19FAKBMU-BMU2": {"rules_sha256": "2ff595f06d6a17b6b0a8ec5205a0c0b142d54825d3196b8ddb1dec22aa1fde4e", "labels": {"yes": "away"}},
+    "KXBRASILEIROTOTAL-26NOV19VDGINT-3": {"rules_sha256": "59142e2ace1e39fe2cef62c1d569882dba759f64635ab494e1e97676ee7392db", "labels": {"yes": "over"}},
+    "KXBRASILEIROTOTAL-26NOV19VDGINT-4": {"rules_sha256": "318b88b5ad99ba0b7f2f42484fe6eb98d9448a441ea127ac0c0690d8b45e5e75", "labels": {"yes": "over"}}
+  }
+}

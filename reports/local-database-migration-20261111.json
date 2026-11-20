@@ -1,0 +1,544 @@
+{
+  "updated_at": "2026-11-11T05:31:47.078062+00:00",
+  "phase": "storage migration verified",
+  "implementation_commits": [
+    "422ade060de8398af777c19eed82291a92b34ca4",
+    "158e805dbd37bdae82b2cf191e455904be1ebc11",
+    "b74a58344f83d565eb00d4c15bab49007d34c489"
+  ],
+  "database": {
+    "location": "local Docker PostgreSQL",
+    "version": "16.15",
+    "volume": "ai-football-v2-local-pgdata",
+    "host_port_published": false,
+    "transport": "verify-full TLS",
+    "remote_original": "recovery source only; not deleted",
+    "remote_object_storage": "unchanged"
+  },
+  "retention": {
+    "raw_hours": 72,
+    "read_deadline_hours": 72,
+    "physical_cycle_deadline_seconds": 25,
+    "cycle_interval_seconds": 2,
+    "permanent": "parsed decisions, saved statistics and required normalized context/evidence; no TTL on permanent ledgers",
+    "future_fixtures": "kept until their historical cutoff; not expired merely because collected earlier",
+    "recovery_snapshots": "protected migration snapshots excluded from online reads and online raw TTL; no old remote database deletion"
+  },
+  "source_restore": {
+    "tables": 50,
+    "rows": 6547177,
+    "canonical_copy_differences": [],
+    "verified": true
+  },
+  "initial_redaction": {
+    "counts": {
+      "messages": 86561,
+      "events": 86561,
+      "fixtures": 53896,
+      "jobs": 319,
+      "traces": 148054
+    },
+    "milliseconds": 37329,
+    "permanent_tables_checked": 13,
+    "permanent_data_unchanged": true
+  },
+  "local_recovery": {
+    "tables": 53,
+    "rows": 2625940,
+    "canonical_copy_differences": [],
+    "verified": true,
+    "isolated_network": "none",
+    "production_writes": false
+  },
+  "backup_checksums_sha256": {
+    "final-v2.dump": "b4bca0cece6fc92b5fd06353881a140b4071da3b94fcee5da6fcf269097ddd7f",
+    "local-postcutover.dump": "24f99ff1b7f5a9b087d3f9222c4cd942708956ace74b135170255e7ef2806269"
+  },
+  "role_audit": {
+    "unexpected_writable_tables": [],
+    "retention_role_attributes": {
+      "rolsuper": false,
+      "rolcreaterole": false,
+      "rolcreatedb": false,
+      "rolreplication": false
+    }
+  },
+  "client_connections": {
+    "api": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    },
+    "review-worker": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    },
+    "local-mcp-api": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    },
+    "raw-retention": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    }
+  },
+  "tests": [
+    {
+      "scope": "latest-image storage, Telegram, manifest and homepage",
+      "tests": 50,
+      "seconds": 87.374,
+      "exit_code": 0,
+      "skipped": 0
+    },
+    {
+      "scope": "message evidence and media grants",
+      "tests": 15,
+      "seconds": 35.601,
+      "exit_code": 0,
+      "skipped": 0
+    }
+  ],
+  "browser": {
+    "runs_after_latest_patch": 1,
+    "checks": 20,
+    "passed": 20,
+    "failed": 0,
+    "production_writes": 0,
+    "viewport_widths": [
+      1440,
+      390
+    ],
+    "evidence_directory": "output/playwright/local-db-20261111-v4"
+  },
+  "production_scope_navigation": {
+    "results": [
+      {
+        "width": 1440,
+        "recommended_count": 25,
+        "all_count": 50,
+        "passed": true
+      },
+      {
+        "width": 390,
+        "recommended_count": 25,
+        "all_count": 50,
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "writes": [],
+    "production_writes": 0
+  },
+  "api_image": {
+    "tag": "ai-football-api:2.0.0-dev-localdb-history-retention-20261111-04",
+    "id": "sha256:41e3bcd68791fee18a29ba96e8e872b2e5f33cbeee3cbbc56756495efce99516"
+  },
+  "ci_browser_remedy": {
+    "commit": "83caaa64e816a8db04931b92ca4315966ceda3b9",
+    "original_run": 42953768025,
+    "new_run": 42955408663,
+    "synthetic_delay_ms": 150,
+    "desktop_mobile_checks": 2,
+    "local_exit_code": 0,
+    "new_timeout_or_skipped_assertions": false
+  },
+  "ci_visual_baselines": {
+    "review": {
+      "updated_reviewed_screens": 10,
+      "unchanged_screens": 4,
+      "channel_threshold": 16,
+      "max_changed_ratio": 0.002,
+      "fixture_changed": false
+    },
+    "frozen_screen_comparisons": 14,
+    "local_exit_code": 0,
+    "mutation_guard": {
+      "expected_exit_code": 1,
+      "screens_detecting_mutation": 14,
+      "all_differences_within_header": true,
+      "guard_active": true,
+      "thresholds_unchanged": true,
+      "scope": "synthetic CSS header mutation persists across hash route changes on the same page",
+      "previous_verification": "initial expectation of two changed screens was incorrect; retained in visual-negative-verification.json"
+    },
+    "runtime_ui_changed": false
+  },
+  "ci_execution_remedy": {
+    "diagnostic_attempt_commit": "1e2642a34f2d7eebdb82fb3773cb37a4f0a01528",
+    "superseded_runs": [
+      42955408663,
+      42958556833
+    ],
+    "superseded_backend_result": "cancelled at the 20-minute job limit; no completed test report",
+    "fix_commit": "4f8c69a1cc0d58ed152d15264fca99d74d4c48e4",
+    "root_cause": "whole-record comparison included newly added columns; unittest generated a quadratic large-list failure diff",
+    "job_limit_minutes": 20,
+    "postgres_cpu": 0.5,
+    "runner_cpu": 0.75,
+    "total_test_cpu": 1.25,
+    "tests_removed": false,
+    "progress": "newline and flush before each test starts",
+    "targeted_regressions": [
+      {
+        "tests": 3,
+        "seconds": 5.093,
+        "exit_code": 0
+      },
+      {
+        "tests": 8,
+        "seconds": 8.277,
+        "exit_code": 0
+      }
+    ],
+    "migration_budget_experiment": [
+      {
+        "cpu": ".5",
+        "migrations": 32,
+        "samples": [
+          {
+            "seconds": 0.897595,
+            "migration_seconds": 0.787538,
+            "tables": 52
+          },
+          {
+            "seconds": 1.047043,
+            "migration_seconds": 0.92624,
+            "tables": 52
+          },
+          {
+            "seconds": 0.923649,
+            "migration_seconds": 0.768744,
+            "tables": 52
+          },
+          {
+            "seconds": 0.932742,
+            "migration_seconds": 0.827786,
+            "tables": 52
+          },
+          {
+            "seconds": 0.975442,
+            "migration_seconds": 0.837067,
+            "tables": 52
+          }
+        ],
+        "median_seconds": 0.932742,
+        "scope": "disposable Docker PostgreSQL; no production connection"
+      },
+      {
+        "cpu": ".75",
+        "migrations": 32,
+        "samples": [
+          {
+            "seconds": 0.607929,
+            "migration_seconds": 0.507925,
+            "tables": 52
+          },
+          {
+            "seconds": 0.67253,
+            "migration_seconds": 0.600294,
+            "tables": 52
+          },
+          {
+            "seconds": 0.586348,
+            "migration_seconds": 0.52659,
+            "tables": 52
+          },
+          {
+            "seconds": 0.910229,
+            "migration_seconds": 0.816631,
+            "tables": 52
+          },
+          {
+            "seconds": 0.636212,
+            "migration_seconds": 0.547497,
+            "tables": 52
+          }
+        ],
+        "median_seconds": 0.636212,
+        "scope": "disposable Docker PostgreSQL; no production connection"
+      },
+      {
+        "cpu": ".5",
+        "migrations": 32,
+        "samples": [
+          {
+            "seconds": 1.032528,
+            "migration_seconds": 0.887826,
+            "tables": 52
+          },
+          {
+            "seconds": 0.937724,
+            "migration_seconds": 0.843646,
+            "tables": 52
+          },
+          {
+            "seconds": 0.973696,
+            "migration_seconds": 0.878163,
+            "tables": 52
+          },
+          {
+            "seconds": 0.998753,
+            "migration_seconds": 0.823425,
+            "tables": 52
+          },
+          {
+            "seconds": 0.899674,
+            "migration_seconds": 0.829166,
+            "tables": 52
+          }
+        ],
+        "median_seconds": 0.973696,
+        "scope": "disposable Docker PostgreSQL; no production connection"
+      }
+    ],
+    "budget_decision": "CPU increase reverted after the comparison defect was isolated",
+    "private_diagnostic": "bounded sampling stopped with exit 137; not a complete suite result"
+  },
+  "ci_browser_integration_remedy": {
+    "commit": "c64c6614",
+    "reason": "old all-match assumptions were applied to the new default associated-match scope",
+    "scope_assertions": "default two associated fixtures, explicit all four fixtures, unchanged five-role matrix",
+    "production_scope_navigation": "read-only desktop and mobile passed",
+    "ci_run": 42961319797,
+    "ci_artifacts": [
+      {
+        "file": "integration-results.json",
+        "entries": 17,
+        "passed": 17,
+        "failed": 0,
+        "browser_errors": 0,
+        "sha256": "2ab77bfc972ec69ace0fcef5f7c02f91ba6546dc5411d635fe20fc59e68ccff6"
+      },
+      {
+        "file": "integration-account-results.json",
+        "entries": 9,
+        "passed": 9,
+        "failed": 0,
+        "browser_errors": 0,
+        "sha256": "69b4c71b8cbd09f216e6a2e2fb2e273e1ab96647a5f7e6eb84668466f07751bd"
+      },
+      {
+        "file": "visual-results.json",
+        "entries": 14,
+        "passed": 14,
+        "failed": 0,
+        "browser_errors": 0,
+        "sha256": "183da4efc19dc0b4edfacc523110db82f9e84574c8ec952862dc02901dc1816b"
+      }
+    ]
+  },
+  "ci_final": {
+    "conclusion": "success",
+    "head_sha": "88d4c5aad7431ca8c4b18099d19d2b5fb4bb55c5",
+    "jobs": [
+      {
+        "conclusion": "success",
+        "name": "android",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "browser",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "backend",
+        "status": "completed"
+      }
+    ],
+    "run_id": 42964601925,
+    "status": "completed"
+  },
+  "ci_completed_failure": {
+    "source_parent_commit": "0fb296d3458bf67997cd33ecb7414aa28d631f9c",
+    "committed_source_verified": true,
+    "tests": 2295,
+    "failures": 12,
+    "errors": 14,
+    "skipped": 0,
+    "seconds": 942.497,
+    "scope": "isolated fixtures; no live providers or money",
+    "run_id": 42961319797,
+    "report_sha256": "36e6e034791932d906c9eea51f5dee57d994937436d9a97d01d90c1471e1b716",
+    "unittest_seconds": 939.56
+  },
+  "ci_storage_compatibility": {
+    "status": "targeted and full CI verification passed",
+    "runtime_application_changes": false,
+    "generic_recovery_change": "allow only untouched raw-retention seed; used targets fail closed",
+    "raw_ttl_checks_disabled": false,
+    "historical_rehearsal_schema": "before migration 033; offline 30-day protocol",
+    "current_schema_recovery": "expired quote rejected; minimal context exact roundtrip",
+    "regressions": [
+      {
+        "scope": "five current-schema recovery, source transport, scheduler and list modules",
+        "tests": 137,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "execution_log": "ci-retention-compat-regression-v2.log"
+      },
+      {
+        "scope": "historical and current retention recovery",
+        "tests": 10,
+        "seconds": 41.576,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "exit_code": 0,
+        "execution_log": "ci-retention-compat-rehearsal-v3.log"
+      }
+    ],
+    "preserved_failures": [
+      {
+        "log": "ci-retention-compat-regression.log",
+        "reason": "runner omitted services from PYTHONPATH",
+        "exit_code": 1
+      },
+      {
+        "log": "ci-retention-compat-regression-v2.log",
+        "tests": 146,
+        "seconds": 220.713,
+        "failures": 6,
+        "errors": 1,
+        "exit_code": 1,
+        "reason": "30-day historical fixture incompatible with current 72-hour policy"
+      }
+    ],
+    "source_sha256": {
+      "infra/recovery/bundle.py": "9002bf6c9a2b85badc19ad37b31a7e18f9b5f9de3cb8aa401fd5beabcd73d3de",
+      "tests/test_recovery.py": "cd4af0626a7d144684edc4c49e087a7b4a8c0a9ddea7bc33cd9f8a8a6728b26b",
+      "tests/test_recovery_line_contract.py": "1037048e22ace756d1d2427c040b6d85597d278675acd1638d7010c445aa75e8",
+      "tests/test_retention_rehearsal.py": "9fa55ff81b4641be2cf51897dbfd66250d43fb29fef722ba4da130784a3a12f1",
+      "tests/test_review_freshness_scheduler.py": "cd516630b6815b1fc444112b373af3a25ffcf91f37d8a9df7820270b3e4a50c1",
+      "tests/test_telegram_reconciliation_claims.py": "e34648d95ef1d5215af4f585394e2aecbfaafe0ab6166dcd5ac0b073127c3374",
+      "tests/test_result_ledger.py": "0f7dd2e0452617f27ca5eaeef9871801e12d9b971eb0507d801be181ff657724"
+    },
+    "full_ci_run": 42964601925
+  },
+  "ci_latest_browser_artifacts": [
+    {
+      "file": "integration-results.json",
+      "entries": 17,
+      "passed": 17,
+      "failed": 0,
+      "browser_errors": 0,
+      "fixture_unavailable_responses": 5,
+      "unavailable_scope": "explicitly unconfigured Telegram control and image storage; not production",
+      "sha256": "f172c2515561778c10e9b6727dc216a748df07314902ce0aa4f1d724f1551a08"
+    },
+    {
+      "file": "integration-account-results.json",
+      "entries": 9,
+      "passed": 9,
+      "failed": 0,
+      "browser_errors": 0,
+      "fixture_unavailable_responses": 0,
+      "unavailable_scope": "explicitly unconfigured Telegram control and image storage; not production",
+      "sha256": "a8017a28981fa9f4de71c6bac39c4e93021c1f945e882eed6e86b82cec6cb605"
+    },
+    {
+      "file": "visual-results.json",
+      "entries": 14,
+      "passed": 14,
+      "failed": 0,
+      "browser_errors": 0,
+      "fixture_unavailable_responses": 0,
+      "unavailable_scope": "explicitly unconfigured Telegram control and image storage; not production",
+      "sha256": "5b59711032433e2ac5f793c815bfcf0f60816540a159e478e15d3b0477118c8f"
+    }
+  ],
+  "ci_latest_backend_artifacts": {
+    "source_parent_commit": "deba33eda213b5146c67887ccfa1559b76acd6c2",
+    "committed_source_verified": true,
+    "tests": 2298,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 795.155,
+    "scope": "isolated fixtures; no live providers or money",
+    "run_id": 42964601925,
+    "head_sha": "88d4c5aad7431ca8c4b18099d19d2b5fb4bb55c5",
+    "owned_frozen_files_match": true,
+    "report_sha256": "a5bdc45de757398fc3b8cdf1ef1440b2854e0ead9af69977e24f94859306351e"
+  },
+  "remote_retirement": {
+    "old_tools_api": "exited",
+    "active_platform_sessions": 0,
+    "original_database_deleted": false
+  },
+  "observation_windows": [
+    {
+      "started_at": "2026-11-11T03:07:34.923455+00:00",
+      "last_sample_at": "2026-11-11T03:37:34.582791+00:00",
+      "samples": 31,
+      "completed": true,
+      "summary": {
+        "type": "window_complete",
+        "seconds": 1800,
+        "samples": 31,
+        "unhealthy_samples": 1,
+        "scope": "storage and Telegram transport only"
+      },
+      "unhealthy_sample_times": [
+        "2026-11-11T03:26:34.611263+00:00"
+      ],
+      "max_physical_cleanup_lag_seconds": 0,
+      "scope": "database and Telegram transport only; no decision-outcome checks"
+    },
+    {
+      "started_at": "2026-11-11T03:35:32.417347+00:00",
+      "last_sample_at": "2026-11-11T04:05:32.190672+00:00",
+      "samples": 31,
+      "completed": true,
+      "summary": {
+        "type": "window_complete",
+        "seconds": 1800,
+        "samples": 31,
+        "unhealthy_samples": 0,
+        "scope": "storage and Telegram transport only",
+        "physical_cleanup_budget_seconds": 27,
+        "budget_basis": "existing 25-second cycle deadline plus 2-second interval; reads expire at 72 hours"
+      },
+      "unhealthy_sample_times": [],
+      "max_physical_cleanup_lag_seconds": 0.0,
+      "scope": "database and Telegram transport only; no decision-outcome checks"
+    }
+  ],
+  "first_window_failure": {
+    "at": "2026-11-11T03:26:34.611263+00:00",
+    "unexpired_flag_raw_rows": 1,
+    "seconds_past_72h": 3.611,
+    "remedy": "read-time deadline added; original failed observation retained"
+  },
+  "latest_storage_report": {
+    "at": "2026-11-11T05:30:24.279527+00:00",
+    "scope": "storage only",
+    "database_bytes": 3440540695,
+    "tables": 53,
+    "expired_message_content": 0,
+    "expired_event_content": 0,
+    "expired_event_max_lag_seconds": 0.0,
+    "expired_message_max_lag_seconds": 0.0,
+    "expired_full_fixture_projections": 0,
+    "historical_minimal_contexts": 315,
+    "expired_current_quotes": 0,
+    "quote_count_method": "bounded 50-parent reads; concurrent cleanup may reduce totals during report",
+    "queued_media": 0,
+    "retention_status": {
+      "last_completed_at": "2026-11-11 05:30:24.515479+00:00",
+      "last_error_category": null
+    },
+    "tls": true
+  },
+  "open_bug": {
+    "id": "BUG-EXPERT-RESULT-20261111",
+    "status": "user reported; not independently reproduced or repaired",
+    "scope_excluded": "gambling settlement repair and repeated outcome monitoring"
+  },
+  "temporary_recovery_resources": "task-owned recovery container and volume removed after verification"
+}

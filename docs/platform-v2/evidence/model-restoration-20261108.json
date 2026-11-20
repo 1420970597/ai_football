@@ -1,0 +1,115 @@
+{
+  "schema": "model-restoration-single-natural-sample-v1",
+  "provider_changed_by_agent": false,
+  "user_reported_repair": true,
+  "provider_text_and_vision_passed": true,
+  "single_natural_image_binding_verified": true,
+  "whole_chain_3s_passed": false,
+  "all_expert_functions_fully_verified": false,
+  "event_to_conclusion_ms": 107596.238,
+  "image_source_price": "1.65",
+  "immutable_system_price": "1.67",
+  "raw_source_images_or_credentials_included": false,
+  "text_probe": {
+    "observed_at": "2026-11-08T10:48:35.560095+00:00",
+    "production_job": false,
+    "request_limit": 1,
+    "model": "deepseek-v4.1-flash",
+    "sdk": false,
+    "stream_field_omitted": true,
+    "status": 200,
+    "content_chars": 4,
+    "elapsed_ms": 2246.568
+  },
+  "vision_probe": {
+    "observed_at": "2026-11-08T10:49:14.685795+00:00",
+    "production_job": false,
+    "model": "deepseek-v4.1-flash",
+    "request_limit": 1,
+    "structured_image_input": true,
+    "expected_answer_supplied_in_prompt": false,
+    "image_size": [
+      128,
+      96
+    ],
+    "image_bytes": 444,
+    "status": 200,
+    "content_chars": 2,
+    "visual_answer_correct": true,
+    "elapsed_ms": 2876.561
+  },
+  "periodic_generation": {
+    "observed_at": "2026-11-08T10:50:49.247326+00:00",
+    "production_job": false,
+    "request_limit": 1,
+    "model": "deepseek-v4.1-flash",
+    "sdk": false,
+    "stream_field_omitted": true,
+    "status": 200,
+    "content_chars": 4,
+    "elapsed_ms": 2008.04
+  },
+  "browser_readonly": {
+    "results": [
+      {
+        "width": 1440,
+        "status": "passed",
+        "message_id": "ea272be8-8840-4386-aff7-038cc43ce38d",
+        "attempt_id": "5c99ae59-7356-41a9-a958-b81f749ed7ba",
+        "accepted_count": 1,
+        "fixture_id": "leyu:5593321",
+        "signal_id": "89e465ef-795b-4580-b31b-820f665804f5",
+        "period": "first_half",
+        "kind": "total",
+        "line": 1.5,
+        "selection": "over",
+        "system_price": 1.67,
+        "original_image_sha256": "70373f89e94da7dd57b7259f28820f6a2341e6813970e55885e17a7da64f158f",
+        "original_authorized": true,
+        "close_reopen": true
+      },
+      {
+        "width": 390,
+        "status": "passed",
+        "message_id": "ea272be8-8840-4386-aff7-038cc43ce38d",
+        "attempt_id": "5c99ae59-7356-41a9-a958-b81f749ed7ba",
+        "accepted_count": 1,
+        "fixture_id": "leyu:5593321",
+        "signal_id": "89e465ef-795b-4580-b31b-820f665804f5",
+        "period": "first_half",
+        "kind": "total",
+        "line": 1.5,
+        "selection": "over",
+        "system_price": 1.67,
+        "original_image_sha256": "70373f89e94da7dd57b7259f28820f6a2341e6813970e55885e17a7da64f158f",
+        "original_authorized": true,
+        "close_reopen": true
+      }
+    ],
+    "production_writes": false,
+    "response_injection": false
+  },
+  "previous_complete_window": {
+    "official_reconcile": {
+      "read_only": true,
+      "official_posts": 19,
+      "normalized_posts": 17,
+      "matched": 17,
+      "missing": []
+    },
+    "natural_audit_top_keys": [
+      "read_only",
+      "window_start",
+      "message_count",
+      "messages"
+    ],
+    "native_exits": {
+      "independent-native": "0",
+      "market-native": "0",
+      "official-scan": "0",
+      "official-reconcile": "0",
+      "natural-audit": "0",
+      "completion-audit": "0"
+    }
+  }
+}

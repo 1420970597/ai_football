@@ -1,0 +1,33 @@
+# E174：缩短审核领取事务的远端往返
+
+状态：代码已写、定向70项通过，尚未部署（2026-11-01 19:57 UTC）。
+
+- 目标：继续减少E173真实scheduler 2352–8507ms中的串行往返，保持当前业务策略；不把此项等同解决所有数据库超时或达到端到端3秒。
+- 责任目录：services/api审核工作器、tests真实临时PG调度回归、docs阶段证据。
+- 前置依赖：E173完整观察和官方对账已退出0，最新15条回执齐全，源码1296f87仍在线；任务分支80fbbd7已推送，只有无关未跟踪研究目录，保留不动。
+- 当前证据：简单SQL客户端约123–289ms、服务器该简单语句0.004–0.006ms；六次只读pg_stat_activity分组采样主要ClientRead、事务约0.4–3.6秒，没有观察到该时段持续服务端长查询。远端PG单点CPU0.56%，主机IO压力avg10 some19.90/full18.77，不足以认定唯一根因。未采集其他会话SQL正文或凭据，未更改资源/配置。
+- 缺口：每次领取仍用两个请求设置事务超时并尝试全局锁；常规新任务先空查过期再查排队；激活租约、推进lane、清旧搜索、读取消息四次串行往返。来源503也涉及其他事务，不能声称本次覆盖全部。
+- 设计决策：锁与超时设置合为一次返回；两个候选探针合为一次明确排序，保持过期优先、空租约优先、排队按发帖新到旧及SKIP LOCKED。激活四步合为一个有数据修改CTE的语句，lane与搜索删除依赖成功激活，消息读取返回同次激活租约；仍在原全局锁和事务内，失败整体回滚。单独业务函数承载激活，trace继续使用现有版本和序列。
+- 实现动作：保留来源/专家公平、全局最大turn、每专家并发、24小时实时窗口、90秒租约和停用/新版本过滤；不提高并发、超时或资源，不切模型，不压缩证据。
+- 验收场景：真实PG正常领取字段及租约一致、过期优先/空租约顺序、过期行被另一事务锁定时正确领取排队；激活更新后lane故障使租约/计数/旧搜索全部回滚；事务超时配置与全局锁作用域不变；现有公平/恢复/历史预算与完整回归通过。冻结后再构建、安全交接，仅切API/worker并重新完整30分钟及官方对账，不能跳过。
+- 失败处理：原行为断言失败先修复再重跑，不能放宽匹配或跳过检查；冻结测试时不改源。线上仍503则按实际栈与等待证据继续定位，不靠增加数据库超时掩盖问题。
+
+只读定位命令为Docker内database-waits.py、Docker stats及PG容器/proc/pressure/io，均退出0；原始证据.runtime/e173-live/{database-waits.json,database-rtt.json,database-errors-late.log}。资源单点值未另存完整快照，不能称长期资源基线。
+
+定向验证：Docker临时PG运行test_review_freshness_scheduler与test_review_worker，70项139.790秒、退出0；新增四项覆盖锁定过期任务跳过、空租约排序、lane触发异常时激活/搜索清理整体回滚、设置及advisory lock事务作用域。原公平/恢复/历史边界及结论幂等回归保持通过。实现比E173常规领取减少5次SQL往返，尚未用线上测量证明收益；旧新真实临时PG固定30ms模拟对照单独运行中。准备提交冻结完整回归，线上仍1296f87不变。
+
+冻结与隔离对照（19:59 UTC）：源码02cbf9b83a2337cefd5dea29d494c50f049bdd39已推送，干净独立worktree完整1151项预期测试运行中。真实临时PG固定每次SQL模拟30ms，6次领取旧90调用2941.939ms、新60调用1896.158ms，任务顺序/全部返回消息字段/attempt与租约对应/搜索清空/6次唯一领取回执一致，benchmark.sh退出0。模拟结果不作线上比例承诺。候选镜像sha256:81795d89199fef7a7b3a2a16488b5bbb62aa5d37b2bfa578bdb0daf0a206b07f，OCI同源码，构建、无网络模块断言、Compose配置核验退出0，未部署。独立空闲门禁及完整新窗口脚本已准备，必须等全套实际通过才能执行。
+
+完整冻结回归（20:05 UTC）：1151项490.008秒、失败/错误/跳过0、退出0，committed_source_verified=true、源码02cbf9b，46表备份恢复difference为空。证据.runtime/e174-work/.runtime/test-evidence/396595/backend-tests.json及.runtime/e174-live/full-suite.log。准备独立门禁安全交接，完整30分钟尚未开始，不能称线上提速通过。
+
+真实生效（20:09 UTC）：独立门禁20:05:41.441191暂停领取、20:05:44.856890空闲持锁，部署与模块/健康/繁简真实查询核验退出0，门禁was_held=true释放。API容器3185f5c4…/20:07:02.70733085、工作器b149a280…/20:07:22.402254474，均镜像81795d89…/源码02cbf9b。程序化对比容器ID、镜像和启动时间，仅API/worker改变；Hermes/MCP/web/executor不变，无远端部署、无模型/资源/并发/账户与信任配置变化。
+
+新完整窗口20:08:09.020299–20:38:09.020299，watch session13505；必须等实际watch_ended且31样本/至少1800秒后才运行官方四来源逐帖核对，交接另从19:45:52.719331覆盖。浏览器全套点击与原图session54194在运行，尚未完成。证据.runtime/e174-live/{handoff.jsonl,deployment.log,deployed-identities.txt,container-change-verification.txt,window.json}。首样本健康就绪200、TG授权连接正常，无新消息；不把首样本当完整验收。
+
+双端浏览器（20:13 UTC）：首轮因未复制旧结算对照输入settlement-before.json而ENOENT退出1，已保留browser-first-failure.log；补齐原证据后同一browser.sh重跑退出0，无应用代码变化。1440/390五比分标签首次200/DOM一致、最新预览5条、180天Cookie、当前专家昵称、原文/模型/系统回执、原有两条结算及实际零基线loss/-1到比赛详情均通过，脚本错误0。两宽度原图缩略图点击打开且授权加载各1张通过；实际查看双端零基线原文截图，图片、昵称、上半场、系统1.76及净收益-1可见。证据.runtime/e174-live/{browser-clicks.log,browser-media.log,output/playwright/live-clicks.json,output/playwright/media-clicks.json}。完整观察继续，不把点击通过称为当前新推荐匹配通过。
+
+计时说明：E173/E174的provider_elapsed_ms是完整Hermes审核HTTP请求，覆盖框架技能及工具过程；不能将此值等同单次底层模型时间。当前目标仍未证明达成，后续框架原生技能预载研究见PERFORMANCE_RESEARCH.md，未纳入本冻结版本。
+
+完整观察复核（2026-11-01 20:49 UTC）：窗口实际1842.178秒、31样本；health/ready各31次200，Telegram连接及授权31次正常，其中11次degraded、最近成功最大间隔117.824秒。官方四来源完整扫描新窗6帖、交接10帖均missing=0/no_current=0；新窗4条ready消息全部模型结果和系统回执齐全，2条明确unsupported附件。final-audit.sh退出0；但长期观察外层会话13505退出143，虽然watch_ended完整且容器未重启/OOM、错误文件为空，仍无法证明143的原因，不将该命令标为正常退出验收。后续观察改用容器内独立退出码文件，保留本次异常。
+
+真实图片已独立查看，湖人/猛龙全场大224.5正确绑定leyu:5808035；重放不可变工具快照确认请求的全场大小market38共14条标记unsupported_market_kind，另2条同编号未知名称也不支持；当前仅返回2条已关闭的上半场让球，故未录入，不能称比赛未命中或所有盘口已支持。3次重复盘口读取中2次refresh_timeout、1次written，框架请求75.773秒；其他3条框架请求4.759–5.944秒，四条均未达三秒目标。证据.runtime/e174-live/{current-binding-proof.json,current-vision-verification.json,audit-window-final.json,watch-summary.json,comparison-summary.jsonl,model-timing-counters-final.json}及output/playwright/current-vision-original.png。专家功能全部正常的验收仍不通过。

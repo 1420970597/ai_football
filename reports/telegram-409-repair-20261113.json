@@ -1,0 +1,477 @@
+{
+  "stage": "retention_version_conflict_production_verified",
+  "recorded_at": "2026-11-13T16:05:13.507782+00:00",
+  "source_revision": "4a42e38163f370e9b4baea034aa1f0d63b363553",
+  "diagnostic_source_revision": "df2ed78933f1b7237c264edc3d93f29cdbffa31a",
+  "source_sha256": {
+    "services/api/app/routes/telegram.py": "8749b543fc6e78b0bb1af56e9ad1cb6a206b28bc6cfa1e4b7e1d83420ea6f797",
+    "services/collector/telegram.py": "57cdfd7753c4f3688e02a6b3e18fc4a9f64fdd668eb52662189f99d86657ef50",
+    "services/collector/telegram_backend.py": "ee3857683eeb47e174f3c6283c90f5d2a9214e548176e63001400325f3e010f2"
+  },
+  "root_cause": "Messages older than the original posted_at 72-hour raw TTL were replayed from old archive cursors. Retention erased content before an identical album/version replay, producing a false immutable-content conflict and stopping progress.",
+  "baseline": {
+    "collector_log_lookback_minutes": 90,
+    "version_content_conflicts": 127,
+    "unclassified_409": 1,
+    "expired_original_evidence": {
+      "at": "2026-11-13T15:50:06.620438+00:00",
+      "attempt": 13,
+      "rows": [
+        {
+          "source_id": null,
+          "n": 1,
+          "oldest_posted": "2022-11-03 14:17:29+00:00",
+          "latest_received": "2026-11-13 15:50:05.886054+00:00",
+          "content_empty": true,
+          "expired": true,
+          "source_number": 6
+        }
+      ]
+    }
+  },
+  "isolated_tests": {
+    "diagnostic": {
+      "tests": 84,
+      "failures": 0,
+      "errors": 0,
+      "exit_code": 0
+    },
+    "regression_before_fix": {
+      "tests": 8,
+      "failures": 3,
+      "errors": 0,
+      "exit_code": 1
+    },
+    "first_full": {
+      "tests": 241,
+      "failures": 1,
+      "errors": 0,
+      "seconds": 40.624,
+      "exit_code": 1,
+      "failure": "Old RPC-count fixture omitted the new bounded date query."
+    },
+    "expanded_full": {
+      "tests": 363,
+      "failures": 1,
+      "errors": 0,
+      "seconds": 60.563,
+      "exit_code": 1,
+      "failure": "New slice test assumed 100 while the existing configured limit is 25."
+    },
+    "final": {
+      "selection": [
+        "test_telegram_version_conflict",
+        "test_telegram_collector",
+        "test_telegram_api",
+        "test_telegram_reconciliation_claims",
+        "test_telegram_channel_identity",
+        "test_telegram_recent_recovery",
+        "test_telegram_receipts",
+        "test_telegram_author_before_album",
+        "test_telegram_detection_timing",
+        "test_telegram_reply_lookup_failure",
+        "test_telegram_media_scheduling",
+        "test_raw_retention",
+        "test_telegram_directory",
+        "test_telegram_sources",
+        "test_telegram_profile_batch",
+        "test_telegram_entity_cache",
+        "test_telegram_event_connect_recovery",
+        "test_telegram_lease_connect_recovery",
+        "test_telegram_lease_release",
+        "test_telegram_session_identity",
+        "test_telegram_source_scheduling"
+      ],
+      "tests": 365,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 63.414
+    },
+    "final_exit_code": 0,
+    "unittest_seconds": 61.813,
+    "frozen_evidence": "2215957/backend-tests.json"
+  },
+  "production": {
+    "release": {
+      "services": {
+        "api": {
+          "image": "sha256:562145962a7253f363e76b201f20f67b679b422ac16e52355b1a37e8f3bfa5fb",
+          "command": [
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--workers",
+            "2",
+            "--proxy-headers",
+            "--no-access-log"
+          ],
+          "entrypoint": [],
+          "mem_limit": 805306368,
+          "memswap_limit": 1610612736,
+          "cpus": 0.4
+        },
+        "collector": {
+          "image": "sha256:f30b034c25f1d7e71e445ab203570034285a3b0d41e48f154993a659ce920242",
+          "command": [
+            "python",
+            "-m",
+            "collector.worker"
+          ],
+          "entrypoint": null,
+          "mem_limit": 536870912,
+          "memswap_limit": 1073741824,
+          "cpus": 0.5
+        }
+      },
+      "x-telegram-409-release": {
+        "source_revision": "4a42e38163f370e9b4baea034aa1f0d63b363553",
+        "scope": "retention-bounded-archive-and-expired-version-terminal-receipts",
+        "schema_changes": 0,
+        "raw_retention_hours": 72,
+        "history_floor_cache_seconds": 300,
+        "review_detection_deadline_seconds": 20,
+        "automatic_betting_permissions_unchanged_by_release": true
+      }
+    },
+    "preflight": {
+      "passed": true,
+      "roles": [
+        {
+          "role": "api",
+          "image": "sha256:562145962a7253f363e76b201f20f67b679b422ac16e52355b1a37e8f3bfa5fb",
+          "preserved_configuration": true,
+          "cpus": 0.4,
+          "memory": "805306368"
+        },
+        {
+          "role": "collector",
+          "image": "sha256:f30b034c25f1d7e71e445ab203570034285a3b0d41e48f154993a659ce920242",
+          "preserved_configuration": true,
+          "cpus": 0.5,
+          "memory": "536870912"
+        }
+      ],
+      "schema_changes": 0
+    },
+    "diagnostic_window": {
+      "start": "2026-11-13T15:48:13Z",
+      "ready": "2026-11-13T15:48:34Z"
+    },
+    "final_window": {
+      "start": "2026-11-13T16:02:12Z",
+      "api_ready": "2026-11-13T16:02:31Z",
+      "collector_started": "2026-11-13T16:02:35Z"
+    },
+    "schema_changes": 0,
+    "migrations_before": 38,
+    "migrations_after": 38,
+    "source_and_running_hashes_verified": true,
+    "unchanged_containers": [
+      "/ai-football-v2-web-1",
+      "/ai-football-v2-review-worker-1",
+      "/ai-football-expert-iteration-supervisor"
+    ],
+    "readback": {
+      "at": "2026-11-13T16:05:12.705058+00:00",
+      "read_only": "on",
+      "api_sha256": "8749b543fc6e78b0bb1af56e9ad1cb6a206b28bc6cfa1e4b7e1d83420ea6f797",
+      "migrations": 38,
+      "connected": true,
+      "authorized": true,
+      "api_ready_status": 200,
+      "telegram_state": "connected",
+      "sources": [
+        {
+          "number": 1,
+          "source_ref": "daa95c034880",
+          "last_message_id": 15837,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {
+            "versions": 81,
+            "expired": 0,
+            "newest_posted": "2026-11-13 12:43:52+00:00",
+            "newest_received": "2026-11-13 16:03:42.229988+00:00"
+          }
+        },
+        {
+          "number": 2,
+          "source_ref": "75d202101b74",
+          "last_message_id": 36957,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {}
+        },
+        {
+          "number": 3,
+          "source_ref": "7cad412acf1e",
+          "last_message_id": 171052,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {}
+        },
+        {
+          "number": 4,
+          "source_ref": "dd4aeb679e1d",
+          "last_message_id": 118285,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {}
+        },
+        {
+          "number": 5,
+          "source_ref": "78b3c1241281",
+          "last_message_id": 29553,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {
+            "versions": 2,
+            "expired": 0,
+            "newest_posted": "2026-11-13 16:04:48+00:00",
+            "newest_received": "2026-11-13 16:04:54.303243+00:00"
+          }
+        },
+        {
+          "number": 6,
+          "source_ref": "d20e80777e8d",
+          "last_message_id": 95057,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {
+            "versions": 64,
+            "expired": 0,
+            "newest_posted": "2026-11-13 12:47:17+00:00",
+            "newest_received": "2026-11-13 16:03:24.288948+00:00"
+          }
+        },
+        {
+          "number": 7,
+          "source_ref": "a204f25ed934",
+          "last_message_id": 1636707,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {}
+        },
+        {
+          "number": 8,
+          "source_ref": "77e539be1efe",
+          "last_message_id": 1040371,
+          "state": "flood_wait",
+          "error": "flood_wait",
+          "versions_after_release": {}
+        },
+        {
+          "number": 9,
+          "source_ref": "847457320598",
+          "last_message_id": 215737,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {}
+        },
+        {
+          "number": 10,
+          "source_ref": "d207d666bd13",
+          "last_message_id": 62337,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {
+            "versions": 60,
+            "expired": 0,
+            "newest_posted": "2026-11-13 12:47:25+00:00",
+            "newest_received": "2026-11-13 16:03:59.167443+00:00"
+          }
+        },
+        {
+          "number": 11,
+          "source_ref": "715e9ebad0bf",
+          "last_message_id": 187089,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {}
+        },
+        {
+          "number": 12,
+          "source_ref": "ad1d1535d47e",
+          "last_message_id": 302788,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {
+            "versions": 31,
+            "expired": 0,
+            "newest_posted": "2026-11-13 15:24:53+00:00",
+            "newest_received": "2026-11-13 16:05:11.684242+00:00"
+          }
+        },
+        {
+          "number": 13,
+          "source_ref": "f5e1023dc132",
+          "last_message_id": 20435,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {}
+        },
+        {
+          "number": 14,
+          "source_ref": "322f5ca1832e",
+          "last_message_id": 7804,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {}
+        },
+        {
+          "number": 15,
+          "source_ref": "8f8313545788",
+          "last_message_id": 121267,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {}
+        },
+        {
+          "number": 16,
+          "source_ref": "59eac4dc9248",
+          "last_message_id": 78656,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {}
+        },
+        {
+          "number": 17,
+          "source_ref": "4781b63a95cf",
+          "last_message_id": 70623,
+          "state": "backoff",
+          "error": null,
+          "versions_after_release": {
+            "versions": 59,
+            "expired": 0,
+            "newest_posted": "2026-11-13 12:43:58+00:00",
+            "newest_received": "2026-11-13 16:04:02.453910+00:00"
+          }
+        }
+      ],
+      "review_jobs_after_release": [
+        {
+          "state": "running",
+          "n": 2
+        },
+        {
+          "state": "unresolved",
+          "n": 212
+        }
+      ],
+      "deployment_windows": [
+        {
+          "window": "TG409_DIAGNOSTIC_WINDOW",
+          "start": "2026-11-13T15:48:13Z",
+          "end": "2026-11-13T15:48:34Z",
+          "detected_jobs": 0
+        },
+        {
+          "window": "TG409_FINAL_WINDOW",
+          "start": "2026-11-13T16:02:12Z",
+          "end": "2026-11-13T16:02:35Z",
+          "detected_jobs": 0
+        }
+      ],
+      "orders_submitted_by_probe": 0,
+      "production_synthetic_events": 0
+    },
+    "observation_seconds_after_collector_started": 157.705,
+    "observed_version_content_conflicts": 0,
+    "observed_409_reasons": {},
+    "api_successful_event_requests": 636,
+    "successful_recent_history_passes": 111,
+    "checkpoint_progress": [
+      {
+        "source_ref": "daa95c034880",
+        "before": 46,
+        "after": 15837
+      },
+      {
+        "source_ref": "dd4aeb679e1d",
+        "before": 118284,
+        "after": 118285
+      },
+      {
+        "source_ref": "78b3c1241281",
+        "before": 29552,
+        "after": 29553
+      },
+      {
+        "source_ref": "d20e80777e8d",
+        "before": 0,
+        "after": 95057
+      },
+      {
+        "source_ref": "a204f25ed934",
+        "before": 662360,
+        "after": 1636707
+      },
+      {
+        "source_ref": "847457320598",
+        "before": 215736,
+        "after": 215737
+      },
+      {
+        "source_ref": "d207d666bd13",
+        "before": 31,
+        "after": 62337
+      },
+      {
+        "source_ref": "ad1d1535d47e",
+        "before": 126,
+        "after": 302788
+      },
+      {
+        "source_ref": "59eac4dc9248",
+        "before": 191,
+        "after": 78656
+      },
+      {
+        "source_ref": "4781b63a95cf",
+        "before": 0,
+        "after": 70623
+      }
+    ],
+    "new_event_versions": 297,
+    "source_state_counts": {
+      "flood_wait": 8,
+      "backoff": 9
+    },
+    "floodwait_log_records": 47
+  },
+  "guards_preserved": [
+    "Fresh true content conflicts still return 409; original event and job remain immutable.",
+    "Source enablement, active lease and trusted speaker checks precede expired receipts.",
+    "Expired receipts create no raw message, event, review or recommendation; existing remote objects use the bounded orphan queue.",
+    "Date floor failure leaves checkpoint unchanged; ordinary CAS advancement and 25-message/time slicing remain.",
+    "Edited old posts do not renew posted_at retention; personal and channel backfills share 72 hours.",
+    "No model, live price, order idempotency, account permission or 20-second review deadline relaxation."
+  ],
+  "limitations": [
+    "This verifies the repeated retention-induced 409, not the removal of valid lease/CAS/content conflicts.",
+    "Telegram FloodWait remains real and uses its existing backoff; not every source is reported healthy.",
+    "Historical unresolved analysis remains; collected event versions are not recommendation counts.",
+    "No global multi-expert 20-second completion claim; deployment windows had no newly detected review jobs.",
+    "Configured source count changed during read-only observation; this task did not change source/trust mappings."
+  ],
+  "commands": [
+    {
+      "command": "sh infra/test/run.sh test_telegram_version_conflict test_telegram_collector test_telegram_api test_telegram_reconciliation_claims test_telegram_channel_identity test_telegram_recent_recovery test_telegram_receipts test_telegram_author_before_album test_telegram_detection_timing test_telegram_reply_lookup_failure test_telegram_media_scheduling test_raw_retention test_telegram_directory test_telegram_sources test_telegram_profile_batch test_telegram_entity_cache test_telegram_event_connect_recovery test_telegram_lease_connect_recovery test_telegram_lease_release test_telegram_session_identity test_telegram_source_scheduling",
+      "exit_code": 0
+    },
+    {
+      "command": "sh .runtime/tg409-20261113/build-final.sh",
+      "exit_code": 0
+    },
+    {
+      "command": "sh .runtime/tg409-20261113/deploy-final.sh",
+      "exit_code": 0
+    }
+  ],
+  "orders_submitted_by_probe": 0,
+  "production_synthetic_events": 0
+}

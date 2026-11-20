@@ -1,0 +1,551 @@
+{
+  "measured_at_utc": "2026-11-11T01:35:27.112866+00:00",
+  "baseline_commit": "9fa93e9610846b1622167d1f7438d991fcfcb844",
+  "units": "bytes; GB=10^9 bytes, GiB=2^30 bytes",
+  "scope": "aggregate metadata only; production SQL transaction_read_only=on; no row contents or credentials",
+  "production_mutations": 0,
+  "database": {
+    "total_bytes": 191343049751,
+    "v2_relation_bytes": 5278752768,
+    "legacy_relation_bytes": 186052050944,
+    "v2_index_bytes": 3434938368,
+    "relation_sum_is_not_cluster_or_backup_size": true,
+    "top_relations": [
+      {
+        "name": "model_predictions",
+        "bytes": 142167621632,
+        "table_bytes": 85358460928,
+        "index_bytes": 56809160704,
+        "n_live_tup": 86602859
+      },
+      {
+        "name": "model_inputs",
+        "bytes": 35103449088,
+        "table_bytes": 30373240832,
+        "index_bytes": 4730208256,
+        "n_live_tup": 21103976
+      },
+      {
+        "name": "v2_current_quotes",
+        "bytes": 4483825664,
+        "table_bytes": 1313710080,
+        "index_bytes": 3170115584,
+        "n_live_tup": 5551977
+      },
+      {
+        "name": "files",
+        "bytes": 4221509632,
+        "table_bytes": 1186414592,
+        "index_bytes": 3035095040,
+        "n_live_tup": 3386635
+      },
+      {
+        "name": "decisions",
+        "bytes": 2568749056,
+        "table_bytes": 1906532352,
+        "index_bytes": 662216704,
+        "n_live_tup": 855849
+      },
+      {
+        "name": "decision_statistics",
+        "bytes": 1380704256,
+        "table_bytes": 482557952,
+        "index_bytes": 898146304,
+        "n_live_tup": 854519
+      },
+      {
+        "name": "label_revisions",
+        "bytes": 301105152,
+        "table_bytes": 114327552,
+        "index_bytes": 186777600,
+        "n_live_tup": 570003
+      },
+      {
+        "name": "packs",
+        "bytes": 214990848,
+        "table_bytes": 135593984,
+        "index_bytes": 79396864,
+        "n_live_tup": 777355
+      },
+      {
+        "name": "v2_analysis_traces",
+        "bytes": 205537280,
+        "table_bytes": 188628992,
+        "index_bytes": 16908288,
+        "n_live_tup": 169480
+      },
+      {
+        "name": "v2_telegram_events",
+        "bytes": 172736512,
+        "table_bytes": 98189312,
+        "index_bytes": 74547200,
+        "n_live_tup": 88321
+      },
+      {
+        "name": "v2_match_search_candidates",
+        "bytes": 111509504,
+        "table_bytes": 71114752,
+        "index_bytes": 40394752,
+        "n_live_tup": 71711
+      },
+      {
+        "name": "model_labels",
+        "bytes": 88047616,
+        "table_bytes": 27336704,
+        "index_bytes": 60710912,
+        "n_live_tup": 163065
+      },
+      {
+        "name": "v2_review_market_reads",
+        "bytes": 82976768,
+        "table_bytes": 71434240,
+        "index_bytes": 11542528,
+        "n_live_tup": 108364
+      },
+      {
+        "name": "v2_fixtures",
+        "bytes": 74719232,
+        "table_bytes": 32972800,
+        "index_bytes": 41746432,
+        "n_live_tup": 70049
+      },
+      {
+        "name": "v2_expert_messages",
+        "bytes": 66707456,
+        "table_bytes": 30990336,
+        "index_bytes": 35717120,
+        "n_live_tup": 88610
+      },
+      {
+        "name": "v2_analysis_jobs",
+        "bytes": 39641088,
+        "table_bytes": 13869056,
+        "index_bytes": 25772032,
+        "n_live_tup": 46659
+      },
+      {
+        "name": "v2_telegram_event_members",
+        "bytes": 15327232,
+        "table_bytes": 5210112,
+        "index_bytes": 10117120,
+        "n_live_tup": 90307
+      },
+      {
+        "name": "v2_account_jobs",
+        "bytes": 4988928,
+        "table_bytes": 3973120,
+        "index_bytes": 1015808,
+        "n_live_tup": 9597
+      },
+      {
+        "name": "v2_audit_log",
+        "bytes": 4923392,
+        "table_bytes": 3235840,
+        "index_bytes": 1687552,
+        "n_live_tup": 10560
+      },
+      {
+        "name": "v2_telegram_tombstones",
+        "bytes": 2891776,
+        "table_bytes": 1376256,
+        "index_bytes": 1515520,
+        "n_live_tup": 22138
+      },
+      {
+        "name": "v2_match_searches",
+        "bytes": 2334720,
+        "table_bytes": 1425408,
+        "index_bytes": 909312,
+        "n_live_tup": 5865
+      },
+      {
+        "name": "v2_quote_evidence",
+        "bytes": 1826816,
+        "table_bytes": 1679360,
+        "index_bytes": 147456,
+        "n_live_tup": 935
+      },
+      {
+        "name": "v2_signal_settlements",
+        "bytes": 1736704,
+        "table_bytes": 1589248,
+        "index_bytes": 147456,
+        "n_live_tup": 1125
+      },
+      {
+        "name": "v2_review_fixture_bindings",
+        "bytes": 1654784,
+        "table_bytes": 1376256,
+        "index_bytes": 278528,
+        "n_live_tup": 2910
+      },
+      {
+        "name": "tg_jobs",
+        "bytes": 1400832,
+        "table_bytes": 1032192,
+        "index_bytes": 368640,
+        "n_live_tup": 1274
+      },
+      {
+        "name": "v2_expert_signals",
+        "bytes": 1163264,
+        "table_bytes": 565248,
+        "index_bytes": 598016,
+        "n_live_tup": 923
+      }
+    ],
+    "n_live_tup_is_estimate": true
+  },
+  "window_aggregates": {
+    "fixture_references": [
+      {
+        "fixtures": 70058,
+        "kickoff_older_3d": 53691,
+        "signal_referenced": 450,
+        "old_signal_referenced": 313
+      }
+    ],
+    "message_window": [
+      {
+        "rows": 88630,
+        "earliest": "2021-06-16 16:27:45+00:00",
+        "latest": "2026-11-11 01:38:17+00:00",
+        "recent_3d": 2345,
+        "recent_1d": 923,
+        "signal_referenced": 593,
+        "old_signal_referenced": 395
+      }
+    ],
+    "fixtures_by_phase": [
+      {
+        "phase": "cancelled",
+        "rows": 2592,
+        "kickoff_older_3d": 2567,
+        "not_received_3d": 2567,
+        "earliest": "2026-10-27 13:00:00+00:00",
+        "latest": "2026-11-10 22:17:57.063000+00:00"
+      },
+      {
+        "phase": "finished",
+        "rows": 51514,
+        "kickoff_older_3d": 39273,
+        "not_received_3d": 39160,
+        "earliest": "2026-10-27 07:30:00+00:00",
+        "latest": "2026-11-11 01:25:00+00:00"
+      },
+      {
+        "phase": "live",
+        "rows": 9420,
+        "kickoff_older_3d": 7788,
+        "not_received_3d": 7747,
+        "earliest": "2026-10-27 05:30:00+00:00",
+        "latest": "2026-11-11 01:40:00+00:00"
+      },
+      {
+        "phase": "scheduled",
+        "rows": 6542,
+        "kickoff_older_3d": 4064,
+        "not_received_3d": 4074,
+        "earliest": "2026-10-27 13:00:00+00:00",
+        "latest": "2026-12-26 03:30:00+00:00"
+      }
+    ],
+    "messages_by_posted_day": [
+      {
+        "day": "2026-11-04 00:00:00+00:00",
+        "rows": 728,
+        "logical_tuple_bytes": 272494
+      },
+      {
+        "day": "2026-11-05 00:00:00+00:00",
+        "rows": 937,
+        "logical_tuple_bytes": 357860
+      },
+      {
+        "day": "2026-11-06 00:00:00+00:00",
+        "rows": 730,
+        "logical_tuple_bytes": 274167
+      },
+      {
+        "day": "2026-11-07 00:00:00+00:00",
+        "rows": 504,
+        "logical_tuple_bytes": 219829
+      },
+      {
+        "day": "2026-11-08 00:00:00+00:00",
+        "rows": 718,
+        "logical_tuple_bytes": 302555
+      },
+      {
+        "day": "2026-11-09 00:00:00+00:00",
+        "rows": 732,
+        "logical_tuple_bytes": 286324
+      },
+      {
+        "day": "2026-11-10 00:00:00+00:00",
+        "rows": 898,
+        "logical_tuple_bytes": 333370
+      }
+    ],
+    "messages_by_created_day": [
+      {
+        "day": "2026-11-04 00:00:00+00:00",
+        "rows": 6343,
+        "logical_tuple_bytes": 1883827
+      },
+      {
+        "day": "2026-11-05 00:00:00+00:00",
+        "rows": 8967,
+        "logical_tuple_bytes": 2590364
+      },
+      {
+        "day": "2026-11-06 00:00:00+00:00",
+        "rows": 8514,
+        "logical_tuple_bytes": 2754041
+      },
+      {
+        "day": "2026-11-07 00:00:00+00:00",
+        "rows": 7709,
+        "logical_tuple_bytes": 2458036
+      },
+      {
+        "day": "2026-11-08 00:00:00+00:00",
+        "rows": 8753,
+        "logical_tuple_bytes": 2605391
+      },
+      {
+        "day": "2026-11-09 00:00:00+00:00",
+        "rows": 8657,
+        "logical_tuple_bytes": 2677398
+      },
+      {
+        "day": "2026-11-10 00:00:00+00:00",
+        "rows": 9738,
+        "logical_tuple_bytes": 2828995
+      },
+      {
+        "day": "2026-11-11 00:00:00+00:00",
+        "rows": 511,
+        "logical_tuple_bytes": 138161
+      }
+    ],
+    "signals_by_created_day": [
+      {
+        "day": "2026-11-04 00:00:00+00:00",
+        "rows": 68,
+        "logical_tuple_bytes": 34532
+      },
+      {
+        "day": "2026-11-05 00:00:00+00:00",
+        "rows": 169,
+        "logical_tuple_bytes": 81406
+      },
+      {
+        "day": "2026-11-06 00:00:00+00:00",
+        "rows": 126,
+        "logical_tuple_bytes": 60171
+      },
+      {
+        "day": "2026-11-07 00:00:00+00:00",
+        "rows": 80,
+        "logical_tuple_bytes": 41693
+      },
+      {
+        "day": "2026-11-08 00:00:00+00:00",
+        "rows": 38,
+        "logical_tuple_bytes": 18228
+      },
+      {
+        "day": "2026-11-09 00:00:00+00:00",
+        "rows": 123,
+        "logical_tuple_bytes": 59660
+      },
+      {
+        "day": "2026-11-10 00:00:00+00:00",
+        "rows": 155,
+        "logical_tuple_bytes": 66549
+      },
+      {
+        "day": "2026-11-11 00:00:00+00:00",
+        "rows": 9,
+        "logical_tuple_bytes": 4134
+      }
+    ],
+    "long_evidence": [
+      {
+        "kind": "signals",
+        "rows": 923,
+        "logical_tuple_bytes": 442622
+      },
+      {
+        "kind": "quote_evidence",
+        "rows": 935,
+        "logical_tuple_bytes": 1321189
+      },
+      {
+        "kind": "results",
+        "rows": 408,
+        "logical_tuple_bytes": 228832
+      },
+      {
+        "kind": "settlements",
+        "rows": 1125,
+        "logical_tuple_bytes": 1365024
+      }
+    ],
+    "media_reference_bytes": [
+      {
+        "objects_with_known_size": 6388,
+        "logical_bytes": "488299981",
+        "recent_3d_objects": 757,
+        "recent_3d_bytes": "63770466",
+        "signal_objects": 472,
+        "signal_bytes": "60616943"
+      }
+    ],
+    "market_read_quote_references": [
+      {
+        "market_read_rows": 114177,
+        "distinct_quote_ids": 47729
+      }
+    ]
+  },
+  "growth_scenarios": {
+    "new_messages_per_complete_posted_day": 749.5714285714286,
+    "signals_per_complete_day_6days": 115.16666666666667,
+    "core_allocated_bytes": 5193728,
+    "core_allocated_bytes_per_current_signal_includes_indexes_and_revisions": 5627.00758396533,
+    "core_one_year_bytes_at_current_scale": 236535952.9649693,
+    "core_three_year_bytes_at_current_scale": 709607858.894908,
+    "model": "illustrative linear extrapolation, not reservation or upper bound; raw media and source rows excluded"
+  },
+  "object_inventory": {
+    "at": "2026-11-11T01:38:10.832571+00:00",
+    "read_only": true,
+    "writes": 0,
+    "prefix": "v2/",
+    "state": "unknown",
+    "includes_versions": false,
+    "category": "ReadTimeoutError"
+  },
+  "local_development_containers": {
+    "name_matching_only_not_ownership_proof": true,
+    "total": 1469,
+    "running": 78,
+    "stopped": 1391
+  },
+  "wal_settings": {
+    "state": "measured",
+    "ms": 470,
+    "rows": [
+      {
+        "name": "archive_mode",
+        "setting": "off",
+        "unit": null
+      },
+      {
+        "name": "autovacuum",
+        "setting": "on",
+        "unit": null
+      },
+      {
+        "name": "log_rotation_age",
+        "setting": "1440",
+        "unit": "min"
+      },
+      {
+        "name": "log_rotation_size",
+        "setting": "10240",
+        "unit": "kB"
+      },
+      {
+        "name": "logging_collector",
+        "setting": "off",
+        "unit": null
+      },
+      {
+        "name": "max_slot_wal_keep_size",
+        "setting": "-1",
+        "unit": "MB"
+      },
+      {
+        "name": "max_wal_size",
+        "setting": "1024",
+        "unit": "MB"
+      },
+      {
+        "name": "min_wal_size",
+        "setting": "80",
+        "unit": "MB"
+      },
+      {
+        "name": "wal_compression",
+        "setting": "off",
+        "unit": null
+      },
+      {
+        "name": "wal_keep_size",
+        "setting": "0",
+        "unit": "MB"
+      }
+    ]
+  },
+  "replication_slots": {
+    "state": "measured",
+    "ms": 471,
+    "rows": [
+      {
+        "count": 0,
+        "inactive": 0,
+        "max_retained_bytes": null
+      }
+    ]
+  },
+  "remote_filesystem_measured": {
+    "postgres_data_kib": 187394124,
+    "wal_kib": 507912,
+    "postgres_docker_log_kib": 203220,
+    "postgres_docker_log_rotation_config": "json-file Config={} (no per-container max-size/max-file shown)"
+  },
+  "unknowns": {
+    "s3_list": "ReadTimeoutError",
+    "s3_versions": "not_measured",
+    "s3_physical_bytes": "du bounded 35s timed out, exit124",
+    "quote_age_exact": {
+      "state": "unknown",
+      "category": "QueryCanceledError"
+    },
+    "quote_age_sample": {
+      "at": "2026-11-11T01:42:05.625398+00:00",
+      "read_only": true,
+      "writes": 0,
+      "sample_percent": 0.5,
+      "sampling": "SYSTEM blocks; illustrative, not exact deletion inventory",
+      "state": "unknown",
+      "category": "QueryCanceledError"
+    },
+    "trace_daily": {
+      "state": "unknown",
+      "category": "QueryCanceledError"
+    },
+    "project_docker_deduplicated_bytes": "not_measured",
+    "remote_backups_bytes": "not_measured"
+  },
+  "planning_budget_gb": {
+    "production_database_and_long_evidence": 8,
+    "telegram_media_and_evidence": 4,
+    "wal_temp_and_logs": 3,
+    "runtime_images_and_cache": 8,
+    "reusable_working_headroom": 7,
+    "base_total": 30,
+    "additional_maintenance_or_horizon_headroom": 20,
+    "upper_total": 50,
+    "same_disk_full_legacy_backup_included": false
+  },
+  "validation": {
+    "sum_v2_plus_legacy_equal_relation_sum": true,
+    "no_claim_unknown_s3_zero": true,
+    "days_new_messages": 7,
+    "days_signals": 6
+  }
+}

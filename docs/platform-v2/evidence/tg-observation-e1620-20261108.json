@@ -1,0 +1,119 @@
+{
+  "schema": "safe-cross-api-release-tg-observation-v1",
+  "window_start": "2026-11-08T21:13:57.617316+00:00",
+  "window_end": "2026-11-08T21:43:58.787274+00:00",
+  "completed_native_exits": 0,
+  "observer_samples": 91,
+  "observer_read_errors": 0,
+  "database_samples": 55,
+  "market_samples": 61,
+  "database_sample_errors": [],
+  "health_non_200_samples": [
+    {
+      "observed_at": "2026-11-08T21:28:27.314933+00:00",
+      "health": {
+        "healthz": null,
+        "readyz": null
+      }
+    }
+  ],
+  "telegram_degraded_samples": [],
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1802.8,
+    "health_all_200": false,
+    "telegram_all_healthy": false,
+    "baseline_live_event_counters": {
+      "received": 111398,
+      "staged": 5825,
+      "deferred": 0,
+      "unmapped_source": 105573
+    },
+    "final_live_event_counters": {
+      "received": 112528,
+      "staged": 5843,
+      "deferred": 0,
+      "unmapped_source": 106685
+    },
+    "live_event_delta": {
+      "received": 1130,
+      "staged": 18,
+      "deferred": 0,
+      "unmapped_source": 1112
+    }
+  },
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 184,
+    "published_posts": 3,
+    "older_posts_revised": 181,
+    "published_ready": 3,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 3,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 3,
+    "missing_receipt": 0
+  },
+  "official_sources_complete": 6,
+  "official_posts": 3,
+  "official_matched": 3,
+  "official_missing": 0,
+  "correct_non_recommendation_messages_already_manually_checked_in_e1591": 3,
+  "additional_unique_manual_samples": 0,
+  "natural_positive_recommendation_samples": 0,
+  "includes_successful_api_handoff": true,
+  "api_handoff_completed_at": "2026-11-08T21:30:10Z",
+  "dedicated_post_release_window": false,
+  "original_window_metadata_not_overwritten": true,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": false,
+    "last_poll_at": "2026-11-08T21:43:20.947270+00:00",
+    "last_poll_elapsed_ms": 19996.6,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 22736,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 15.3,
+    "oldest_quote_age_seconds": 354031.8,
+    "failed_batches": 0
+  },
+  "whole_database_freshness_claim": false,
+  "three_second_acceptance": false,
+  "raw_evidence_sha256": {
+    "e1620-watch-summary.json": "fac16e1a9e7196aeec57272d2b04d8a5e02aa00996952992f30529112e911fb2",
+    "e1620-natural-audit.json": "00961c52608c27f4e284e5cd78bf021a3c58a333f800c3d1099aa546f6ea5133",
+    "e1620-official-scan.json": "c457eb397c453c604dbd1cec614ec2b927438311b3797653d376e90c08228065",
+    "e1620-official-reconcile.json": "8a605666894eeba90fd841f28e84bf4b2269e9a409ef0ae2c5b28d30568e9084",
+    "e1621-composition-readonly.jsonl": "f0fb86a8a414aa92e784ef4fe2c9036cb49a1689617a60b13b6c14d086ca1816"
+  }
+}

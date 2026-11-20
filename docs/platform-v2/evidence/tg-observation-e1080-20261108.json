@@ -1,0 +1,132 @@
+{
+  "window_start": "2026-11-08T14:45:55.766898+00:00",
+  "window_last_database_sample": "2026-11-08T15:15:56.812008+00:00",
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1802.9,
+    "health_all_200": true,
+    "telegram_all_healthy": true,
+    "baseline_live_event_counters": {
+      "received": 85730,
+      "staged": 4670,
+      "deferred": 0,
+      "unmapped_source": 81060
+    },
+    "final_live_event_counters": {
+      "received": 87793,
+      "staged": 4783,
+      "deferred": 0,
+      "unmapped_source": 83010
+    },
+    "live_event_delta": {
+      "received": 2063,
+      "staged": 113,
+      "deferred": 0,
+      "unmapped_source": 1950
+    }
+  },
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 153,
+    "published_posts": 3,
+    "older_posts_revised": 149,
+    "published_ready": 3,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 3,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 3,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 4,
+    "avg_ms": "3875.7",
+    "p95_ms": "5803.1",
+    "within_3s": 1,
+    "older_backlog_versions_received": 149
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 3
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 3
+    }
+  ],
+  "market_samples": 61,
+  "market_degraded_samples": [],
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T15:15:22.356726+00:00",
+    "last_poll_elapsed_ms": 21131.2,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 28443,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 16.4,
+    "oldest_quote_age_seconds": 330754.4,
+    "failed_batches": 0
+  },
+  "includes_successful_api_handoff": false,
+  "whole_database_freshness_claim": false,
+  "read_only": true,
+  "official_reconciliation": {
+    "official_posts": 4,
+    "normalized_posts": 3,
+    "matched": 3,
+    "missing": 0
+  },
+  "semantic_audit": {
+    "messages_checked": 3,
+    "football_recommendation_intents": 0,
+    "feedback_or_correction": 2,
+    "promotion_with_unsupported_lottery_casino_images": 1,
+    "authorized_images_sha_and_visual_checked": 3,
+    "conclusion_latency_ms": [
+      24902.274,
+      15081.096,
+      18900.468
+    ]
+  },
+  "natural_positive_recommendation_acceptance": false,
+  "three_second_end_to_end_acceptance": false
+}

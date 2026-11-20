@@ -1,0 +1,338 @@
+"""真实MCP HTTP列表的重复说明预算；不调用模型或真实业务服务。"""
+import asyncio
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import unittest
+from unittest.mock import patch
+
+import httpx
+from mcp.server import MCPServer
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PROFILE = {'X-Football-Tool-Profile': 'parallel-compact-v1'}
+
+
+class MCPDescriptionBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        os.environ['EXPERT_MCP_TOKEN'] = 'isolated-description-budget'
+        spec = importlib.util.spec_from_file_location(
+            'isolated_description_server', ROOT / 'services/hermes-mcp/server.py')
+        self.server = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = self.server
+        spec.loader.exec_module(self.server)
+        self.app = self.server.create_application()
+        self.ready, self.stop = asyncio.Event(), asyncio.Event()
+
+        async def lifespan():
+            async with self.app.app.router.lifespan_context(self.app.app):
+                self.ready.set()
+                await self.stop.wait()
+
+        self.server_task = asyncio.create_task(lifespan())
+        await asyncio.wait_for(self.ready.wait(), 3)
+        self.client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=self.app), base_url='http://127.0.0.1:8090',
+            headers={'Authorization': 'Bearer isolated-description-budget',
+                     'Accept': 'application/json, text/event-stream',
+                     'MCP-Protocol-Version': '2025-11-25'})
+
+    async def asyncTearDown(self):
+        await self.client.aclose()
+        self.stop.set()
+        await self.server_task
+        await self.server.client.aclose()
+        sys.modules.pop('isolated_description_server', None)
+
+    async def rpc(self, method='tools/list', params=None, headers=None):
+        return await self.client.post('/mcp', headers=headers or {}, json={
+            'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params or {}})
+
+    async def tools(self, headers=None):
+        response = await self.rpc(headers=headers)
+        self.assertEqual(200, response.status_code, response.text)
+        return response.json()['result']['tools']
+
+    async def native_tools(self):
+        return [tool.model_dump(by_alias=True, exclude_none=True)
+                for tool in await MCPServer.list_tools(self.server.mcp)]
+
+    def assert_primary_unchanged(self, expected, actual):
+        self.assertEqual(expected, actual)
+
+    def assert_only_top_descriptions_changed(self, primary, parallel):
+        self.assertEqual(4, len(primary))
+        self.assertEqual([t['name'] for t in primary], [t['name'] for t in parallel])
+        for original, compact in zip(primary, parallel):
+            self.assertEqual({k: v for k, v in original.items() if k != 'description'},
+                             {k: v for k, v in compact.items() if k != 'description'})
+            self.assertIn('football', compact.get('description', ''))
+        before = len(json.dumps(primary, ensure_ascii=False).encode())
+        after = len(json.dumps(parallel, ensure_ascii=False).encode())
+        self.assertGreater(before - after, 1500)
+
+    async def test_default_list_is_native_including_every_description(self):
+        self.assert_primary_unchanged(await self.native_tools(), await self.tools())
+
+    async def test_parallel_list_only_shortens_top_level_descriptions(self):
+        primary = await self.tools()
+        self.assert_only_top_descriptions_changed(primary, await self.tools(PROFILE))
+        self.assert_primary_unchanged(primary, await self.tools())
+
+    async def test_unknown_or_duplicate_profiles_do_not_change_native_list(self):
+        primary = await self.tools()
+        for value in ('', 'compact', 'parallel-compact-v2', 'parallel-compact-v1,full'):
+            with self.subTest(value=value):
+                self.assert_primary_unchanged(primary, await self.tools({
+                    'X-Football-Tool-Profile': value}))
+        duplicate = [('X-Football-Tool-Profile', 'parallel-compact-v1'),
+                     ('X-Football-Tool-Profile', 'full')]
+        self.assert_primary_unchanged(primary, await self.tools(duplicate))
+        self.assert_primary_unchanged(primary, await self.tools(list(reversed(duplicate))))
+
+    async def test_simultaneous_lists_keep_independent_request_profiles(self):
+        primary = await self.native_tools()
+        original = MCPServer.list_tools
+        entered = 0
+        together = asyncio.Event()
+
+        async def delayed(instance):
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                together.set()
+            await asyncio.wait_for(together.wait(), 3)
+            await asyncio.sleep(.01)
+            return await original(instance)
+
+        with patch.object(MCPServer, 'list_tools', delayed):
+            full, compact = await asyncio.gather(self.tools(), self.tools(PROFILE))
+        self.assert_primary_unchanged(primary, full)
+        self.assert_only_top_descriptions_changed(full, compact)
+        self.assert_primary_unchanged(primary, await self.tools())
+
+    async def test_exception_and_cancellation_reset_profile_in_caller_context(self):
+        primary = await self.native_tools()
+        for cancelled in (False, True):
+            with self.subTest(cancelled=cancelled):
+                async def failing(scope, receive, send):
+                    self.assert_only_top_descriptions_changed(
+                        primary, [t.model_dump(by_alias=True, exclude_none=True)
+                                  for t in await self.server.mcp.list_tools()])
+                    if cancelled:
+                        raise asyncio.CancelledError()
+                    raise RuntimeError('isolated transport failure')
+
+                wrapper = self.server.BearerAuthentication(failing)
+                scope = {'type': 'http', 'headers': [
+                    (b'authorization', b'Bearer isolated-description-budget'),
+                    (b'x-football-tool-profile', b'parallel-compact-v1')]}
+                with self.assertRaises(asyncio.CancelledError if cancelled else RuntimeError):
+                    await wrapper(scope, None, None)
+                self.assert_primary_unchanged(primary, [
+                    t.model_dump(by_alias=True, exclude_none=True)
+                    for t in await self.server.mcp.list_tools()])
+
+    async def test_profile_never_grants_authentication_or_extra_tools(self):
+        response = await self.rpc(headers={**PROFILE, 'Authorization': 'Bearer invalid'})
+        self.assertEqual(401, response.status_code)
+        response = await self.rpc('tools/call', {'name': 'place_bet', 'arguments': {}}, PROFILE)
+        self.assertTrue(response.json()['result']['isError'])
+        self.assertEqual({'search_matches', 'resolve_match', 'list_match_markets',
+                          'record_expert_signals'}, {t['name'] for t in await self.tools(PROFILE)})
+
+    async def test_business_parameters_and_invalid_reference_stay_identical(self):
+        captured = []
+
+        def upstream(request):
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={'resolved': False, 'reason': 'ambiguous'})
+
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        arguments = {'review_id': 'job', 'attempt_id': 'attempt',
+                     'search_key': '0123456789abcdef' * 4, 'team_a': 'Alpha', 'team_b': 'Beta'}
+        outputs = []
+        for headers in ({}, PROFILE):
+            result = await self.rpc('tools/call', {'name': 'resolve_match',
+                'arguments': arguments}, headers)
+            outputs.append(result.json()['result'])
+            invalid = await self.rpc('tools/call', {'name': 'resolve_match',
+                'arguments': {**arguments, 'search_key': 'invented-team-id'}}, headers)
+            self.assertTrue(invalid.json()['result']['isError'])
+        self.assertEqual(2, len(captured))
+        self.assertEqual(captured[0], captured[1])
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(arguments['search_key'], captured[0]['search_key'])
+
+    def test_connections_declare_lossless_tables_and_secondary_compact_descriptions(self):
+        config = yaml.safe_load((ROOT / 'integrations/hermes/config.yaml').read_text())
+        servers = config['mcp_servers']
+        self.assertEqual({'football', 'football_parallel'}, set(servers))
+        primary, parallel = servers['football'], servers['football_parallel']
+        self.assertEqual('parallel-budget-v1',
+                         parallel['headers'].get('X-Football-Tool-Profile'))
+        self.assertEqual('market-budget-v1',
+                         primary['headers'].get('X-Football-Tool-Profile'))
+        without_profile = {**parallel, 'headers': {k: v for k, v in parallel['headers'].items()
+                                                 if k != 'X-Football-Tool-Profile'}}
+        primary_without_profile = {**primary, 'headers': {
+            k: v for k, v in primary['headers'].items() if k != 'X-Football-Tool-Profile'}}
+        self.assertEqual(primary_without_profile, without_profile)
+
+    async def test_explicit_intent_is_opt_in_and_preserves_nullable_argument_types(self):
+        primary = {t['name']: t for t in await self.tools()}
+        fields = {'read_markets', 'market_kind', 'period', 'market_query','source_periods'}
+        for profile in ('market-intent-v1', 'parallel-intent-v1'):
+            actual = {t['name']: t for t in await self.tools({'X-Football-Tool-Profile': profile})}
+            self.assertEqual(set(primary), set(actual))
+            if profile == 'market-intent-v1':
+                self.assertIn('仅未唯一绑定时再resolve_match', actual['search_matches']['description'])
+                self.assertNotIn('否则用resolve_match继续核验', actual['search_matches']['description'])
+            for name in ('search_matches', 'resolve_match'):
+                before, after = primary[name]['inputSchema'], actual[name]['inputSchema']
+                self.assertEqual(set(before['required']) | fields, set(after['required']))
+                for field, original in before['properties'].items():
+                    changed = after['properties'][field]
+                    if field not in fields:
+                        self.assertEqual(original, changed)
+                        continue
+                    self.assertNotIn('default', changed)
+                    self.assertGreater(len(changed['description']), 30)
+                    self.assertEqual({k: v for k, v in original.items() if k not in {'default', 'description'}},
+                                     {k: v for k, v in changed.items() if k != 'description'})
+            self.assertEqual(primary, {t['name']: t for t in await self.tools()})
+
+    async def test_explicit_unknown_intent_remains_search_only_and_authentication_still_required(self):
+        calls = []
+        def upstream(request):
+            calls.append(request.url.path)
+            return httpx.Response(200, json={'search_complete': True, 'next_cursor': None,
+                'resolution': {'resolved': False, 'reason': 'ambiguous'}})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        profile = {'X-Football-Tool-Profile': 'market-intent-v1'}
+        arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'team_query': 'Alpha',
+                     'read_markets': False, 'market_kind': None, 'period': None, 'market_query': None}
+        denied = await self.rpc(headers={**profile, 'Authorization': 'Bearer invalid'})
+        self.assertEqual(401, denied.status_code)
+        response = await self.rpc('tools/call', {'name': 'search_matches', 'arguments': arguments}, profile)
+        self.assertFalse(response.json()['result'].get('isError', False))
+        self.assertEqual(['/internal/mcp/search_matches'], calls)
+
+    async def test_budget_profiles_only_change_descriptions_and_reduce_wire_bytes(self):
+        def without_descriptions(value):
+            if isinstance(value, dict):
+                return {key: without_descriptions(item) for key, item in value.items()
+                        if key != 'description'}
+            if isinstance(value, list):
+                return [without_descriptions(item) for item in value]
+            return value
+
+        for current, budget in (('market-intent-v1', 'market-budget-v1'),
+                                ('parallel-intent-v1', 'parallel-budget-v1')):
+            with self.subTest(profile=budget):
+                original = await self.tools({'X-Football-Tool-Profile': current})
+                compact = await self.tools({'X-Football-Tool-Profile': budget})
+                self.assertEqual(without_descriptions(original), without_descriptions(compact))
+                before = len(json.dumps(original, ensure_ascii=False, separators=(',', ':')).encode())
+                after = len(json.dumps(compact, ensure_ascii=False, separators=(',', ':')).encode())
+                self.assertLess(after, before * .8)
+                for tool in compact:
+                    self.assertIn('expert-review', tool['description'])
+                    for field in ('source_periods', 'market_query', 'evidence_text'):
+                        prop = tool['inputSchema']['properties'].get(field)
+                        if prop:
+                            self.assertTrue(prop.get('description'))
+                search = next(tool for tool in compact if tool['name'] == 'search_matches')
+                self.assertIn('record_source_intent', search['description'])
+                self.assertIn('record_result', search['description'])
+
+    async def test_budget_profile_is_request_local_and_never_changes_auth_or_arguments(self):
+        legacy = await self.tools()
+        full, compact = await asyncio.gather(self.tools(), self.tools({
+            'X-Football-Tool-Profile': 'market-budget-v1'}))
+        self.assertEqual(legacy, full)
+        self.assertNotEqual(full, compact)
+        self.assertEqual(legacy, await self.tools())
+        for value in ('market-budget-v2', 'market-budget-v1,full'):
+            self.assertEqual(legacy, await self.tools({'X-Football-Tool-Profile': value}))
+        duplicate = [('X-Football-Tool-Profile', 'market-budget-v1'),
+                     ('X-Football-Tool-Profile', 'market-intent-v1')]
+        self.assertEqual(legacy, await self.tools(duplicate))
+        denied = await self.rpc(headers={'Authorization': 'Bearer invalid',
+            'X-Football-Tool-Profile': 'market-budget-v1'})
+        self.assertEqual(401, denied.status_code)
+        captured = []
+        def upstream(request):
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={'resolved': False, 'reason': 'ambiguous'})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        arguments = {'review_id': 'job', 'attempt_id': 'attempt',
+            'search_key': '0123456789abcdef' * 4, 'team_a': 'Alpha', 'team_b': 'Beta'}
+        for profile in ('market-intent-v1', 'market-budget-v1', 'parallel-budget-v1'):
+            result = await self.rpc('tools/call', {'name': 'resolve_match', 'arguments': arguments},
+                                    {'X-Football-Tool-Profile': profile})
+            self.assertFalse(result.json()['result'].get('isError', False))
+        self.assertEqual([captured[0]] * 3, captured)
+
+    async def test_budget_profile_resets_after_exception_and_cancellation(self):
+        legacy = await self.native_tools()
+        for cancelled in (False, True):
+            async def failing(scope, receive, send):
+                compact = [tool.model_dump(by_alias=True, exclude_none=True)
+                           for tool in await self.server.mcp.list_tools()]
+                self.assertNotEqual(legacy, compact)
+                self.assertIn('expert-review', compact[0]['description'])
+                if cancelled:
+                    raise asyncio.CancelledError()
+                raise RuntimeError('isolated budget transport failure')
+            scope = {'type': 'http', 'headers': [
+                (b'authorization', b'Bearer isolated-description-budget'),
+                (b'x-football-tool-profile', b'market-budget-v1')]}
+            with self.assertRaises(asyncio.CancelledError if cancelled else RuntimeError):
+                await self.server.BearerAuthentication(failing)(scope, None, None)
+            self.assertEqual(legacy, await self.native_tools())
+
+    async def test_simultaneous_explicit_and_legacy_lists_do_not_share_schema_mutations(self):
+        primary = await self.native_tools()
+        original = MCPServer.list_tools
+        entered, together = 0, asyncio.Event()
+        async def delayed(instance):
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                together.set()
+            await asyncio.wait_for(together.wait(), 3)
+            return await original(instance)
+        with patch.object(MCPServer, 'list_tools', delayed):
+            explicit, legacy = await asyncio.gather(
+                self.tools({'X-Football-Tool-Profile': 'market-intent-v1'}), self.tools())
+        self.assertEqual(primary, legacy)
+        self.assertEqual(primary, await self.tools())
+        search = next(t for t in explicit if t['name'] == 'search_matches')
+        self.assertIn('read_markets', search['inputSchema']['required'])
+
+    async def test_explicit_profile_context_is_reset_after_failure_or_cancellation(self):
+        for cancelled in (False, True):
+            async def failing(scope, receive, send):
+                self.assertTrue(self.server.explicit_market_intent.get())
+                self.assertTrue(self.server.compact_market_tables.get())
+                self.assertTrue(self.server.compact_descriptions.get())
+                if cancelled:
+                    raise asyncio.CancelledError()
+                raise RuntimeError('isolated explicit intent failure')
+            wrapper = self.server.BearerAuthentication(failing)
+            scope = {'type': 'http', 'headers': [
+                (b'authorization', b'Bearer isolated-description-budget'),
+                (b'x-football-tool-profile', b'parallel-intent-v1')]}
+            with self.assertRaises(asyncio.CancelledError if cancelled else RuntimeError):
+                await wrapper(scope, None, None)
+            self.assertFalse(self.server.explicit_market_intent.get())
+            self.assertFalse(self.server.compact_market_tables.get())
+            self.assertFalse(self.server.compact_descriptions.get())

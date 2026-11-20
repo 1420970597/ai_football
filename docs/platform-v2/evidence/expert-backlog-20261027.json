@@ -1,0 +1,2029 @@
+{
+  "observed_at_utc": "2026-10-27T17:40:40.912917+00:00",
+  "read_only": true,
+  "snapshot": "repeatable_read",
+  "private_message_text_exported": false,
+  "credentials_exported": false,
+  "state_attempt_error": [
+    {
+      "state": "failed",
+      "attempts": 0,
+      "error": "source_edited",
+      "count": 21
+    },
+    {
+      "state": "queued",
+      "attempts": 0,
+      "error": "none",
+      "count": 367
+    },
+    {
+      "state": "retry",
+      "attempts": 1,
+      "error": "ReadTimeout",
+      "count": 1
+    },
+    {
+      "state": "retry",
+      "attempts": 1,
+      "error": "TimeoutError",
+      "count": 1
+    },
+    {
+      "state": "running",
+      "attempts": 1,
+      "error": "none",
+      "count": 1
+    },
+    {
+      "state": "running",
+      "attempts": 2,
+      "error": "none",
+      "count": 1
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "error": "none",
+      "count": 215
+    },
+    {
+      "state": "unresolved",
+      "attempts": 2,
+      "error": "none",
+      "count": 21
+    },
+    {
+      "state": "unresolved",
+      "attempts": 3,
+      "error": "none",
+      "count": 2
+    },
+    {
+      "state": "unresolved",
+      "attempts": 4,
+      "error": "none",
+      "count": 1
+    }
+  ],
+  "ages_by_state": [
+    {
+      "state": "failed",
+      "count": 21,
+      "youngest_job_minutes": 18.28,
+      "oldest_job_minutes": 105.67,
+      "youngest_message_minutes": 54.98,
+      "oldest_message_minutes": 1985684.18,
+      "messages_older_than_24h": 13,
+      "messages_older_than_6h": 13,
+      "with_images": 10,
+      "expired_running_leases": 0
+    },
+    {
+      "state": "queued",
+      "count": 367,
+      "youngest_job_minutes": 3.25,
+      "oldest_job_minutes": 100.51,
+      "youngest_message_minutes": 101.95,
+      "oldest_message_minutes": 1985694.45,
+      "messages_older_than_24h": 366,
+      "messages_older_than_6h": 366,
+      "with_images": 122,
+      "expired_running_leases": 0
+    },
+    {
+      "state": "retry",
+      "count": 2,
+      "youngest_job_minutes": 53.86,
+      "oldest_job_minutes": 110.94,
+      "youngest_message_minutes": 569849.15,
+      "oldest_message_minutes": 1987163.83,
+      "messages_older_than_24h": 2,
+      "messages_older_than_6h": 2,
+      "with_images": 0,
+      "expired_running_leases": 0
+    },
+    {
+      "state": "running",
+      "count": 2,
+      "youngest_job_minutes": 45.1,
+      "oldest_job_minutes": 100.64,
+      "youngest_message_minutes": 569533.6,
+      "oldest_message_minutes": 1985733.1,
+      "messages_older_than_24h": 2,
+      "messages_older_than_6h": 2,
+      "with_images": 1,
+      "expired_running_leases": 1
+    },
+    {
+      "state": "unresolved",
+      "count": 239,
+      "youngest_job_minutes": 15.27,
+      "oldest_job_minutes": 868.45,
+      "youngest_message_minutes": 54.98,
+      "oldest_message_minutes": 2821032.93,
+      "messages_older_than_24h": 211,
+      "messages_older_than_6h": 211,
+      "with_images": 64,
+      "expired_running_leases": 0
+    }
+  ],
+  "queue_eligibility": [
+    {
+      "state": "queued",
+      "count": 367,
+      "source_disabled": 0,
+      "expert_disabled": 0,
+      "mapping_disabled": 0,
+      "media_not_ready": 0,
+      "deleted": 0,
+      "superseded": 0,
+      "deferred": 0
+    },
+    {
+      "state": "retry",
+      "count": 2,
+      "source_disabled": 0,
+      "expert_disabled": 0,
+      "mapping_disabled": 0,
+      "media_not_ready": 0,
+      "deleted": 0,
+      "superseded": 0,
+      "deferred": 0
+    },
+    {
+      "state": "running",
+      "count": 2,
+      "source_disabled": 0,
+      "expert_disabled": 0,
+      "mapping_disabled": 0,
+      "media_not_ready": 0,
+      "deleted": 0,
+      "superseded": 0,
+      "deferred": 0
+    }
+  ],
+  "message_ingestion_delay": [
+    {
+      "state": "failed",
+      "count": 21,
+      "min_minutes": 0.31,
+      "mean_minutes": 958908.79,
+      "max_minutes": 1985588.33
+    },
+    {
+      "state": "queued",
+      "count": 367,
+      "min_minutes": 2.38,
+      "mean_minutes": 1488561.88,
+      "max_minutes": 1985593.99
+    },
+    {
+      "state": "retry",
+      "count": 2,
+      "min_minutes": 569795.28,
+      "mean_minutes": 1278424.09,
+      "max_minutes": 1987052.89
+    },
+    {
+      "state": "running",
+      "count": 2,
+      "min_minutes": 569488.5,
+      "mean_minutes": 1277560.41,
+      "max_minutes": 1985632.33
+    },
+    {
+      "state": "unresolved",
+      "count": 239,
+      "min_minutes": 0.13,
+      "mean_minutes": 1523304.37,
+      "max_minutes": 2820916.54
+    }
+  ],
+  "trace_kinds": [
+    {
+      "trace_kind": "attempt_claimed",
+      "count": 272,
+      "first_at": "2026-10-27 03:12:28.411816+00:00",
+      "last_at": "2026-10-27 17:40:22.849869+00:00"
+    },
+    {
+      "trace_kind": "hermes_request",
+      "count": 251,
+      "first_at": "2026-10-27 03:12:32.325697+00:00",
+      "last_at": "2026-10-27 17:40:27.649119+00:00"
+    },
+    {
+      "trace_kind": "hermes_result",
+      "count": 240,
+      "first_at": "2026-10-27 03:13:50.036465+00:00",
+      "last_at": "2026-10-27 17:40:38.013518+00:00"
+    },
+    {
+      "trace_kind": "mcp_list_match_markets",
+      "count": 29,
+      "first_at": "2026-10-27 15:48:39.294312+00:00",
+      "last_at": "2026-10-27 17:27:49.485036+00:00"
+    },
+    {
+      "trace_kind": "mcp_record_expert_signals",
+      "count": 5,
+      "first_at": "2026-10-27 15:52:53.462760+00:00",
+      "last_at": "2026-10-27 17:14:52.633914+00:00"
+    },
+    {
+      "trace_kind": "mcp_resolve_match",
+      "count": 144,
+      "first_at": "2026-10-27 03:13:42.380973+00:00",
+      "last_at": "2026-10-27 17:38:57.589787+00:00"
+    },
+    {
+      "trace_kind": "mcp_search_matches",
+      "count": 734,
+      "first_at": "2026-10-27 03:12:49.962303+00:00",
+      "last_at": "2026-10-27 17:38:43.445388+00:00"
+    },
+    {
+      "trace_kind": "review_failure",
+      "count": 6,
+      "first_at": "2026-10-27 15:53:05.291849+00:00",
+      "last_at": "2026-10-27 17:20:51.681771+00:00"
+    }
+  ],
+  "trace_metrics": {
+    "result_elapsed_ms": {
+      "count": 240,
+      "min": 6384.82,
+      "p50": 10110.687,
+      "p90": 89218.394,
+      "max": 274661.779
+    },
+    "failure_elapsed_ms": {
+      "count": 6,
+      "min": 1543.205,
+      "p50": 5011.968,
+      "p90": 321312.984,
+      "max": 603547.647
+    },
+    "queue_wait_ms": {
+      "count": 272,
+      "min": 7490.145,
+      "p50": 1205376.442,
+      "p90": 4335283.001,
+      "max": 5955100.619
+    },
+    "search_tool_elapsed_ms": {
+      "count": 109,
+      "min": 1461.416,
+      "p50": 2328.858,
+      "p90": 4684.523,
+      "max": 9270.887
+    },
+    "search_phase": {
+      "all": 726,
+      "live": 7,
+      "scheduled": 1
+    },
+    "failures": {
+      "internal": 2,
+      "network": 2,
+      "timeout": 2
+    },
+    "finish_reason": {
+      "stop": 240
+    },
+    "record_reject_reasons": {
+      "quote_inactive_unknown_or_stale": 4,
+      "quote_not_read_or_changed": 1
+    },
+    "search_pages": 734,
+    "search_complete_pages": 724,
+    "search_returned": 1391,
+    "search_zero_pages": 489,
+    "search_max_total": 56,
+    "records_accepted": 0,
+    "records_rejected": 5,
+    "resolve_true": 30,
+    "resolve_false": 114,
+    "market_reads": 29,
+    "market_zero_quotes": 0
+  },
+  "trace_metrics_rows": 1430,
+  "trace_metrics_limit": 20000,
+  "search_snapshot_summary": [
+    {
+      "phase": "all",
+      "complete": false,
+      "searches": 4,
+      "pages": 4,
+      "candidates": 214,
+      "max_candidates": 55,
+      "zero_candidate_searches": 0
+    },
+    {
+      "phase": "all",
+      "complete": true,
+      "searches": 660,
+      "pages": 665,
+      "candidates": 1065,
+      "max_candidates": 56,
+      "zero_candidate_searches": 448
+    },
+    {
+      "phase": "live",
+      "complete": true,
+      "searches": 6,
+      "pages": 6,
+      "candidates": 0,
+      "max_candidates": 0,
+      "zero_candidate_searches": 6
+    },
+    {
+      "phase": "scheduled",
+      "complete": true,
+      "searches": 1,
+      "pages": 1,
+      "candidates": 0,
+      "max_candidates": 0,
+      "zero_candidate_searches": 1
+    }
+  ],
+  "signals": [],
+  "recent_completed_per_10min": [
+    {
+      "state": "queued",
+      "count": 17
+    },
+    {
+      "state": "running",
+      "count": 2
+    },
+    {
+      "state": "unresolved",
+      "count": 18
+    }
+  ],
+  "samples": [
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 15:59:51.058754+00:00",
+      "updated_at": "2026-10-27 17:39:06.418021+00:00",
+      "posted_at": "2023-01-17 16:44:00+00:00",
+      "image_count": 1,
+      "text_characters": 14,
+      "sample_id": "aa8ba28a2daa",
+      "trace_count": 16,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "mcp_search_matches": 10,
+        "mcp_resolve_match": 3,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:37:31.369109+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:37:36.692857+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:48.275846+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:51.316290+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:58.150470+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:38:00.905407+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:38:10.653704+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:38:23.311654+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:38:29.376566+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:38:32.683854+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:38:39.957331+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:38:43.445388+00:00"
+        },
+        {
+          "kind": "mcp_resolve_match",
+          "keys": [
+            "attempt_id",
+            "competition",
+            "elapsed_ms",
+            "from_utc",
+            "result",
+            "review_id",
+            "search_key",
+            "team_a",
+            "team_b",
+            "to_utc"
+          ],
+          "at": "2026-10-27 17:38:53.441760+00:00"
+        },
+        {
+          "kind": "mcp_resolve_match",
+          "keys": [
+            "attempt_id",
+            "competition",
+            "elapsed_ms",
+            "from_utc",
+            "result",
+            "review_id",
+            "search_key",
+            "team_a",
+            "team_b",
+            "to_utc"
+          ],
+          "at": "2026-10-27 17:38:55.723214+00:00"
+        },
+        {
+          "kind": "mcp_resolve_match",
+          "keys": [
+            "attempt_id",
+            "competition",
+            "elapsed_ms",
+            "from_utc",
+            "result",
+            "review_id",
+            "search_key",
+            "team_a",
+            "team_b",
+            "to_utc"
+          ],
+          "at": "2026-10-27 17:38:57.589787+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:39:04.817771+00:00"
+        }
+      ],
+      "searches": [
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2087.05
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 12,
+          "total": 12,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2585.666
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 1881.122
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2413.621
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 1,
+          "total": 1,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 3887.314
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 2,
+          "total": 2,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 4907.345
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 2,
+          "total": 2,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2257.732
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 2,
+          "total": 2,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2105.639
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 8,
+          "total": 8,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2305.557
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2430.017
+        }
+      ],
+      "resolutions": [
+        {
+          "resolved": false,
+          "candidate_count": 0,
+          "phase": null
+        },
+        {
+          "resolved": false,
+          "candidate_count": 0,
+          "phase": null
+        },
+        {
+          "resolved": false,
+          "candidate_count": 0,
+          "phase": null
+        }
+      ],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 88588.434,
+          "image_count": 1,
+          "image_bytes": 74453,
+          "content_type": "str",
+          "content_characters": 731,
+          "usage": {
+            "total_tokens": 84909,
+            "prompt_tokens": 80908,
+            "completion_tokens": 4001
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:55:27.974756+00:00",
+      "updated_at": "2026-10-27 17:38:40.634889+00:00",
+      "posted_at": "2025-09-27 05:20:59+00:00",
+      "image_count": 0,
+      "text_characters": 9,
+      "sample_id": "972de71b6c01",
+      "trace_count": 3,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:38:24.400505+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:38:29.563607+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:38:39.088320+00:00"
+        }
+      ],
+      "searches": [],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 10110.687,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 311,
+          "usage": {
+            "total_tokens": 12280,
+            "prompt_tokens": 11649,
+            "completion_tokens": 631
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:55:22.978821+00:00",
+      "updated_at": "2026-10-27 17:38:22.612606+00:00",
+      "posted_at": "2025-09-27 05:20:44+00:00",
+      "image_count": 0,
+      "text_characters": 4,
+      "sample_id": "e8c1ecc55978",
+      "trace_count": 3,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:38:05.935880+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:38:10.965533+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:38:20.414766+00:00"
+        }
+      ],
+      "searches": [],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 9960.085,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 226,
+          "usage": {
+            "total_tokens": 12093,
+            "prompt_tokens": 11627,
+            "completion_tokens": 466
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:55:19.052844+00:00",
+      "updated_at": "2026-10-27 17:38:04.507710+00:00",
+      "posted_at": "2025-09-27 05:20:40+00:00",
+      "image_count": 0,
+      "text_characters": 6,
+      "sample_id": "7b74c5b1eb1a",
+      "trace_count": 4,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "mcp_search_matches": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:37:40.414674+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:37:45.087037+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:54.871755+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:38:03.176215+00:00"
+        }
+      ],
+      "searches": [
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2647.477
+        }
+      ],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 18442.047,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 258,
+          "usage": {
+            "total_tokens": 19612,
+            "prompt_tokens": 18544,
+            "completion_tokens": 1068
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:55:14.187985+00:00",
+      "updated_at": "2026-10-27 17:37:38.967914+00:00",
+      "posted_at": "2025-09-27 05:17:03+00:00",
+      "image_count": 0,
+      "text_characters": 2,
+      "sample_id": "37aef18e86ea",
+      "trace_count": 4,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "mcp_search_matches": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:37:15.975913+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:37:21.644739+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:28.791427+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:37:37.311989+00:00"
+        }
+      ],
+      "searches": [
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 4448.762
+        }
+      ],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 16605.482,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 325,
+          "usage": {
+            "total_tokens": 18980,
+            "prompt_tokens": 18352,
+            "completion_tokens": 628
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 15:59:39.474329+00:00",
+      "updated_at": "2026-10-27 17:37:25.163940+00:00",
+      "posted_at": "2023-01-17 15:54:53+00:00",
+      "image_count": 0,
+      "text_characters": 190,
+      "sample_id": "0a7c1fab9d79",
+      "trace_count": 23,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "mcp_search_matches": 20,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:35:37.245072+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:35:42.582760+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:35:55.486077+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:35:59.520620+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:02.902928+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:06.059330+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:10.353458+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:13.745099+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:16.796314+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:19.968665+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:23.120806+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:26.588859+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:39.502883+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:42.825009+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:47.966401+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:51.403415+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:54.810902+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:36:58.074027+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:01.457696+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:04.617309+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:07.901302+00:00"
+        },
+        {
+          "kind": "mcp_search_matches",
+          "keys": [
+            "after",
+            "attempt_id",
+            "complete",
+            "elapsed_ms",
+            "returned",
+            "scope",
+            "search_key",
+            "total"
+          ],
+          "at": "2026-10-27 17:37:11.162739+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:37:23.543562+00:00"
+        }
+      ],
+      "searches": [
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 1895.019
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2313.337
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 1,
+          "total": 1,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2197.915
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 3340.566
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2325.546
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2201.704
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 1,
+          "total": 1,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2233.051
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2221.31
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2442.886
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2312.847
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2303.894
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2228.952
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2487.83
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2460.072
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2313.417
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2360.663
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2203.847
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2323.532
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2316.551
+        },
+        {
+          "phase": "all",
+          "from_utc": null,
+          "to_utc": null,
+          "returned": 0,
+          "total": 0,
+          "complete": true,
+          "after": 0,
+          "elapsed_ms": 2317.741
+        }
+      ],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 101432.623,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 639,
+          "usage": {
+            "total_tokens": 40493,
+            "prompt_tokens": 36065,
+            "completion_tokens": 4428
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:55:10.085036+00:00",
+      "updated_at": "2026-10-27 17:37:11.268906+00:00",
+      "posted_at": "2025-09-27 05:17:01+00:00",
+      "image_count": 0,
+      "text_characters": 4,
+      "sample_id": "3a0f0cb596de",
+      "trace_count": 3,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:36:55.865764+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:37:00.825632+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:37:09.715712+00:00"
+        }
+      ],
+      "searches": [],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 9398.643,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 221,
+          "usage": {
+            "total_tokens": 12075,
+            "prompt_tokens": 11616,
+            "completion_tokens": 459
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:55:04.350757+00:00",
+      "updated_at": "2026-10-27 17:36:54.213768+00:00",
+      "posted_at": "2025-09-27 05:11:05+00:00",
+      "image_count": 0,
+      "text_characters": 10,
+      "sample_id": "2f80ee10d611",
+      "trace_count": 3,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:36:38.900963+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:36:43.628755+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:36:52.580051+00:00"
+        }
+      ],
+      "searches": [],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 9448.436,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 328,
+          "usage": {
+            "total_tokens": 12168,
+            "prompt_tokens": 11617,
+            "completion_tokens": 551
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:54:56.795574+00:00",
+      "updated_at": "2026-10-27 17:36:37.251116+00:00",
+      "posted_at": "2025-09-27 05:10:00+00:00",
+      "image_count": 0,
+      "text_characters": 3,
+      "sample_id": "6491df8dc5e4",
+      "trace_count": 3,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:36:19.500351+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:36:24.944606+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:36:35.666335+00:00"
+        }
+      ],
+      "searches": [],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 11473.151,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 319,
+          "usage": {
+            "total_tokens": 12060,
+            "prompt_tokens": 11620,
+            "completion_tokens": 440
+          },
+          "whole_content_json": false
+        }
+      ]
+    },
+    {
+      "state": "unresolved",
+      "attempts": 1,
+      "last_error": "none",
+      "created_at": "2026-10-27 16:54:41.291734+00:00",
+      "updated_at": "2026-10-27 17:36:17.941243+00:00",
+      "posted_at": "2025-09-27 05:02:02+00:00",
+      "image_count": 0,
+      "text_characters": 4,
+      "sample_id": "060418eaf357",
+      "trace_count": 3,
+      "trace_kinds": {
+        "attempt_claimed": 1,
+        "hermes_request": 1,
+        "hermes_result": 1
+      },
+      "trace_shapes": [
+        {
+          "kind": "attempt_claimed",
+          "keys": [
+            "active_expert_leases_before",
+            "attempt",
+            "attempt_id",
+            "concurrency_limit",
+            "expert_id",
+            "pair_probes",
+            "queue_wait_ms",
+            "scheduler_turn",
+            "source_id"
+          ],
+          "at": "2026-10-27 17:36:01.153757+00:00"
+        },
+        {
+          "kind": "hermes_request",
+          "keys": [
+            "attempt_id",
+            "configuration_version",
+            "media_objects",
+            "message_id",
+            "model",
+            "raw_text",
+            "reply_text",
+            "worker_attempt"
+          ],
+          "at": "2026-10-27 17:36:07.725289+00:00"
+        },
+        {
+          "kind": "hermes_result",
+          "keys": [
+            "attempt_id",
+            "content",
+            "finish_reason",
+            "image_bytes",
+            "image_count",
+            "model",
+            "model_elapsed_ms",
+            "usage"
+          ],
+          "at": "2026-10-27 17:36:16.573449+00:00"
+        }
+      ],
+      "searches": [],
+      "resolutions": [],
+      "market_quote_counts": [],
+      "record_results": [],
+      "model_results": [
+        {
+          "finish_reason": "stop",
+          "model_elapsed_ms": 10880.143,
+          "image_count": 0,
+          "image_bytes": 0,
+          "content_type": "str",
+          "content_characters": 248,
+          "usage": {
+            "total_tokens": 12056,
+            "prompt_tokens": 11625,
+            "completion_tokens": 431
+          },
+          "whole_content_json": false
+        }
+      ]
+    }
+  ]
+}
