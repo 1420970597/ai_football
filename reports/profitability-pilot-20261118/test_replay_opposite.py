@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import unittest
 
-from replay_opposite import observed_returns, summarize, summarize_calibration
+from replay_opposite import observed_returns, summarize, summarize_calibration, summarize_direction_stress
 
 
 def team_total():
@@ -28,6 +28,22 @@ def team_total():
 
 
 class OppositeReplayTests(unittest.TestCase):
+    def test_reverse_stress_removes_largest_market_and_first_fixture_repeats(self):
+        row = team_total()
+        start = row['created_at']
+        row['evidence'] = json.dumps(row['evidence'])
+        loss = dict(row, created_at=start + timedelta(minutes=1), outcome='half_loss', unit_net=Decimal('-0.50'))
+        other = dict(row, fixture_id='leyu:2', market_kind='total')
+        result = summarize_direction_stress([loss, other, row], start - timedelta(days=1), start,
+                                            start + timedelta(days=1))['cohorts']['later']
+        self.assertEqual(3, result['comparable_quotes'])
+        self.assertEqual(2, result['fixtures'])
+        self.assertEqual(Decimal('-0.61'), result['reverse_stressed_units'])
+        self.assertEqual(Decimal('-1.04'), result['reverse_first_quote_per_fixture_units'])
+        self.assertEqual('team_total', result['reverse_highest_contribution_market'])
+        self.assertEqual(Decimal('-0.52'), result['reverse_without_highest_contribution_market_units'])
+        self.assertEqual([3, 0], [window['quotes'] for window in result['complete_12h_quote_time_windows']])
+
     def test_requires_native_team_and_market_identity(self):
         row = team_total()
         self.assertEqual(observed_returns(row), (

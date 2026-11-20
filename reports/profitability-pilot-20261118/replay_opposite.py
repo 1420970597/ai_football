@@ -3,7 +3,7 @@
 import argparse
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 
@@ -102,6 +102,50 @@ def summarize(rows, split, *, by_contract=False):
             for (window, key), values in sorted(groups.items())]
 
 
+def summarize_direction_stress(rows, begin, split, end):
+    """Compare quoted direction returns and concentration on a fixed calendar."""
+    step = timedelta(hours=12)
+    penalty = Decimal('0.02')
+    periods = {'earlier': (begin, split), 'later': (split, end)}
+    entries = defaultdict(list)
+    for record in rows:
+        row = dict(record, evidence=json.loads(record['evidence'] or '{}'))
+        _, returns = observed_returns(row)
+        if returns is not None:
+            cohort = 'earlier' if row['created_at'] < split else 'later'
+            entries[cohort].append((row, returns[0] - penalty, returns[1] - penalty))
+
+    reports = {}
+    for cohort, (start, stop) in periods.items():
+        sample = sorted(entries[cohort], key=lambda entry: entry[0]['created_at'])
+        first = {}
+        markets = defaultdict(Decimal)
+        windows = defaultdict(list)
+        for row, follow, reverse in sample:
+            first.setdefault(row['fixture_id'], reverse)
+            markets[row['market_kind']] += reverse
+            windows[(row['created_at'] - start) // step].append(reverse)
+        reverse_net = sum((reverse for _, _, reverse in sample), Decimal(0))
+        best_market = max(sorted(markets), key=markets.get) if markets else None
+        full_windows = [
+            {'begin': (start + index * step).isoformat(), 'quotes': len(windows[index]),
+             'reverse_units': sum(windows[index], Decimal(0))}
+            for index in range((stop - start) // step)
+        ]
+        reports[cohort] = {
+            'comparable_quotes': len(sample), 'fixtures': len(first),
+            'follow_stressed_units': sum((follow for _, follow, _ in sample), Decimal(0)),
+            'reverse_stressed_units': reverse_net,
+            'reverse_first_quote_per_fixture_units': sum(first.values(), Decimal(0)),
+            'reverse_highest_contribution_market': best_market,
+            'reverse_without_highest_contribution_market_units':
+                reverse_net - markets[best_market] if best_market else None,
+            'reverse_units_by_market': markets,
+            'complete_12h_quote_time_windows': full_windows,
+        }
+    return {'extra_cost_per_unit': penalty, 'cohorts': reports}
+
+
 def summarize_calibration(rows, split):
     groups = defaultdict(lambda: defaultdict(int))
     fixtures = defaultdict(lambda: defaultdict(lambda: defaultdict(Decimal)))
@@ -162,7 +206,7 @@ def summarize_calibration(rows, split):
     return {'groups': summaries, 'review_confidence_distribution': confidence}
 
 
-async def replay(begin, split, end):
+async def replay(begin, split, end, *, stress=False):
     connection = await asyncpg.connect(database_url(), timeout=5, command_timeout=12)
     try:
         async with connection.transaction(isolation='repeatable_read', readonly=True):
@@ -188,7 +232,8 @@ async def replay(begin, split, end):
                 """, begin, end)
             return {'begin': begin, 'split': split, 'end': end, 'observed_at': now,
                     'groups': summarize(rows, split), 'contract_groups': summarize(rows, split, by_contract=True),
-                    'calibration': summarize_calibration(rows, split)}
+                    'calibration': summarize_calibration(rows, split)} | (
+                {'direction_stress': summarize_direction_stress(rows, begin, split, end)} if stress else {})
     finally:
         await connection.close()
 
@@ -197,8 +242,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for label in ('begin', 'split', 'end'):
         parser.add_argument(label, type=datetime.fromisoformat)
+    parser.add_argument('--stress', action='store_true')
     args = parser.parse_args()
     dates = args.begin, args.split, args.end
     if any(value.utcoffset() is None for value in dates) or not args.begin < args.split < args.end:
         parser.error('Expected three increasing timestamps with timezones')
-    print(json.dumps(asyncio.run(replay(*(value.astimezone(timezone.utc) for value in dates))), default=str))
+    print(json.dumps(asyncio.run(replay(*(value.astimezone(timezone.utc) for value in dates), stress=args.stress)),
+                     default=str))
