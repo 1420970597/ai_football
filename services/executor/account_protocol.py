@@ -25,6 +25,7 @@ ORDERS_PATH = "/yewu13/v1/betOrder/client/getOrderListV4PB"
 LATEST_MARKET_PATH = "/yewu13/v1/betOrder/client/queryLatestMarketInfo"
 LIMITS_PATH = "/yewu13/v1/betOrder/client/queryMarketMaxMinBetMoney"
 BET_PATH = "/yewu13/v1/betOrder/client/bet"
+QUOTE_VALID_SECONDS = 15
 
 log = logging.getLogger("platform.executor.account_protocol")
 REQUEST_OPERATIONS = {
@@ -396,6 +397,7 @@ class AccountProtocolClient:
             latest = await self._request(LATEST_MARKET_PATH, latest_query)
         except BaseException:
             raise
+        expires = time.monotonic() + QUOTE_VALID_SECONDS
         checked_at = datetime.now(timezone.utc).isoformat()
         markets = [row for row in _rows(latest) if str(row.get("id")) == selection.market_instance_id
                    and str(row.get("matchInfoId")) == selection.match_id and str(row.get("playId")) == selection.play_id]
@@ -459,8 +461,10 @@ class AccountProtocolClient:
                    "preBet": "0", "seriesOrders": [{"seriesType": "1", "seriesSum": 1, "fullBet": 0, "orderDetailList": [detail]}]}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256((self.scope.user_id + ":" + self.scope.account_id + ":" + str(self.scope.revision) + ":" + checked_at + ":" + encoded).encode()).hexdigest()
-        expires = time.monotonic() + 15
-        self._issued_prepared = {key: value for key, value in self._issued_prepared.items() if value[1] > time.monotonic()}
+        now = time.monotonic()
+        if expires <= now:
+            raise LeyuError("account_quote_expired")
+        self._issued_prepared = {key: value for key, value in self._issued_prepared.items() if value[1] > now}
         if len(self._issued_prepared) >= 128:
             raise LeyuError("prepared_order_budget_exceeded")
         self._issued_prepared[digest] = encoded, expires, checked_at

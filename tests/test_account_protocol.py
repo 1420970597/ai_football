@@ -254,6 +254,24 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
         self.assertEqual(("2.35", "235000"), (detail["oddFinally"], detail["odds"]))
 
+    async def test_quote_validity_includes_limits_and_authorization_time(self):
+        self.client.live_orders_enabled = True
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[100, 111, 115]))
+        with patch('services.executor.account_protocol.time', clock):
+            prepared = await self.prepare()
+            self.assertEqual(115, prepared.expires_monotonic)
+            with self.assertRaisesRegex(LeyuError, 'execution_permit_invalid_or_expired'):
+                await self.client.submit_once(prepared, self.permit(prepared))
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
+    async def test_quote_expired_during_preflight_is_never_issued(self):
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[100, 115]))
+        with patch('services.executor.account_protocol.time', clock):
+            with self.assertRaisesRegex(LeyuError, 'account_quote_expired'):
+                await self.prepare()
+        self.assertEqual({}, self.client._issued_prepared)
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
     async def test_live_option_id_rotation_uses_current_option_for_limits_and_order(self):
         self.responses[LATEST_MARKET_PATH] = latest()
         self.responses[LATEST_MARKET_PATH][0]["marketOddsList"][0]["id"] = "option-current"
