@@ -16,7 +16,8 @@ from typing import Annotated, Literal
 import asyncpg
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
-from execution_scope import NATIVE_SELECTION_CODES, native_match_type, native_outcome_codes
+from execution_scope import (ACCEPT_BETTER_ODDS, ACCEPT_CURRENT_ODDS, NATIVE_SELECTION_CODES,
+                             native_match_type, native_outcome_codes)
 
 from .. import account_jobs as jobs, database, orders, order_evidence, order_price
 from ..auth import _limit, audit, require_user, verify_sensitive_session
@@ -492,6 +493,8 @@ async def claim_work(request: Request, live_capable: bool = False, settled_reche
                     attempt = uuid.uuid4()
                     await conn.execute("UPDATE v2_bet_orders SET attempt_id=$2,lease_until=now()+interval '45 seconds',updated_at=now() WHERE id=$1", order["id"], attempt)
                     work = {"kind": "order", "order_id": str(order["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "selection": order["quote_snapshot"], "stake": str(order["stake"])}
+                    if order_price.mode_for_order(settings, order) == 'enforce':
+                        work['require_better_odds'] = True
                     if observe_market_group and not order['manual']:
                         options = await market_companions(conn, order)
                         if options:
@@ -753,6 +756,8 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
             checked_at=body.quote_checked_at.isoformat()
             if hashlib.sha256((prefix+checked_at+":"+body.payload_json).encode()).hexdigest()!=body.prepared_digest:
                 raise HTTPException(422,'订单准备摘要不匹配')
+            price_mode = order_price.mode_for_order(request.app.state.settings, order)
+            odds_policy = ACCEPT_BETTER_ODDS if price_mode == 'enforce' else ACCEPT_CURRENT_ODDS
             try:
                 payload=json.loads(body.payload_json)
                 series=payload['seriesOrders']
@@ -760,7 +765,7 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 detail=details[0]
                 snapshot=order['quote_snapshot']
                 credentials=jobs.decode_document(request.app.state.settings.encryption_key,account['encrypted_credentials'])
-                valid=(len(series)==1 and len(details)==1 and type(payload['acceptOdds']) is int and payload['acceptOdds']==2 and str(payload['preBet'])=='0'
+                valid=(len(series)==1 and len(details)==1 and type(payload['acceptOdds']) is int and payload['acceptOdds']==odds_policy and str(payload['preBet'])=='0'
                     and payload['currencyCode']=='CNY' and str(payload['deviceType'])=='3' and payload['openMiltSingle']==0
                     and str(series[0]['seriesType'])=='1' and series[0]['seriesSum']==1 and series[0]['fullBet']==0
                     and detail['marketTypeFinally']=='EU' and type(detail['matchType']) is int
@@ -789,7 +794,6 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 evidence = order_evidence.native_market_prices(snapshot, body.market_prices, execution_price)
                 if evidence is not None:
                     snapshot['native_market_prices'] = evidence
-            price_mode = order_price.mode_for_order(request.app.state.settings, order)
             if price_mode:
                 price_decision = await order_price.decision(
                     request.app.state.settings, signal, execution_price, body.quote_checked_at, datetime.now(timezone.utc),
@@ -798,6 +802,8 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 if (datetime.now(timezone.utc) - body.quote_checked_at).total_seconds() > 15:
                     price_decision = price_decision | {'status': 'quote_expired'}
                 snapshot['automatic_price_decision'] = price_decision | {'mode': price_mode}
+            if odds_policy == ACCEPT_BETTER_ODDS:
+                snapshot['odds_change_policy'] = 'accept_only_better_odds'
             order_for_evidence['quote_snapshot'] = snapshot
             await conn.execute("UPDATE v2_bet_orders SET price=$2,quote_snapshot=$3::jsonb WHERE id=$1",order_id,execution_price,snapshot)
             await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'preflight_validated')

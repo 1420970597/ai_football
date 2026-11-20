@@ -176,11 +176,14 @@ class Executor:
             manager = self.session_factory(scope, work["config"], RenewalHooks(None, None, None))
             async with self.client_factory(scope, manager.venue_session(), live_orders_enabled=True) as client:
                 selected = NativeSelection.from_snapshot(work["selection"])
-                group = {"companion_options": work["companion_options"]} if work.get("companion_options") else {}
-                prepared = await client.preflight(selected, Decimal(work["stake"]), device_imei=work["config"]["leyu_app_uuid"], **group)
+                companion_options = work.get("companion_options")
+                preflight_options = {"companion_options": companion_options} if companion_options else {}
+                if work.get("require_better_odds") is True:
+                    preflight_options["require_better_odds"] = True
+                prepared = await client.preflight(selected, Decimal(work["stake"]), device_imei=work["config"]["leyu_app_uuid"], **preflight_options)
                 authorization = {"attempt_id": work["attempt_id"], "prepared_digest": prepared.digest,
                                  "payload_json": prepared.payload_json, "quote_checked_at": prepared.checked_at}
-                if group and prepared.market_prices:
+                if companion_options and prepared.market_prices:
                     authorization["market_prices"] = dict(prepared.market_prices)
                 permit = await self.rpc("POST", f"/orders/{work['order_id']}/authorize", json=authorization)
                 if permit.get("decision") == "skip":

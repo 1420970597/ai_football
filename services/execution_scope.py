@@ -4,6 +4,8 @@ Basketball identifiers come from the authorized native market captures E336,
 E362 and E2781. Periods must be explicit: a quarter is never a full-time bet.
 """
 
+ACCEPT_BETTER_ODDS = 1
+ACCEPT_CURRENT_ODDS = 2
 SPORT_IDS = {"football": "1", "basketball": "2"}
 NATIVE_SELECTION_CODES = {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}
 NATIVE_OUTCOMES = {"winner": frozenset({"1", "2", "X"}), "handicap": frozenset({"1", "2"}),

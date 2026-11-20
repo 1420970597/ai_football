@@ -1008,6 +1008,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 order = await self.reserve(signal)
                 work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
                 self.assertEqual(str(order['id']), work['order_id'])
+                self.assertIs(work['require_better_odds'], True)
                 self.native_requests.clear()
                 with patch.object(order_price, 'reference_price', AsyncMock(side_effect=[response])) as reference:
                     await self.executor().order_job(work)
@@ -1020,7 +1021,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 row = await self.pool.fetchrow('SELECT state,reserved_stake FROM v2_bet_orders WHERE id=$1', order['id'])
                 if status == 'pass':
                     self.assertEqual(('accepted', Decimal('2')), tuple(row))
-                    self.assertEqual(1, sum(request.url.path == BET_PATH for request in self.native_requests))
+                    submission, = [request for request in self.native_requests if request.url.path == BET_PATH]
+                    self.assertEqual(1, json.loads(submission.content)['acceptOdds'])
                 else:
                     self.assertEqual(('cancelled', Decimal('0')), tuple(row))
                     self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
@@ -1031,7 +1033,23 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 stages = {row['evidence']['stage']: row['evidence'] for row in evidence}
                 self.assertEqual(status, stages['preflight_validated']['automatic_price_decision']['status'])
                 self.assertEqual('enforce', stages['preflight_validated']['automatic_price_decision']['mode'])
+                self.assertEqual('accept_only_better_odds', stages['preflight_validated']['odds_change_policy'])
                 self.assertEqual(status == 'pass', 'submission_authorized' in stages)
+
+    async def test_enforced_price_refuses_legacy_odds_change_policy(self):
+        account = await self.healthy()
+        self.settings.automatic_price_account = account['id']
+        self.settings.automatic_price_socket = '/run/test-pricing.sock'
+        signal, expert, _, _ = await self.signal()
+        await self.enable([expert])
+        order = await self.reserve(signal)
+        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+        self.assertIs(work.pop('require_better_odds'), True)
+        with patch.object(order_price, 'reference_price', AsyncMock()) as pricing:
+            await self.executor().order_job(work)
+        pricing.assert_not_awaited()
+        self.assertNotIn(BET_PATH, [request.url.path for request in self.native_requests])
+        self.assertEqual('cancelled', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
 
     async def test_automatic_price_observation_preserves_existing_send_decision(self):
         account = await self.healthy()
@@ -1051,7 +1069,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual({'mode': 'observe', 'status': 'below_minimum_odds', 'minimum_odds': '2.05'},
                          evidence['automatic_price_decision'])
-        self.assertEqual(1, sum(request.url.path == BET_PATH for request in self.native_requests))
+        submission, = [request for request in self.native_requests if request.url.path == BET_PATH]
+        self.assertEqual(2, json.loads(submission.content)['acceptOdds'])
         self.assertEqual('accepted', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
 
         now = datetime.now(timezone.utc)

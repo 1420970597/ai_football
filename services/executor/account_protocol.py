@@ -18,7 +18,8 @@ from uuid import UUID
 import httpx
 
 from services.collector.leyu_protocol import AUTH_CODES, AuthExpired, LeyuError, MAX_RESPONSE_BYTES, ODDS_SCALE, SUCCESS_CODES, decode_envelope, parse_line, timestamp
-from services.execution_scope import native_execution_market_supported, native_match_type, native_outcome_codes
+from services.execution_scope import (ACCEPT_BETTER_ODDS, ACCEPT_CURRENT_ODDS, native_execution_market_supported,
+                                      native_match_type, native_outcome_codes)
 from .account_session import AccountScope, VenueSession
 
 AMOUNT_PATH = "/yewu12/api/user/amount"
@@ -446,7 +447,8 @@ class AccountProtocolClient:
                 "overround": str(Decimal(margin.numerator) / Decimal(margin.denominator))}
 
     async def preflight(self, selection: NativeSelection, stake: Decimal, *, device_imei: str = "",
-                        companion_options: Mapping[str, str] | None = None) -> PreparedBet:
+                        companion_options: Mapping[str, str] | None = None,
+                        require_better_odds: bool = False) -> PreparedBet:
         match_type = native_match_type(selection.phase)
         if match_type is None:
             raise LeyuError("unsupported_execution_phase")
@@ -540,7 +542,8 @@ class AccountProtocolClient:
                   "marketTypeFinally": "EU", "matchType": match_type, "sportId": selection.sport_id, "scoreBenchmark": selection.score_benchmark}
         if market.get("placeNum") is not None:
             detail["placeNum"] = market["placeNum"]
-        payload = {"acceptOdds": 2, "currencyCode": "CNY", "deviceImei": device_imei, "deviceType": "3", "openMiltSingle": 0,
+        odds_policy = ACCEPT_BETTER_ODDS if require_better_odds else ACCEPT_CURRENT_ODDS
+        payload = {"acceptOdds": odds_policy, "currencyCode": "CNY", "deviceImei": device_imei, "deviceType": "3", "openMiltSingle": 0,
                    "preBet": "0", "seriesOrders": [{"seriesType": "1", "seriesSum": 1, "fullBet": 0, "orderDetailList": [detail]}]}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256((self.scope.user_id + ":" + self.scope.account_id + ":" + str(self.scope.revision) + ":" + checked_at + ":" + encoded).encode()).hexdigest()
