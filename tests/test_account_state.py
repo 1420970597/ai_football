@@ -1030,7 +1030,36 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 )
                 stages = {row['evidence']['stage']: row['evidence'] for row in evidence}
                 self.assertEqual(status, stages['preflight_validated']['automatic_price_decision']['status'])
+                self.assertEqual('enforce', stages['preflight_validated']['automatic_price_decision']['mode'])
                 self.assertEqual(status == 'pass', 'submission_authorized' in stages)
+
+    async def test_automatic_price_observation_preserves_existing_send_decision(self):
+        account = await self.healthy()
+        self.settings.automatic_price_account = account['id']
+        self.settings.automatic_price_socket = '/run/test-pricing.sock'
+        self.settings.automatic_price_mode = 'observe'
+        signal, expert, _, _ = await self.signal()
+        await self.enable([expert])
+        order = await self.reserve(signal)
+        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+        verdict = {'status': 'below_minimum_odds', 'pricing': {'minimum_odds': '2.05'}}
+        with patch.object(order_price, 'reference_price', AsyncMock(return_value=verdict)):
+            await self.executor().order_job(work)
+        evidence = await self.pool.fetchval(
+            "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence->>'stage'='preflight_validated'",
+            order['id'],
+        )
+        self.assertEqual({'mode': 'observe', 'status': 'below_minimum_odds', 'minimum_odds': '2.05'},
+                         evidence['automatic_price_decision'])
+        self.assertEqual(1, sum(request.url.path == BET_PATH for request in self.native_requests))
+        self.assertEqual('accepted', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
+
+        now = datetime.now(timezone.utc)
+        with patch.object(order_price, 'reference_price', AsyncMock()) as pricing:
+            self.assertEqual({'status': 'observation_skipped_quote_deadline'},
+                             await order_price.decision(self.settings, {}, Decimal('1.95'),
+                                                        now - timedelta(seconds=14.75), now, mode='observe'))
+            pricing.assert_not_awaited()
 
     async def test_live_total_requires_known_matching_scores_through_authorization(self):
         await self.healthy()

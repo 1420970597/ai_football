@@ -789,18 +789,19 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 evidence = order_evidence.native_market_prices(snapshot, body.market_prices, execution_price)
                 if evidence is not None:
                     snapshot['native_market_prices'] = evidence
-            if order_price.applies(request.app.state.settings, order):
+            price_mode = order_price.mode_for_order(request.app.state.settings, order)
+            if price_mode:
                 price_decision = await order_price.decision(
                     request.app.state.settings, signal, execution_price, body.quote_checked_at, datetime.now(timezone.utc),
+                    mode=price_mode,
                 )
                 if (datetime.now(timezone.utc) - body.quote_checked_at).total_seconds() > 15:
                     price_decision = price_decision | {'status': 'quote_expired'}
-                snapshot['automatic_price_decision'] = price_decision
+                snapshot['automatic_price_decision'] = price_decision | {'mode': price_mode}
             order_for_evidence['quote_snapshot'] = snapshot
             await conn.execute("UPDATE v2_bet_orders SET price=$2,quote_snapshot=$3::jsonb WHERE id=$1",order_id,execution_price,snapshot)
             await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'preflight_validated')
-            price_decision = snapshot.get('automatic_price_decision')
-            if price_decision and price_decision['status'] != 'pass':
+            if price_mode == 'enforce' and price_decision['status'] != 'pass':
                 await conn.execute(
                     "UPDATE v2_bet_orders SET state='cancelled',reserved_stake=0,lease_until=NULL,"
                     "result_payload=$2,updated_at=now() WHERE id=$1",

@@ -58,6 +58,7 @@ class Settings:
     hermes_connection_token: str = ""
     automatic_price_account: UUID | None = None
     automatic_price_socket: str = "/run/reference-price/pricing.sock"
+    automatic_price_mode: str = "enforce"
 
 
 def _secret_bytes(name: str, expected: int) -> bytes:
@@ -78,6 +79,9 @@ def load_settings(*, role: str = "api") -> Settings:
     if role not in {"api", "worker", "mcp"}:
         raise ValueError("unknown service configuration role")
     price_account = _clean(os.environ.get("AUTOMATIC_PRICE_ACCOUNT", "")) if role == "api" else ""
+    price_mode = _clean(os.environ.get("AUTOMATIC_PRICE_MODE", "enforce")) if role == "api" else "enforce"
+    if price_mode not in {"observe", "enforce"}:
+        raise ValueError("AUTOMATIC_PRICE_MODE must be observe or enforce")
     return Settings(
         database_url=database_url(),
         session_secret=_secret_bytes("APP_SESSION_SECRET", 32) if role == "api" else b"",
@@ -100,4 +104,5 @@ def load_settings(*, role: str = "api") -> Settings:
         hermes_connection_token=_clean(os.environ.get("HERMES_CONNECTION_TOKEN", "")) if role == "api" else "",
         automatic_price_account=UUID(price_account) if price_account else None,
         automatic_price_socket=_clean(os.environ.get("AUTOMATIC_PRICE_SOCKET", "/run/reference-price/pricing.sock")),
+        automatic_price_mode=price_mode,
     )

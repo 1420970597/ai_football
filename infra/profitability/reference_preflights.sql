@@ -9,6 +9,7 @@ WITH ledger AS (
            q.selection, q.captured_at, q.source_updated_at, q.price::text AS price,
            q.evidence->>'provider_quote_checked_at' AS provider_quote_checked_at,
            q.evidence->'native_market_prices' AS native_market_prices,
+           q.evidence->'automatic_price_decision' AS automatic_price_decision,
            q.evidence->>'phase' AS phase, q.evidence->>'score_basis' AS score_basis,
            q.evidence->'score_baseline' AS score_baseline,
            o.provider_order_no IS NOT NULL AS native_receipt_present, o.manual,

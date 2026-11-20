@@ -11,9 +11,11 @@ from .score_rules import settlement_rule
 from .team_totals import team_total_terms
 
 
-def applies(settings, order):
+def mode_for_order(settings, order):
     account = getattr(settings, "automatic_price_account", None)
-    return account is not None and order["account_id"] == account and not order["manual"]
+    if account is not None and order["account_id"] == account and not order["manual"]:
+        return getattr(settings, "automatic_price_mode", "enforce")
+    return None
 
 
 def offer_document(signal, price, checked_at, cutoff):
@@ -43,12 +45,17 @@ async def reference_price(socket, offer):
         return response.json()
 
 
-async def decision(settings, signal, price, checked_at, cutoff):
-    if not timedelta(0) <= cutoff - checked_at <= timedelta(seconds=15):
+async def decision(settings, signal, price, checked_at, cutoff, *, mode="enforce"):
+    budget = 0.2 if mode == "observe" else 2
+    age = cutoff - checked_at
+    if not timedelta(0) <= age <= timedelta(seconds=15):
         return {"status": "quote_expired"}
+    if mode == "observe" and age > timedelta(seconds=14.5):
+        return {"status": "observation_skipped_quote_deadline"}
     offer = offer_document(signal, price, checked_at, cutoff)
     try:
-        result = await reference_price(settings.automatic_price_socket, offer)
+        async with asyncio.timeout(budget):
+            result = await reference_price(settings.automatic_price_socket, offer)
         status = result["status"]
         if status == "ineligible":
             reasons = result.get("reasons", [])
