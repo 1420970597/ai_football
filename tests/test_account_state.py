@@ -1035,6 +1035,9 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual('enforce', stages['preflight_validated']['automatic_price_decision']['mode'])
                 self.assertEqual('accept_only_better_odds', stages['preflight_validated']['odds_change_policy'])
                 self.assertEqual(status == 'pass', 'submission_authorized' in stages)
+                if status == 'reference_unavailable':
+                    self.assertEqual(['reference_transport_error'],
+                                     stages['preflight_validated']['automatic_price_decision']['reasons'])
 
     async def test_enforced_price_refuses_legacy_odds_change_policy(self):
         account = await self.healthy()

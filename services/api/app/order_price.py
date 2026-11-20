@@ -38,7 +38,8 @@ def offer_document(signal, price, checked_at, cutoff):
 
 
 async def reference_price(socket, offer):
-    transport = httpx.AsyncHTTPTransport(uds=socket)
+    # This endpoint is fixed to cleartext HTTP over a permissioned local socket.
+    transport = httpx.AsyncHTTPTransport(uds=socket, verify=False)
     async with asyncio.timeout(2), httpx.AsyncClient(transport=transport, trust_env=False) as client:
         response = await client.post("http://reference-price/evaluate", json=offer)
         response.raise_for_status()
@@ -73,7 +74,11 @@ async def decision(settings, signal, price, checked_at, cutoff, *, mode="enforce
         floor = Decimal(str(raw_floor))
         if not floor.is_finite() or floor <= 1:
             return {"status": "reference_ineligible"}
-    except (httpx.HTTPError, TimeoutError, ValueError, KeyError, TypeError, InvalidOperation):
-        return {"status": "reference_unavailable"}
+    except (TimeoutError, httpx.TimeoutException):
+        return {"status": "reference_unavailable", "reasons": ["reference_timeout"]}
+    except httpx.TransportError:
+        return {"status": "reference_unavailable", "reasons": ["reference_transport_error"]}
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, InvalidOperation):
+        return {"status": "reference_unavailable", "reasons": ["reference_invalid_response"]}
     status = "pass" if status == "price_eligible" and price >= floor else "below_minimum_odds"
     return {"status": status, "minimum_odds": str(floor)}
