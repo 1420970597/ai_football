@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from hashlib import sha256
 import json
 import os
 import sys
@@ -140,7 +141,7 @@ async def read_slot(anchor, *, projection_only=False):
             if not binding:
                 return frame
             account = await conn.fetchrow("""
-                SELECT a.id,a.user_id,a.config_revision,a.encrypted_session,b.stake_per_order
+                SELECT a.id,a.user_id,a.config_revision,a.encrypted_session,a.provider_identity_hash,b.stake_per_order
                 FROM v2_leyu_accounts a JOIN v2_user_bet_settings b ON b.user_id=a.user_id
                 WHERE a.id=$1 AND a.health_state='healthy' AND a.renewal_state='ready'
                   AND a.encrypted_session IS NOT NULL AND a.last_verified_at>=now()-interval '120 seconds'
@@ -156,8 +157,12 @@ async def read_slot(anchor, *, projection_only=False):
                 return frame
             session = decode_document(settings.encryption_key, account['encrypted_session'])
             base = session['leyu_api_base']
+            account_binding = sha256(
+                f"paper-account-v1\0{account['id']}\0{account['provider_identity_hash']}".encode(),
+            ).hexdigest()
             return frame | {'transport': {'scope': scope(account), 'base_url': base,
                                           'request_id': session['leyu_request_id'],
+                                          'paper_account_binding': account_binding,
                                           'origin': session.get('leyu_origin') or base, 'amount': str(amount)}}
     finally:
         await conn.close()

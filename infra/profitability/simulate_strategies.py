@@ -43,6 +43,7 @@ class Receipt:
     unit_return: Decimal | None
     unit_fees: Decimal | None
     currency: str | None
+    slippage_cost: Decimal = STRESS_COST
 
     @classmethod
     def parse(cls, row, placed_at):
@@ -64,7 +65,7 @@ class Receipt:
     @property
     def stressed_return(self):
         # Unknown fees remain a separate coverage failure. This value is diagnostic in that case.
-        return self.unit_return - (self.unit_fees or ZERO) - STRESS_COST
+        return self.unit_return - (self.unit_fees or ZERO) - self.slippage_cost
 
 
 @dataclass(frozen=True)

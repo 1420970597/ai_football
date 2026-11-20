@@ -64,6 +64,8 @@ async def capture(frame, client_factory=PaperQuoteClient):
                     async with asyncio.timeout(8), client_factory(scope, session, live_orders_enabled=False) as client:
                         row.update(await inspect_offer(client, candidate, Decimal(transport['amount']),
                                                        frame['observed_at']))
+                        if row['status'] == 'native_preflight_available' and transport.get('paper_account_binding'):
+                            row['paper_account_binding'] = transport['paper_account_binding']
                 except (LeyuError, TimeoutError) as exc:
                     row.update(status='native_preflight_unavailable',
                                reason=getattr(exc, 'category', 'paper_preflight_timeout'))

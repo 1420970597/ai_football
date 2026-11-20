@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from hashlib import sha256
 import json
 import sys
 from uuid import UUID
@@ -29,6 +30,10 @@ LEFT JOIN LATERAL (
 WHERE s.id=ANY($1::uuid[])
 """
 SLIPPAGE_PROFIT_HAIRCUT = Decimal('0.02')
+
+
+def frames_digest(frames):
+    return sha256(json.dumps(frames, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def settle_paper(offer, ledger):
@@ -64,14 +69,15 @@ def settle_paper(offer, ledger):
     if paper.unit_net is None or stressed.unit_net is None or paper.outcome != original.outcome:
         return {'status': 'paper_settlement_unavailable'}
     return {'status': 'paper_quote_diagnostic', 'result_version': ledger['version'],
-            'result_received_at': ledger['received_at'].isoformat(), 'outcome': paper.outcome,
+            'result_received_at': ledger['received_at'].isoformat(),
+            'result_computed_at': ledger['computed_at'].isoformat(), 'outcome': paper.outcome,
             'quoted_unit_return': str(paper.unit_net), 'stressed_unit_return_before_unknown_costs': str(stressed.unit_net),
             'validation_eligible': False, 'missing_evidence': ['independent_timed_depth', 'account_cost_and_currency']}
 
 
 async def read_results(offers, cutoff):
-    if cutoff.utcoffset() != timedelta(0) or len(offers) > 2048:
-        raise ValueError('bounded UTC cutoff required')
+    if cutoff.utcoffset() != timedelta(0):
+        raise ValueError('UTC cutoff required')
     ids = [UUID(offer['signal_id']) for offer in offers]
     if len(ids) != len(set(ids)):
         raise ValueError('paper signals must appear once')
@@ -81,7 +87,11 @@ async def read_results(offers, cutoff):
         async with conn.transaction(isolation='repeatable_read', readonly=True):
             if cutoff > await conn.fetchval('SELECT transaction_timestamp()'):
                 raise ValueError('cannot assess future outcomes')
-            return {str(row['id']): row for row in await conn.fetch(RESULTS, ids, cutoff)}
+            results = {}
+            for start in range(0, len(ids), 512):
+                rows = await conn.fetch(RESULTS, ids[start:start + 512], cutoff)
+                results.update((str(row['id']), row) for row in rows)
+            return results
     finally:
         await conn.close()
 
@@ -106,7 +116,8 @@ async def score(frames, cutoff):
         settle_paper(offer, ledger.get(offer['signal_id']))
         for offer in offers
     ]
-    return {'cutoff': cutoff.isoformat(), 'slots': len(slots), 'discovery_statuses': dict(statuses),
+    return {'cutoff': cutoff.isoformat(), 'slots': len(slots), 'frames_sha256': frames_digest(frames),
+            'discovery_statuses': dict(statuses),
             'paper_settlements': settlements}
 
 

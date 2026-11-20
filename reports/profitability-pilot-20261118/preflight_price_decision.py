@@ -178,7 +178,9 @@ def evaluate(row, approvals, max_age_seconds):
         return result | {'status': 'ineligible', 'reasons': ['reference_validation_failed'],
                          'detail': str(error)}
     return result | {'status': 'price_eligible' if decision['passes_price_test'] else 'below_minimum_odds',
-                     'approval_at': approval['approved_at'], 'pricing': decision}
+                     'approval_at': approval['approved_at'], 'pricing': decision,
+                     'account_cost_approval': {'cost_per_unit': approval['cost_per_unit'],
+                                               'schedule': approval.get('cost_schedule')}}
 
 
 def compare_with_receipts(rows):
