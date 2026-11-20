@@ -1,0 +1,5 @@
+# Apply after the active API image overlays to keep independent price evidence in observation mode.
+services:
+  api:
+    environment:
+      AUTOMATIC_PRICE_MODE: observe

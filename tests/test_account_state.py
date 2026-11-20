@@ -1059,22 +1059,33 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.settings.automatic_price_account = account['id']
         self.settings.automatic_price_socket = '/run/test-pricing.sock'
         self.settings.automatic_price_mode = 'observe'
-        signal, expert, _, _ = await self.signal()
-        await self.enable([expert])
-        order = await self.reserve(signal)
-        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
-        verdict = {'status': 'below_minimum_odds', 'pricing': {'minimum_odds': '2.05'}}
-        with patch.object(order_price, 'reference_price', AsyncMock(return_value=verdict)):
-            await self.executor().order_job(work)
-        evidence = await self.pool.fetchval(
-            "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence->>'stage'='preflight_validated'",
-            order['id'],
+        scenarios = (
+            ({'status': 'below_minimum_odds', 'pricing': {'minimum_odds': '2.05'}},
+             {'status': 'below_minimum_odds', 'minimum_odds': '2.05'}),
+            ({'status': 'ineligible', 'reasons': ['reference_contract_missing']},
+             {'status': 'reference_ineligible', 'reasons': ['reference_contract_missing']}),
+            (httpx.ConnectError('socket down'),
+             {'status': 'reference_unavailable', 'reasons': ['reference_transport_error']}),
         )
-        self.assertEqual({'mode': 'observe', 'status': 'below_minimum_odds', 'minimum_odds': '2.05'},
-                         evidence['automatic_price_decision'])
-        submission, = [request for request in self.native_requests if request.url.path == BET_PATH]
-        self.assertEqual(2, json.loads(submission.content)['acceptOdds'])
-        self.assertEqual('accepted', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
+        signals = [await self.signal() for _ in scenarios]
+        await self.enable([expert for _, expert, _, _ in signals], daily='20', exposure='20')
+        for (signal, _, _, _), (response, decision) in zip(signals, scenarios, strict=True):
+            with self.subTest(status=decision['status']):
+                order = await self.reserve(signal)
+                work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+                self.assertEqual(str(order['id']), work['order_id'])
+                self.assertNotIn('require_better_odds', work)
+                self.native_requests.clear()
+                with patch.object(order_price, 'reference_price', AsyncMock(side_effect=[response])):
+                    await self.executor().order_job(work)
+                evidence = await self.pool.fetchval(
+                    "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence->>'stage'='preflight_validated'",
+                    order['id'],
+                )
+                self.assertEqual({'mode': 'observe'} | decision, evidence['automatic_price_decision'])
+                submission, = [request for request in self.native_requests if request.url.path == BET_PATH]
+                self.assertEqual(2, json.loads(submission.content)['acceptOdds'])
+                self.assertEqual('accepted', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
 
         now = datetime.now(timezone.utc)
         with patch.object(order_price, 'reference_price', AsyncMock()) as pricing:
