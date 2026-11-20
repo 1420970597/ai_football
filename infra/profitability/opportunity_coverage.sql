@@ -19,7 +19,7 @@ WITH bounds AS (
     CROSS JOIN bounds b
     WHERE s.created_at >= b.begin_at AND s.created_at < b.observed_at
 ), automatic_orders AS MATERIALIZED (
-    SELECT o.id, o.signal_id, o.state, o.provider_order_no,
+    SELECT o.id, o.signal_id, o.attempt_id, o.state, o.provider_order_no,
            coalesce(nullif(o.result_payload->>'reason',''),nullif(o.result_payload->>'category','')) AS reason
     FROM v2_bet_orders o JOIN signals s ON s.id=o.signal_id
     WHERE NOT o.manual
@@ -68,7 +68,8 @@ WITH bounds AS (
                 'account_transport_failure','account_http_rejected','session_expired','executor_live_orders_disabled',
                 'native_submission_rejected','native_submission_explicitly_rejected','account_closure_requested',
                 'account_rebound','account_unbound','protocol_configuration_reverification','device_authorization',
-                'user_disabled','policy_changed','emergency_stop','permission_invalidated') THEN o.reason
+                'user_disabled','policy_changed','emergency_stop','permission_invalidated',
+                'below_minimum_odds','reference_ineligible','reference_unavailable','quote_expired') THEN o.reason
                 WHEN o.reason IS NULL THEN 'unrecorded' ELSE 'other_recorded' END AS reason
     FROM automatic_orders o JOIN signals s ON s.id=o.signal_id
     WHERE o.state IN ('cancelled','rejected') AND (SELECT count(*) FROM binding)=1
@@ -76,6 +77,32 @@ WITH bounds AS (
     SELECT sport,phase,market_kind,period,state,reason,
            grouping(sport,phase,market_kind,period)=15 AS all_markets, count(*) AS orders
     FROM order_stops GROUP BY state, reason, GROUPING SETS ((), (sport,phase,market_kind,period))
+), price_blocker_rows AS (
+    SELECT s.sport,s.competition_id,s.competition_name,s.phase,s.fixture_id,o.id AS order_id,o.reason AS status,
+           CASE WHEN cause IN (
+                'reference_contract_missing','two_complete_sources_missing','settlement_and_cost_approval_missing',
+                'two_approved_depth_sources_missing','live_state_unverified','remaining_period_score_mismatch',
+                'cross_source_live_state_conflict','live_delay_unresolved','live_event_evidence_conflict',
+                'remaining_period_conversion_unverified','contract_terms_unverified','native_offer_check_time_unverified',
+                'invalid_approval','ambiguous_approval','reference_validation_failed','offer_cutoff_stale',
+                'reference_archive_unavailable','reference_timeout','reference_transport_error','reference_invalid_response'
+                ) THEN cause WHEN cause IS NOT NULL THEN 'other_recorded' END AS reason
+    FROM automatic_orders o JOIN signals s ON s.id=o.signal_id
+    JOIN v2_quote_evidence q ON q.reference_id=o.id AND q.evidence_kind='order_attempt'
+         AND q.evidence->>'stage'='preflight_validated'
+         AND q.evidence->>'attempt_id'=o.attempt_id::text AND q.evidence->>'signal_id'=s.id::text
+    CROSS JOIN LATERAL (SELECT q.evidence->'automatic_price_decision' AS decision) d
+    LEFT JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(d.decision->'reasons')='array'
+        THEN d.decision->'reasons' ELSE '[]'::jsonb END) causes(cause) ON true
+    WHERE o.state='cancelled' AND o.provider_order_no IS NULL
+      AND o.reason IN ('below_minimum_odds','reference_ineligible','reference_unavailable','quote_expired')
+      AND d.decision->>'mode'='enforce' AND d.decision->>'status'=o.reason
+      AND (SELECT count(*) FROM binding)=1
+), price_blockers AS (
+    SELECT sport,competition_id,min(competition_name) AS competition_name,phase,status,reason,
+           count(DISTINCT order_id) AS orders,count(DISTINCT fixture_id) AS fixtures
+    FROM price_blocker_rows
+    GROUP BY sport,competition_id,CASE WHEN competition_id IS NULL THEN competition_name END,phase,status,reason
 )
 SELECT jsonb_build_object('bounds', to_jsonb(b), 'account_bindings', (SELECT count(*) FROM binding),
            'coverage', coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY all_markets DESC,
@@ -84,6 +111,8 @@ SELECT jsonb_build_object('bounds', to_jsonb(b), 'account_bindings', (SELECT cou
                sport,competition_id,competition_name,phase,market_kind,period,score_basis)
                FROM competition_demand d), '[]'::jsonb),
            'automatic_order_stops', coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY all_markets DESC,
-               sport,phase,market_kind,period,state,reason) FROM stop_summary s), '[]'::jsonb))
+               sport,phase,market_kind,period,state,reason) FROM stop_summary s), '[]'::jsonb),
+           'automatic_price_blockers', coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY orders DESC,
+               sport,competition_id,competition_name,phase,status,reason) FROM price_blockers p), '[]'::jsonb))
 FROM bounds b;
 ROLLBACK;
