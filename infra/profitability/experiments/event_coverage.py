@@ -85,7 +85,7 @@ def preflight_evidence(row, signal_at, cutoff):
         except (TypeError, ValueError):
             continue
         if signal_at <= checked <= captured < cutoff and captured - checked <= QUOTE_AGE:
-            valid.append((checked, attempt))
+            valid.append((checked, captured, attempt))
     return sorted(valid, key=lambda value: value[0])
 
 
@@ -151,20 +151,20 @@ def analyze(document, frames_path, manifest, costs_path, start, end):
         counts['with_verified_preflight_clock'] += 1
         if row['fixture_id'] in fixtures:
             counts['preflight_signals_with_manifest_fixture'] += 1
-        for checked, attempt in valid:
+        for _, _, attempt in valid:
             attempts['clock_valid'] += 1
             attempts['native_accepted'] += int(attempt['native_accepted'] is True)
             attempts['reference_contract_missing'] += int(attempt['reference_contract_missing'] is True)
             decision = attempt['price_decision']
             attempts['runtime_price_pass'] += int(decision == 'pass')
             attempts['runtime_price_ineligible'] += int(decision == 'reference_ineligible')
-        earliest, _ = valid[0]
-        if earliest < observed:
+        available = [(checked, attempt) for checked, captured, attempt in valid if captured < observed]
+        if available:
             counts['preflight_before_minute_observation'] += 1
             prior_status[status] += 1
-            before_minute.append(Decimal(str((observed - earliest).total_seconds())))
-        if any(checked < observed and complete_book(attempt['native_book'] or {}, row, attempt['price'])
-               for checked, attempt in valid):
+            before_minute.append(Decimal(str((observed - available[0][0]).total_seconds())))
+        if any(complete_book(attempt['native_book'] or {}, row, attempt['price'])
+               for _, attempt in available):
             counts['complete_preflight_book_before_minute'] += 1
     return {'scope': 'historical_event_coverage', 'window': {'start': start, 'end': end, 'cutoff': cutoff},
             'slots': slots, 'minute_signals': len(minute), 'event_signals': len(seen),

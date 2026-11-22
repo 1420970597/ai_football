@@ -77,6 +77,15 @@ class EventCoverageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'duplicate event identity'):
             self.evaluate()
 
+    def test_preflight_checked_before_minute_but_saved_later_is_not_visible(self):
+        attempt = self.row['preflights'][0]
+        attempt['checked_at'] = START + timedelta(seconds=4)
+        attempt['captured_at'] = START + timedelta(seconds=6)
+        result = self.evaluate()
+        self.assertEqual(result['coverage']['with_verified_preflight_clock'], 1)
+        self.assertNotIn('preflight_before_minute_observation', result['coverage'])
+        self.assertNotIn('complete_preflight_book_before_minute', result['coverage'])
+
     def test_cost_digest_is_evidence_availability_only(self):
         content = b'official source test artifact'
         digest = sha256(content).hexdigest()
