@@ -59,3 +59,17 @@ class StopLossReplayTest(unittest.TestCase):
         self.assertEqual(result["policies"][0]["evidence_status"], "insufficient_fee_currency_evidence")
         self.assertEqual(result["policies"][0]["unknown_fee_or_currency_orders"], 1)
 
+    def test_revision_is_latest_visible_receipt_once(self):
+        item = row("1", "f1", "2026-11-01T10:00:00", "-10")
+        placed = datetime.fromisoformat(item["placed_at"])
+        item["receipts"].append({
+            "net": "10", "fees": None, "stake": "10", "payout": "20", "currency": None,
+            "settled_at": (placed + timedelta(minutes=2)).isoformat(),
+            "observed_at": (placed + timedelta(minutes=2)).isoformat(),
+        })
+        result = {item["policy"]: item for item in replay({
+            "cutoff": "2026-11-04T00:00:00+00:00", "rows": [item],
+        })["policies"]}
+        self.assertEqual(result["baseline"]["settled_receipts"], 1)
+        self.assertEqual(result["baseline"]["stressed_units_before_verified_fees"], Decimal("0.98"))
+

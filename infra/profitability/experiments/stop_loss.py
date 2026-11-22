@@ -46,14 +46,12 @@ def _stressed(receipt):
 
 
 def _events(fill, cutoff):
-    events = []
-    for receipt in fill.receipts:
-        if receipt.observed_at >= cutoff or receipt.unit_return is None:
-            continue
-        value = _stressed(receipt)
-        if value is not None:
-            events.append((receipt.observed_at, value))
-    return sorted(events)
+    visible = [receipt for receipt in fill.receipts if receipt.observed_at < cutoff]
+    if not visible:
+        return None
+    receipt = max(visible, key=lambda item: item.observed_at)
+    value = _stressed(receipt)
+    return (receipt.observed_at, value) if value is not None else None
 
 
 def _peak_drawdown(balance, peak):
@@ -62,12 +60,14 @@ def _peak_drawdown(balance, peak):
 
 def _policy_allows(policy, state, fixture, placed):
     kind = policy["kind"]
+    if kind in {"drawdown", "consecutive"} and state["latched"]:
+        return False
     if kind in {"fixture", "combined"}:
         held = state["open_by_fixture"].get(fixture, [])
         if len(held) >= policy["limit"] if kind == "fixture" else len(held) >= 1:
             return False
     if kind in {"daily_loss", "combined"}:
-        if state["daily"][placed.date()] <= -policy["limit"]:
+        if placed.date() in state["daily_latched"] or state["daily"][placed.date()] <= -policy["limit"]:
             return False
     if kind == "drawdown" and state["peak"] - state["balance"] >= policy["limit"]:
         return False
@@ -82,25 +82,28 @@ def _release(state, current):
     for fixture, positions in state["open_by_fixture"].items():
         remaining = []
         for entry in positions:
-            visible = next((at for at, _ in entry["events"] if at < current), None)
-            if visible is None or visible >= current:
+            visible = _events(entry["fill"], current)
+            if visible is None or visible[0] >= current:
                 remaining.append(entry)
         positions[:] = remaining
 
 
-def _apply_events(state, events):
-    for observed, value in events:
-        if observed in state["seen_events"]:
-            continue
-        state["seen_events"].add(observed)
+def _rebuild_visible(state, current):
+    state["balance"] = ZERO
+    state["daily"] = defaultdict(lambda: ZERO)
+    state["peak"] = ZERO
+    state["consecutive_losses"] = 0
+    events = []
+    for selected in state["selected"]:
+        visible = _events(selected["fill"], current)
+        if visible is not None:
+            events.append(visible)
+    for observed, value in sorted(events):
         state["balance"] += value
         state["peak"] = max(state["peak"], state["balance"])
         state["daily"][observed.date()] += value
         state["max_drawdown"] = max(state["max_drawdown"], _peak_drawdown(state["balance"], state["peak"]))
-        if value < 0:
-            state["consecutive_losses"] += 1
-        elif value > 0:
-            state["consecutive_losses"] = 0
+        state["consecutive_losses"] = state["consecutive_losses"] + 1 if value < 0 else 0
 
 
 def replay(document, policy_specs=POLICIES):
@@ -114,11 +117,12 @@ def replay(document, policy_specs=POLICIES):
             "policy": policy,
             "open_by_fixture": defaultdict(list),
             "daily": defaultdict(lambda: ZERO),
-            "seen_events": set(),
             "balance": ZERO,
             "peak": ZERO,
             "max_drawdown": ZERO,
             "consecutive_losses": 0,
+            "latched": False,
+            "daily_latched": set(),
             "selected": [],
             "blocked": 0,
             "blocked_reasons": defaultdict(int),
@@ -126,11 +130,8 @@ def replay(document, policy_specs=POLICIES):
         }
     for fill in fills:
         for state in states.values():
+            _rebuild_visible(state, fill.placed_at)
             _release(state, fill.placed_at)
-            events = []
-            for selected in state["selected"]:
-                events.extend((at, value) for at, value in selected["events"] if at < fill.placed_at)
-            _apply_events(state, sorted(events))
             policy = state["policy"]
             if policy["kind"] == "evidence":
                 state["blocked"] += 1
@@ -139,19 +140,19 @@ def replay(document, policy_specs=POLICIES):
             if not _policy_allows(policy, state, fill.fixture, fill.placed_at):
                 state["blocked"] += 1
                 state["blocked_reasons"][policy["kind"]] += 1
+                if policy["kind"] in {"drawdown", "consecutive"}:
+                    state["latched"] = True
+                if policy["kind"] in {"daily_loss", "combined"}:
+                    state["daily_latched"].add(fill.placed_at.date())
                 continue
-            receipt_events = _events(fill, cutoff)
-            state["selected"].append({"fill": fill, "events": receipt_events})
-            state["open_by_fixture"][fill.fixture].append({"events": receipt_events})
+            state["selected"].append({"fill": fill})
+            state["open_by_fixture"][fill.fixture].append({"fill": fill})
             if any(r.unit_fees is None or r.currency is None for r in fill.receipts):
                 state["unknown_fee_currency"] += 1
     output = []
     for state in states.values():
-        final_events = []
-        for selected in state["selected"]:
-            final_events.extend(selected["events"])
-        _apply_events(state, sorted(final_events))
-        settlements = len(final_events)
+        _rebuild_visible(state, cutoff)
+        settlements = sum(_events(selected["fill"], cutoff) is not None for selected in state["selected"])
         output.append({
             "policy": state["policy"]["name"],
             "selected": len(state["selected"]),
