@@ -13,3 +13,10 @@
 - Pi（DeepSeek V4.1 Flash）提交八项独立方案，Codex 提交六项。T3 子任务状态为 completed。远程 `gh api graphql --input .../discussion-create.json` 退出 0，建立 14 个 Ideas 讨论（#80–#93）。远程 `gh api graphql --input .../discussion-audit.json` 退出 0，给每个讨论添加 Codex 审计与实施 TODO。审计核对了冻结数据库导出：历史已受理 453 条、专家建议 1,784 条，只有 248 条含各选项价，部分实验所需同期、同合同盘口与正式费用并不齐备。
 - [独立方案及逐帖链接](../../reports/profitability-experiments-20261122.md) · [审计实施细则](PROFITABILITY_EXPERIMENTS_20261122_TODO.md)
 - 下一步：以本次方案提交为底座，委派 Pi 在独立工作树实现。同一算法和数据处理复用到各实验，避免平行副本。Codex 准备本地仿真输入并核对实现；真实历史只按现有证据给结论。
+
+## 08:43 UTC · 独立开发与容器验收准备
+
+- `git commit --only ...`、`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync`、`git ls-remote --heads origin ...` 均退出 0，远端核对为 `09a1cf83009ad749859e0d09a4ab4e4b3e2f407c`。远端 GraphQL 回读确认 #80–#93 均恰有一条审计 TODO。
+- Pi 两个独立 worktree 分别实现 C01–C06、P01、P05、P06 和 P02–P04、P07、P08，使用同一 DeepSeek 模型及不重叠的代码目录。Codex 负责无网络容器运行入口和冻结输入。
+- 用 `curl --fail --location --proto '=https' ...` 下载英超和德甲各四季公开 CSV，退出 0，共 2,744 个有表头分离的样本行，固定每文件 SHA-256。公开 CSV 不写入 Git。Docker 磁盘检查仍有 22 GiB。本轮复用镜像并记录容器 ID 以复查现有服务，暂未达到清理条件。
+- 下一步：只读导出固定分钟片段和既有原生回执。测试按 Git 提交提取最小源目录和已冻结证据，Docker 内执行，以便验收不读工作区其他文件。
