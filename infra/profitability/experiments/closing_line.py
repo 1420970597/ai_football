@@ -326,4 +326,3 @@ def run(cohort_dir, public_dir, root=None):
             'pairs require an externally verified fixture mapping and executable quote',
         ],
     )
-

@@ -1,0 +1,50 @@
+# 球讯盈利实验验收（2026-11-22）
+
+Codex 设计 6 项，Pi 设计 8 项。Pi 实现并在独立工作树内验证，Codex 审计、修正证据判定与统计边界，并在独立容器中从固定提交重跑。冻结输入包括 453 笔历史受理订单、1,784 条专家建议、3,040 个纸面分钟档、公开参考簿和 2,744 场英超及德甲历史赛果。它们代表不同队列，不能合成单一收益曲线。盈利验收仍以在决策时可成交的同合同报价及可核验费用为依据。 [方案、讨论及审计索引](profitability-experiments-20261122.md)
+
+| 实验 | 隔离回放结果 | 结论与后续条件 |
+| --- | --- | --- |
+| [C01](https://github.com/1420970597/ai_football/discussions/80) | 453 笔受理档时钟齐全。纸面 3,040 帧、582 条建议，无重复或漏分钟；4 笔预检的观察到预检间隔均不超过 1.904 秒。 | 时钟覆盖可复现。两个队列缺同一机会连接键，单条能否恢复仍未知。先在原有推荐或预检事件留可核验时点。 |
+| [C02](https://github.com/1420970597/ai_football/discussions/81) | 4 笔原生纸面预检，4 笔同时缺合同和成本证据，0 笔完成独立费后价格判定。 | 定价复用现有同合同及费用校验。先补有深度的独立来源及账单，暂时无法测费后优势。 |
+| [C03](https://github.com/1420970597/ai_football/discussions/82) | 1,784 条建议中后段 248 条同时具备市场选项，212 条可结算复算。全跟单压力报价收益 −25.275 单位，两档收缩是 −6.790 与 −1.640，样本为 24 与 5 条。 | 可复算历史分母不同，两个收缩组总亏损更少伴随更少的样本，均未显示可兑现优势。 |
+| [C04](https://github.com/1420970597/ai_football/discussions/83) | 453 笔中 445 笔有合法回执。逐项回放本金容量、利润滑点和费率场景；445 笔均缺独立费用与币种。 | 市场容量和拒单情况仍未知，历史已受理样本及压力矩阵可用来剔除不稳健假设。 |
+| [C05](https://github.com/1420970597/ai_football/discussions/84) | 每场最多 1/2 个同时开放头寸分别拦截 137/35 笔，开放笔数峰值从 43 降到 28/38；两个组总回执均为负。 | 历史压力显示风险可下降。真实入场本金不在导出字段中，实际资金敞口峰值未知。 |
+| [C06](https://github.com/1420970597/ai_football/discussions/85) | 完整历史受理组 445 笔可复算，压力后等额收益率 −10.85%，下界 −19.15%；8 笔未核验完成，费用和币种均未核全。 | 无已验证容量，经济测算按假设情景报告。原四周前瞻评估器和登记均保留。 |
+| [P01](https://github.com/1420970597/ai_football/discussions/86) | 582 条中 353 条缺完整盘口，128 条比分变化或无法确认，其他原因 97 条，4 条拿到原生预检。 | 按阶段和合同保留分母。冻结档缺同一机会的多时间状态，30/45/60 秒反事实不可估计。 |
+| [P02](https://github.com/1420970597/ai_football/discussions/87) | 公开历史收盘数据可读，原生受理和推荐档中 2,690 条可列为候选观测。可信映射 0，原生可成交价和同合约收盘比较 0。 | 已实现明确映射入口。只有拿到已核对的赛事、合同和入场价，才能计算收盘价优势。 |
+| [P03](https://github.com/1420970597/ai_football/discussions/88) | 172 条可评估报价，带专家偏移的 Brier 为 0.247498，市场为 0.247531；对数损失分别为 0.688031 和 0.688152。 | 样本里的变化很小。当前只确认偏移模型可因果重放，独立、费后获利及跨期稳定性需要新证据。 |
+| [P04](https://github.com/1420970597/ai_football/discussions/89) | 训练 2,058 场，留出 686 场，614 场配对。模型 Brier **0.594219**，市场 **0.579420**；配对对数损失 **0.996192** 对 **0.974079**。英超、德甲分开拟合也均落后。 | 这个赛前比分基线没有改善市场。72 场因球队无训练历史留为覆盖缺口。公开收盘价只用于事后评分。 |
+| [P05](https://github.com/1420970597/ai_football/discussions/90) | 453 笔可比较推荐价和预检价。445 笔回执没有显式成交价，8 笔无可用回执，完整三段价格桥为 0。 | 只计算能核对的报价段。含成交价、结算和费用凭证的测试验证了三段公式、半赢及迟到修订处理。 |
+| [P06](https://github.com/1420970597/ai_football/discussions/91) | 445 笔统一使用相同压力收益，分别做逐笔、按场及两日分块重采样。按场样本效应约 1.14，对应逐笔等效样本约 391。 | 短窗分块估计不用于改动四周与 200 场冻结门槛。不同分块可改变区间，保留块数及有效场数。 |
+| [P07](https://github.com/1420970597/ai_football/discussions/92) | 检查 2,856 条外部簿边，1,756 条通过单簿价格、深度及时点检查，0 条完成有独立费用依据的跨来源同合同配对。 | 单簿状态通过只说明档案覆盖，严格双来源费后复用 C02 定价门槛。当前无法确认跨源可兑现价差。 |
+| [P08](https://github.com/1420970597/ai_football/discussions/93) | 248 条可验证推荐中 0 条具备可匹配的同合同信号前历史；原生受理另行输出创建、预检、成交的时间覆盖。 | 盘口增量不可评估。收盘快照不参与事前特征，保留赔率前序状态和开球映射后再做验证。 |
+
+## 下一段研究取舍
+
+当前没有通过可持续费后盈利验收的方案。下一次无资金试验优先合并 C01、C02、P01、P07 的证据建设。针对覆盖足够的赛前全场合同，保存自然信号进入时的完整报价组、独立报价源和费用凭证，先检查合格机会和可受理量，再看成本后边际。C05 可作为开放场次风险对照。P02 与 P08 需要新的时间/赛事映射证据。P03 只有在固定规则的下一窗口重复改善时才继续。现有 P04 模型在留出期稳定落后，暂不作为入场依据。
+
+## 复现及证据级别
+
+- 独立 Docker 运行入口按提交提取源码，固定本地镜像摘要，限制 .5 CPU 和 384 MiB，禁网且只读文件系统。既有数据库契约回归另用未暴露端口、运行后删除的内网 PostgreSQL。 [运行入口](../infra/profitability/experiments/README.md)
+- 两次统一回放输出逐字节一致。只读实盘历史回放、自然纸面记录、公开赛果对照和合成边界测试分别留存。私有冻结原件未上传。
+- 本阶段没有实时成交实验、没有账户动作和生产部署。核对 14 个项目运行容器的身份，未观察到重建。磁盘尚有 22 GiB，未触发清理。
+
+
+## 逐帖验收回填
+
+| 实验 | 隔离结果 |
+| --- | --- |
+| C01 | [验收回帖](https://github.com/1420970597/ai_football/discussions/80#discussioncomment-19810764) |
+| C02 | [验收回帖](https://github.com/1420970597/ai_football/discussions/81#discussioncomment-19810765) |
+| C03 | [验收回帖](https://github.com/1420970597/ai_football/discussions/82#discussioncomment-19810766) |
+| C04 | [验收回帖](https://github.com/1420970597/ai_football/discussions/83#discussioncomment-19810767) |
+| C05 | [验收回帖](https://github.com/1420970597/ai_football/discussions/84#discussioncomment-19810768) |
+| C06 | [验收回帖](https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19810769) |
+| P01 | [验收回帖](https://github.com/1420970597/ai_football/discussions/86#discussioncomment-19810770) |
+| P02 | [验收回帖](https://github.com/1420970597/ai_football/discussions/87#discussioncomment-19810771) |
+| P03 | [验收回帖](https://github.com/1420970597/ai_football/discussions/88#discussioncomment-19810772) |
+| P04 | [验收回帖](https://github.com/1420970597/ai_football/discussions/89#discussioncomment-19810773) |
+| P05 | [验收回帖](https://github.com/1420970597/ai_football/discussions/90#discussioncomment-19810774) |
+| P06 | [验收回帖](https://github.com/1420970597/ai_football/discussions/91#discussioncomment-19810775) |
+| P07 | [验收回帖](https://github.com/1420970597/ai_football/discussions/92#discussioncomment-19810776) |
+| P08 | [验收回帖](https://github.com/1420970597/ai_football/discussions/93#discussioncomment-19810777) |
