@@ -47,3 +47,18 @@
 
 - `git diff --check 09a1cf83..HEAD`、敏感模式扫描、`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync` 和 `git ls-remote --exit-code --heads origin refs/heads/fix/TASK-78-hermes-telegram-sync` 均退出 0。远端逐位核对已验收代码与结果提交 `1257a7ab406ff6fd1a36d0f4e857ddcc1951d99a`。两次回放与 144 项通过结果关联固定源码 `85dc5279`，随后仅移除空行并增加文档。远端当前保留研究变更，无打开的同分支 PR。
 - 本轮设计、发布、审计、Pi 实践、Codex 隔离验收与回帖均完成。实际收益与费用证据仍待后续研究，不进入资金执行。
+
+## 10:03 UTC · 继续同期报价与费用诊断
+
+- 目标：针对 C01/C02/P01/P07，在独立容器验证自然建议、原生预检与参考快照能否同期对齐，量化资料缺口并复用原冻结评估器校验费用；继续以可核验费后收益为终点。
+- 当前证据：`git status --short --branch`、`git log -8 --oneline`、`df -h /root/ai_football`、`docker ps --filter name=ai-football-v2` 与读取登记均退出 0。起点 `659c0b84`，剩余约 22 GiB，原主策略四周窗至 12 月 18 日 05:00 UTC；已有未提交研究文件保留。
+- 活动工作包：同期事件证据和参考合同覆盖（`infra/profitability/`、`reports/`，研究中），依赖已归档事件、只读行情及费用凭证。下一步检查原生报价的不可变来源与官方费用是否已可取得；费用或独立价格缺失时保留未验证原因。
+
+## 10:18 UTC · 同期事件隔离验证通过，登记期自动跟进已启用
+
+- `docker exec -i ai-football-v2-api-1 python - 2026-11-20T04:58:30Z 2026-11-22T07:40:00Z 2026-11-22T07:40:00Z` 通过只读可重复读事务导出不可变建议与预检事件，退出 0。原件 SHA-256 为 `6cccf7ae9030422335375f8795a342ec18c657e13f52a886c05eedaeb4b94f04`，仅私有留存。Codex 实现 `d0f4370b`，Pi（DeepSeek V4.1 Flash）独立核对持久化 ID、时点及费用口径。Codex 复核采用同建议 ID 和创建时刻对齐时间线，保留不同报价版本，不将同 ID 视为同一时点的可成交报价。修复提交 `a6327d45` 要求预检证据先于分钟观测落库。
+- `bash infra/profitability/experiments/run-isolated.sh a6327d45 <冻结输入目录> <公开数据目录> -- -m infra.profitability.experiments.event_coverage ...` 两次退出 0，`cmp` 退出 0。结果 SHA-256 为 `920726be7d892c99525ef7877029d6df93ab2907fd0534376e1760a9794cda74`。3,040 帧中 582 条全部配对，137 条较早有完整原生预检，参考清单 14 场、批准合同 0、费用凭证 0。130 多条较晚受阻的记录只能用于定位时钟覆盖，尚无从核验恢复成交或费后优势。
+- 固定源码的 `unittest discover -s tests -p 'test_profitability*.py'` 无网络运行 150 项、2 项缺数据库而跳过，退出 0。临时内网 PostgreSQL 首轮因别名未满足既有测试隔离断言，退出 1；修正专用内网别名后 150 项全部通过，退出 0。销毁本轮创建的临时测试库及网络。
+- 从现有在制脚本快照整备冻结归档入口，固定 verifier 镜像与容器限制。归档单测首轮因测试 UID 与只读目录权限不匹配，退出 1；修正运行 UID 后 3 项通过。提取摘要时发现宿主未安装 `jq`（退出 127），改用文本读取，未改动宿主。用该入口执行 `diagnostic 2026-11-20T05:00:00Z 2026-11-20T06:00:00Z 2026-11-20T03:52:00Z` 退出 0，归档 68/68 分钟，`sha256sum -c --quiet sha256sums.txt` 退出 0。窗前诊断结果 SHA-256 为 `28dc70335a99d9dd953fc12e187d37ecbad96b20a46f65529df1ca3cd3e1e16b`。固定工具清单 SHA-256 为 `74b6219bc3627f5fe14a54e68968e9508d99ac13565392b58513c5d694786ea4`，备用私有包为 `holdout-bundles/runner-20261122.tar`。
+- T3 `schedule_task` 已创建并以 `list_scheduled_tasks` 读回本线程四个一次性任务，全部启用。前三周的固定样本和结果截止分别为 11 月 27/28 日、12 月 4/5 日、12 月 11/12 日 05:00 UTC；最终样本截至 12 月 18 日 05:00 UTC，版本化结果截至 12 月 21 日 05:00 UTC，四次运行均在相应结果截止后 10 分钟。选择周检延后 24 小时，终验延后 72 小时，保持原策略及样本窗。
+- `gh api graphql` 逐帖回复及回读均退出 0，已回填 #80、#81、#85、#86、#92。现运行项目容器身份与阶段基线 `diff` 退出 0，分钟定时器 active，磁盘约余 22 GiB。下一步同步研究分支；到期自动按冻结评估器继续核验外部参考、成本和样本边界。 [复核数据与讨论链接](../../reports/profitability-experiments-results-20261122.md#原生事件复核与自动跟进)
