@@ -42,3 +42,8 @@
 - `gh api graphql --input .../discussion-results.json` 和 `gh api graphql --input .../discussion-readback.json` 均退出 0，确认 14 个实际结果均回复于对应的 Codex TODO。 [逐项结论及回帖](../../reports/profitability-experiments-results-20261122.md)
 - 生产容器 ID 对比、冻结输入校验与 Git 文本检查退出 0。阶段只进行冻结历史和纸面验证，费用、独立合同、成交深度与新时段仍是收益验收依赖。原四周登记和生产配置未触及。磁盘 22 GiB，未达清理条件。T3 图表预览 Chromium 启动退出 1，使用估算高度送内嵌图表，未获得服务端截图验证。
 - 下一步：同步已验收代码和结果到当前任务分支，回读远端提交。后续投入优先用于实验 C01/C02/P01/P07 所需的同期报价、合同映射及账户成本。
+
+## 09:46 UTC · 任务分支远端验收
+
+- `git diff --check 09a1cf83..HEAD`、敏感模式扫描、`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync` 和 `git ls-remote --exit-code --heads origin refs/heads/fix/TASK-78-hermes-telegram-sync` 均退出 0。远端逐位核对已验收代码与结果提交 `1257a7ab406ff6fd1a36d0f4e857ddcc1951d99a`。两次回放与 144 项通过结果关联固定源码 `85dc5279`，随后仅移除空行并增加文档。远端当前保留研究变更，无打开的同分支 PR。
+- 本轮设计、发布、审计、Pi 实践、Codex 隔离验收与回帖均完成。实际收益与费用证据仍待后续研究，不进入资金执行。
