@@ -277,10 +277,11 @@ def quote_state(quote, market, reference, *, now=None, max_age=MAX_QUOTE_AGE, mi
     }
 
 
-def taker_edge(fair_probability, ask, *, cost_per_unit=Decimal(0)):
+def taker_edge(fair_probability, ask, *, cost_per_unit):
     """Gross and cost-adjusted edge of buying at ``ask`` with a known cost."""
     edge = Decimal(str(fair_probability)) - ask
-    return {'gross': edge, 'net': edge - cost_per_unit, 'cost': cost_per_unit}
+    return {'gross': edge, 'net': edge - cost_per_unit if cost_per_unit is not None else None,
+            'cost': cost_per_unit}
 
 
 def _book_quotes(book_document):

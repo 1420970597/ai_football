@@ -312,7 +312,8 @@ def _bootstrap_means(groups, rng, rounds=ROUNDS):
             group = groups[rng.randrange(count)]
             total += sum(group, ZERO)
             units += len(group)
-        means.append(total / units if units else ZERO)
+        if units:
+            means.append(total / units)
     return means
 
 
@@ -422,8 +423,8 @@ def resampling(document):
         },
         'design_effect': {'per_fixture': fixture_effect, 'two_day_block': block_effect},
         'effective_samples': {
-            'per_fixture': _effective(len(fixture_groups), fixture_effect),
-            'two_day_block': _effective(len(block_groups), block_effect),
+            'per_fixture': _effective(len(values), fixture_effect),
+            'two_day_block': _effective(len(values), block_effect),
         },
         'clusters': {
             'fixtures': len(fixture_groups),

@@ -14,6 +14,7 @@ status; none of them is silently replaced by zero.
 
 from collections import Counter, defaultdict
 from decimal import Decimal
+import re
 
 from infra.profitability.experiments import inputs
 from infra.profitability.experiments.stats import counter, delays, stratified, unique
@@ -65,16 +66,16 @@ def _receipt(row, receipt):
     if mismatch:
         return {'status': 'mismatched_contract', 'field': mismatch}
     share = _share(receipt)
-    if share is None:
+    if share not in SHARES.values():
         return {'status': 'missing_outcome_share'}
     stake = inputs.number(receipt.get('stake'))
     net = inputs.number(receipt.get('net'))
     fees = inputs.number(receipt.get('fees'))
     if stake is None or stake <= 0 or net is None:
         return {'status': 'invalid_receipt_amount'}
-    if fees is None:
+    if fees is None or fees < 0:
         return {'status': 'missing_fees'}
-    if not receipt.get('currency'):
+    if not re.fullmatch(r'[A-Z]{3}', str(receipt.get('currency', ''))):
         return {'status': 'missing_currency'}
     gross = stake * share * (fill - 1) if share >= 0 else stake * share
     expected = gross - fees
@@ -147,6 +148,11 @@ def analyze(native_document, frames=None):
             order_recomputed = True
             segment['preflight_to_fill'].append(result['fill_price'] - preflight_price)
             segment['recommendation_to_fill'].append(result['fill_price'] - recommendation)
+            winning_principal = result['stake'] * max(result['share'], Decimal(0))
+            segment['recommendation_to_preflight_payout_delta'].append(visible * winning_principal)
+            segment['preflight_to_fill_payout_delta'].append(
+                (result['fill_price'] - preflight_price) * winning_principal
+            )
             residuals.append(result)
             for flag in result['flow_flags']:
                 classes[flag] += 1

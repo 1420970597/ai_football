@@ -21,6 +21,11 @@
 ```sh
 bash infra/profitability/experiments/run-isolated.sh <源码提交> <冻结输入目录> <公开数据目录> -- \
   -m unittest discover -s tests -p 'test_profitability*.py'
+
+bash infra/profitability/experiments/run-isolated.sh <源码提交> <冻结输入目录> <公开数据目录> -- \
+  -m infra.profitability.experiments
 ```
 
 使用本机既有 verifier 镜像摘要。环境校验时确认接口只有回环设备，输入及源码只读，没有生产环境文件和 Docker socket。公开报告仅保留合格计数、方法和可披露的汇总。依据每次输出的缺失原因判断是否能继续讨论成本后表现。
+
+统一入口一次输出 C01–C06、P01–P08 的 JSON。历史受理样本、事后市场预测评分、金额压力和前瞻纸面数据各用独立证据口径。两项旧的数据库回归在没有独立 PostgreSQL 时会跳过，可另外按项目隔离测试流程执行。

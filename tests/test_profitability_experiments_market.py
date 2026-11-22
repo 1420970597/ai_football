@@ -58,7 +58,8 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(report['missing_reasons']['AvgC_closing_absent'], 1)
 
     def test_fixed_season_split_holds_out_test_results(self):
-        matches = [{'season': season, 'home': 'a', 'away': 'b', 'home_goals': 1, 'away_goals': 0,
+        matches = [{'season': season, 'date': f'20{season[:2]}-08-01',
+                    'home': 'a', 'away': 'b', 'home_goals': 1, 'away_goals': 0,
                     'result': 'home', 'closing': {}} for season in ('2223', '2324', '2526')]
         train, test = models.split_by_season(matches, {'2526'})
         self.assertEqual({'2223', '2324'}, {match['season'] for match in train})
