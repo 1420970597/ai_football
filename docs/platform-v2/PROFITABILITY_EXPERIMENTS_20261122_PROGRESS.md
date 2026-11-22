@@ -64,3 +64,11 @@
 - `gh api graphql` 逐帖回复及回读均退出 0，已回填 #80、#81、#85、#86、#92。现运行项目容器身份与阶段基线 `diff` 退出 0，分钟定时器 active，磁盘约余 22 GiB。下一步同步研究分支；到期自动按冻结评估器继续核验外部参考、成本和样本边界。 [复核数据与讨论链接](../../reports/profitability-experiments-results-20261122.md#原生事件复核与自动跟进)
 
 - 10:18 UTC，`git diff --check 659c0b84..HEAD`、`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync`、`git ls-remote --exit-code --heads origin refs/heads/fix/TASK-78-hermes-telegram-sync` 均退出 0，已核对远端成果提交 `a4ec1de7c84a32a78accaf0fcdd857c81861ceae`。当前等待首周样本截止及结算成熟，由已启用的一次性任务自动继续。自动任务的本地工具入口与私有备用包都须用固定清单校验。
+
+## 10:23 UTC · 止损策略快速回放
+
+- 新增 stop_loss.py 和 4 项边界测试。回放按每次入场前已观察到的最新结算版本决策，修订回执只保留最新可见版本，未把未来回执泄漏给止损规则。
+- run-isolated.sh 运行两次退出 0，cmp 退出 0，结果 SHA-256 为 46342cedaa423fe75c399dde2bf4a8fe905aeb7baea6066a02b594c9f4de1913。154 项盈利相关回归通过，2 项数据库测试按既有条件跳过。
+- 基线 453 笔压力收益为 -48.268。累计回撤 2 单位熔断为 -3.635（22 笔），连续 3 次亏损熔断为 -3.875（31 笔），同场 1 笔加每日亏损 2 单位熔断为 -4.392（77 笔）。费用和币种门禁拦截 453 笔，因为当前没有合格费用证据。
+- 结论只用于止损研究。累计回撤和连续亏损熔断能快速缩小损失，但开放头寸会在熔断后继续结算，任何规则都没有显示费后盈利。未修改生产开关、账户限额和执行器。
+- 复现报告见 reports/profitability-stop-loss-20261122.md，下一步把候选止损规则放入四周纸面窗，只做无资金验证。
