@@ -298,6 +298,7 @@ def receipt(**extra):
         'payout': '20.00',
         'currency': 'CNY',
         'outcome_share': '1',
+        'observed_at': iso(START + timedelta(minutes=15)),
     }
     value.update(extra)
     return value
@@ -362,6 +363,15 @@ class ThreeStageTests(unittest.TestCase):
         report = threestage.analyze(native_document([row]))
         self.assertEqual(report['classes']['mismatched_contract'], 1)
         self.assertEqual(report['denominator']['fill_recomputed'], 0)
+
+    def test_late_revisions_do_not_replace_a_visible_fill(self):
+        early = receipt()
+        late = receipt(net='200', observed_at=iso(START + timedelta(hours=2)))
+        row = native_row(receipts=[early, late], fill_price='2.00')
+        report = threestage.analyze(native_document([row]))
+        self.assertEqual(report['classes']['receipt_outside_cutoff'], 1)
+        self.assertEqual(report['denominator']['fill_recomputed'], 1)
+        self.assertEqual(report['residual']['value']['p50'], Decimal(0))
 
     def test_changing_net_does_not_change_or_derive_the_fill_price(self):
         row = native_row(receipts=[receipt(net='99')], fill_price='2.00')

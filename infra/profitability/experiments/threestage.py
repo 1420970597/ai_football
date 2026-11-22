@@ -139,7 +139,22 @@ def analyze(native_document, frames=None):
             classes['missing_receipt'] += 1
             continue
         order_recomputed = False
+        dated = []
         for receipt in receipts:
+            if receipt.get('observed_at') is None:
+                if _fill_price(row, receipt)[0] is None:
+                    dated.append((None, receipt))
+                else:
+                    classes['receipt_time_unverified'] += 1
+                continue
+            observed = inputs.utc(receipt['observed_at'])
+            if placed < observed < cutoff:
+                dated.append((observed, receipt))
+            else:
+                classes['receipt_outside_cutoff'] += 1
+        visible_receipts = [item for item in dated if item[0] is not None]
+        latest = [max(visible_receipts, key=lambda item: item[0])] if visible_receipts else dated[:1]
+        for _, receipt in latest:
             result = _receipt(row, receipt)
             status = result['status']
             classes[status] += 1
