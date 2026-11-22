@@ -303,10 +303,10 @@ def split_by_season(matches, test_seasons):
     return train, test
 
 
-def run(public_dir, *, test_seasons=('2526',), book='AvgC'):
+def run(public_dir, *, test_seasons=('2526',), book='AvgC', division=None):
     """Load the mounted public CSVs, fit on the past and evaluate the future."""
     document = load_directory(public_dir)
-    matches = document['matches']
+    matches = [match for match in document['matches'] if division is None or match['div'] == division]
     train, test = split_by_season(matches, set(test_seasons))
     missing = Counter({f'csv_skipped_{key}': value for key, value in document['skipped'].items()})
     if not train or not test:

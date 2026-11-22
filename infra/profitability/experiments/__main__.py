@@ -40,7 +40,10 @@ def run(input_root, public_root):
         'P01': attribution.analyze(frames, PAPER_START, PAPER_END),
         'P02': closing_line.run(input_root, public_root),
         'P03': market.run_calibration(cohort),
-        'P04': models.run(public_root),
+        'P04': models.run(public_root) | {
+            'by_division': {division: models.run(public_root, division=division)
+                            for division in ('E0', 'D1')},
+        },
         'P05': threestage.analyze(native),
         'P06': uncertainty.resampling(native),
         'P07': market.run_contracts(reference, books, native_frames=frames,
