@@ -16,10 +16,11 @@ free trade.
 from collections import Counter
 from datetime import timedelta
 from decimal import Decimal
+import json
 
 from infra.profitability.experiments import inputs
 from infra.profitability.experiments.clock import PAPER_PREFLIGHT_MAX_SECONDS
-from infra.profitability.experiments.stats import counter, delays, stratified
+from infra.profitability.experiments.stats import counter, quantile, stratified
 
 STUDY = 'C02'
 THRESHOLD_SECONDS = Decimal(30)
@@ -47,23 +48,14 @@ def _decision(decisions, signal_id):
     return decisions.get(signal_id)
 
 
-def _certified_cost(row, decision):
-    evidence = row.get('account_cost_evidence')
-    if isinstance(evidence, dict) and evidence.get('status') == 'verified':
-        return evidence.get('cost_per_unit') is not None
-    approval = (decision or {}).get('account_cost_approval') or {}
-    schedule = approval.get('schedule')
-    return bool(approval.get('cost_per_unit') is not None and isinstance(schedule, dict))
+def _certified_cost(row, decision, cost_root):
+    from infra.profitability.paper_validate import account_cost
+
+    return bool(cost_root is not None and decision and 'account_cost_approval' in decision
+                and account_cost(row, decision, cost_root) is not None)
 
 
-def _dual_sources(row, decision):
-    evidence = row.get('independent_price_evidence')
-    if isinstance(evidence, dict):
-        if evidence.get('status') == 'reference_eligible':
-            return True
-        complete = evidence.get('complete_sources')
-        if isinstance(complete, list) and len(complete) >= 2:
-            return True
+def _dual_sources(decision):
     if decision:
         sources = decision.get('complete_sources') or []
         return len(sources) >= 2 and decision.get('status') in (PRICED, BELOW)
@@ -89,10 +81,13 @@ def _timing(row):
     return None
 
 
-def analyze(frames, decisions=None, cutoff=None):
+def analyze(frames, decisions=None, cutoff=None, *, reference_root=None, cost_root=None):
+    from infra.profitability.paper_validate import price_decisions, validate_offer
+
     decisions = decisions if isinstance(decisions, dict) else {}
     rows = []
     problems = Counter()
+    offers = {}
     for frame in frames:
         clock = inputs.frame_clock(frame)
         for name in clock['problems']:
@@ -102,7 +97,24 @@ def analyze(frames, decisions=None, cutoff=None):
         for row in frame.get('rows') or []:
             if row.get('status') != 'native_preflight_available' and row.get('signal_id') not in decisions:
                 continue
+            signal_id = row.get('signal_id')
+            if not signal_id or signal_id in offers:
+                raise ValueError('missing or duplicate paper signal')
             rows.append(row | {'_observed': clock['observed']})
+            offers[signal_id] = None
+            if reference_root is not None:
+                try:
+                    offers[signal_id] = validate_offer(row, frame, cutoff)
+                except (KeyError, TypeError, ValueError, ArithmeticError):
+                    problems['invalid_frozen_offer'] += 1
+
+    reference_gaps = Counter()
+    if reference_root is not None:
+        manifest = json.loads((reference_root / 'reference-price.json').read_bytes())
+        decisions, _ = price_decisions({k: v for k, v in offers.items() if v is not None},
+                                      reference_root, manifest['fixtures'])
+    for decision in decisions.values():
+        reference_gaps.update(decision.get('reasons', ()))
 
     classes = Counter()
     cost_counts = Counter()
@@ -128,8 +140,8 @@ def analyze(frames, decisions=None, cutoff=None):
                 unusable['preflight_after_cutoff'] += 1
                 classes['unusable_quote'] += 1
                 continue
-        cost = _certified_cost(row, decision)
-        dual = _dual_sources(row, decision)
+        cost = _certified_cost(row, decision, cost_root)
+        dual = _dual_sources(decision)
         cost_counts['certified' if cost else 'missing'] += 1
         source_counts['dual_complete' if dual else 'missing'] += 1
         price = _price(row)
@@ -138,10 +150,12 @@ def analyze(frames, decisions=None, cutoff=None):
             classes['invalid_native_price'] += 1
             continue
         status = (decision or {}).get('status')
-        if status == BELOW:
+        if status == BELOW and cost and dual:
             classes[BELOW] += 1
+        elif status == PRICED and cost and dual:
+            classes[PRICED] += 1
         elif cost and dual:
-            classes[PRICED if status != 'ineligible' else 'evidence_ineligible'] += 1
+            classes['evidence_ineligible'] += 1
         elif not cost and not dual:
             classes['missing_cost_and_sources'] += 1
         elif not cost:
@@ -162,13 +176,18 @@ def analyze(frames, decisions=None, cutoff=None):
                        'market_kind': row.get('market_kind'), 'delta': delta})
 
     def measure(bucket):
+        delta = [item['delta'] for item in bucket]
         return {
             'rows': len(bucket),
-            'native_minus_recommendation': delays([item['delta'] for item in bucket], THRESHOLD_SECONDS),
+            'lower': sum(value < 0 for value in delta),
+            'equal': sum(value == 0 for value in delta),
+            'higher': sum(value > 0 for value in delta),
+            'median_delta': quantile(delta, Decimal('0.5')),
         }
 
     return {
         'experiment': STUDY,
+        'evidence_label': 'historical_pricing' if classes[PRICED] or classes[BELOW] else 'insufficient_evidence',
         'decisions_supplied': len(decisions),
         'denominator': {'native_preflight_rows': len(rows), 'priced_or_classified': len(rows) - classes['unusable_quote']},
         'classes': counter(classes.elements()),
@@ -176,10 +195,11 @@ def analyze(frames, decisions=None, cutoff=None):
         'cost_evidence': dict(sorted(cost_counts.items())),
         'source_evidence': dict(sorted(source_counts.items())),
         'problems': dict(sorted(problems.items())),
+        'reference_reasons': dict(reference_gaps),
         'native_price_comparison': {
             'status': 'measured' if native_comparison else 'insufficient_evidence',
             'rows': len(native_comparison),
-            'delta': delays([item['delta'] for item in native_comparison], THRESHOLD_SECONDS),
+            'delta': measure(native_comparison),
             'strata': stratified(strata, ('sport', 'phase', 'market_kind'), measure),
         },
         'note': 'certified cost and dual-source status are reported separately from the native price comparison',

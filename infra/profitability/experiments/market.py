@@ -139,7 +139,12 @@ def _brier(records):
         return None
     adjusted = sum(record['weight'] * (record['predicted'] - record['fraction']) ** 2 for record in records)
     market = sum(record['weight'] * (record['market'] - record['fraction']) ** 2 for record in records)
-    return {'brier': round(adjusted / total, 6), 'market_brier': round(market / total, 6)}
+    def log_loss(key):
+        return -sum(row['weight'] * (row['fraction'] * log(_clamp(row[key]))
+                    + (1 - row['fraction']) * log(1 - _clamp(row[key]))) for row in records) / total
+
+    return {'brier': round(adjusted / total, 6), 'market_brier': round(market / total, 6),
+            'log_loss': round(log_loss('predicted'), 6), 'market_log_loss': round(log_loss('market'), 6)}
 
 
 def _scored(records):
@@ -201,7 +206,7 @@ def run_calibration(cohort_path, *, strength=DEFAULT_STRENGTH, edge=DEFAULT_EDGE
         contributions[item['expert_id']] += item['weight']
     top = [author for author, _ in contributions.most_common(2)]
     without_top = [item for item in records if item['expert_id'] not in top]
-    result['top_contributors_removed'] = {'authors': top, **summarize(without_top, edge=edge)}
+    result['top_contributors_removed'] = {'author_count': len(top), **summarize(without_top, edge=edge)}
     return section(
         label=MEASURED if result['settled'] >= 50 else INSUFFICIENT,
         sources=[record],
@@ -237,9 +242,9 @@ def quote_state(quote, market, reference, *, now=None, max_age=MAX_QUOTE_AGE, mi
         return {'state': STATE_REJECT, 'reasons': ['quote_time_invalid']}
     if quote_time > received:
         reasons.append('future_quote')
-    if now is not None and quote_time > now:
+    if now is not None and received > now:
         reasons.append('quote_after_observation')
-    age = received - quote_time
+    age = (now if now is not None else received) - quote_time
     if age < timedelta(0) or age > max_age:
         reasons.append('quote_stale')
     if quote.get('status') != 'two_sided':
@@ -295,24 +300,28 @@ def analyze_contracts(reference_document, book_documents, *, max_age=MAX_QUOTE_A
     for fixture_id, fixture in reference_document.get('fixtures', {}).items():
         for binding in fixture.get('bindings', ()):
             mapping_total += 1
-            key = (fixture_id, binding.get('kind'), binding.get('period'),
-                   str(binding.get('line')), binding.get('market'))
-            references[key] = binding | {'fixture_id': fixture_id,
-                                         'labels': (fixture.get('outcomes', {})
-                                                    .get(binding.get('source'), {})
-                                                    .get(binding.get('market'), {})
-                                                    .get('labels'))}
-    verified = sum(1 for binding in references.values() if binding.get('rules_sha256'))
+            key = (binding.get('source'), binding.get('market'))
+            orientation = fixture.get('outcomes', {}).get(binding.get('source'), {}).get(binding.get('market'), {})
+            references.setdefault(key, []).append(binding | {
+                'fixture_id': fixture_id, 'labels': orientation.get('labels'),
+                'rules_sha256': orientation.get('rules_sha256'),
+            })
+    verified = sum(1 for bindings in references.values() for binding in bindings
+                   if binding.get('rules_sha256') and binding.get('labels'))
     quote_count = 0
     priceable = 0
+    independently_mapped = 0
     for document in book_documents:
         for _label, market, quote in _book_quotes(document):
             quote_count += 1
-            binding = references.get((market.get('fixture_id'), market.get('market_type'),
-                                      market.get('period'), str(market.get('line')), market.get('market')))
-            if binding is None:
-                binding = {'rules_sha256': market.get('rules_sha256'), 'line': market.get('line')}
-            state = quote_state(quote, market, binding, max_age=max_age, min_depth=min_depth)
+            bindings = references.get((market.get('source'), market.get('market')), [])
+            matched = [binding for binding in bindings if binding.get('rules_sha256')
+                       and binding['rules_sha256'] == market.get('rules_sha256')
+                       and quote.get('outcome') in (binding.get('labels') or {})]
+            independently_mapped += len(matched) == 1
+            state = quote_state(quote, market, matched[0] if len(matched) == 1 else {},
+                                now=utc(document['captured_at']) if document.get('captured_at') else None,
+                                max_age=max_age, min_depth=min_depth)
             states[state['state']] += 1
             reasons.update(state['reasons'])
             if state['state'] == STATE_PRICEABLE:
@@ -322,13 +331,15 @@ def analyze_contracts(reference_document, book_documents, *, max_age=MAX_QUOTE_A
         'bindings_with_rules_hash': verified,
         'quotes_observed': quote_count,
         'priceable_quotes': priceable,
+        'independently_mapped_quotes': independently_mapped,
+        'verified_cross_venue_pairs': 0,
         'priceable_share': round(priceable / quote_count, 6) if quote_count else 0.0,
         'quote_states': dict(states),
         'rejection_reasons': dict(reasons),
     }
 
 
-def run_contracts(reference_path, books_dir):
+def run_contracts(reference_path, books_dir, *, native_frames=(), cost_root=None, cutoff=None):
     """P07 entry: replay the frozen reference bindings and book snapshots."""
     reference, reference_record = load_json(reference_path, Path(reference_path).parent)
     books, sources = [], [reference_record]
@@ -338,10 +349,24 @@ def run_contracts(reference_path, books_dir):
                 books.append(json.loads(line) | {'label': path.stem})
         sources.append({'path': path.name, 'bytes': path.stat().st_size})
     result = analyze_contracts(reference, books)
+    # Cross-venue eligibility is established by the same rule used for C02.
+    # A priced single-venue book is a coverage observation only.
+    cross = None
+    if cutoff is not None:
+        from .pricing import analyze as replay_price
+
+        cross = replay_price(native_frames, reference_root=Path(reference_path).parent,
+                             cost_root=cost_root, cutoff=cutoff)
+        result['verified_cross_venue_pairs'] = sum(
+            cross['classes'].get(status, 0) for status in ('price_eligible', 'below_minimum_odds')
+        )
+        result['cross_venue_replay'] = cross
     return section(
-        label=MEASURED if result['priceable_quotes'] else INSUFFICIENT,
+        label=MEASURED if result['verified_cross_venue_pairs'] else INSUFFICIENT,
         sources=sources,
-        missing=dict(result['rejection_reasons']),
+        missing=[*result['rejection_reasons']] + (
+            [] if result['verified_cross_venue_pairs'] else ['same_time_cross_venue_pair_and_cost_unverified']
+        ),
         coverage={'bindings': result['contract_bindings'], 'quotes': result['quotes_observed']},
         results=result,
         limitations=[

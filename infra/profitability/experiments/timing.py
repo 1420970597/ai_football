@@ -178,11 +178,8 @@ def analyze(picks, bindings, book_index, cutoff, *, result_at):
             last_visible = max((utc(quote['received_at']) for quote in entry['quotes']
                                 if quote.get('received_at') and utc(quote['received_at']) <= created),
                                default=None)
-            diagnostics.append({
-                'fixture_id': pick['fixture_id'],
-                'entry_interval_seconds': ((created - last_visible).total_seconds()
-                                           if last_visible else None),
-            })
+            if last_visible:
+                diagnostics.append((created - last_visible).total_seconds())
 
     def describe(rows):
         settled = [row for row in rows if '_net' in row]
@@ -200,7 +197,8 @@ def analyze(picks, bindings, book_index, cutoff, *, result_at):
     return {
         'buckets': {bucket: describe(rows) for bucket, rows in sorted(buckets.items())},
         'missing': dict(missing),
-        'ungrouped_diagnostics': diagnostics,
+        'ungrouped_diagnostics': {'count': len(diagnostics),
+                                  'mean_seconds': sum(diagnostics) / len(diagnostics) if diagnostics else None},
     }
 
 
