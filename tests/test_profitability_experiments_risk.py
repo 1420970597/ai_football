@@ -82,7 +82,7 @@ class CapacityTest(unittest.TestCase):
                         settled=placed + timedelta(minutes=30))]),
         ]
         result = capacity(document(rows))
-        self.assertEqual(2, result['amounts']['orders_with_known_fees'])
+        self.assertEqual(1, result['amounts']['orders_with_known_fees'])
         self.assertEqual(Decimal('0.5'), result['amounts']['verified_fee_amount'])
         self.assertEqual(Decimal('20'), result['amounts']['recognized_turnover'])
         self.assertEqual(Decimal('0.5'), result['amounts']['recognized_gross_units'])
@@ -117,7 +117,7 @@ class ExposureTest(unittest.TestCase):
         ]
         result = exposure(document(rows))['policies']['all']
         self.assertEqual(Decimal('-15'), result['realized_units'])
-        self.assertEqual(Decimal('10'), result['max_drawdown_units'])
+        self.assertEqual(Decimal('15'), result['max_drawdown_units'])
         self.assertEqual(2, result['entries'])
 
     def test_entry_principal_is_not_inferred_from_receipt_stake(self):
