@@ -134,7 +134,7 @@ class ResamplingTest(unittest.TestCase):
         self.assertEqual(MEASURED, first['evidence_label'])
         self.assertEqual(8, first['settled'])
         self.assertEqual(4, first['clusters']['fixtures'])
-        self.assertEqual({'2': 4}, first['clusters']['fixture_leg_counts'])
+        self.assertEqual({2: 4}, first['clusters']['fixture_leg_counts'])
         self.assertTrue(first['clusters']['fixture_legs_kept_together'])
         for key in ('per_bet', 'per_fixture', 'two_day_block'):
             interval = first['intervals'][key]
