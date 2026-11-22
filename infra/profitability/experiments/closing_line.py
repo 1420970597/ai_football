@@ -17,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .evidence import (
-    INSUFFICIENT, decimal, load_json, quantized, section,
+    INSUFFICIENT, decimal, load_json, quantized, section, utc,
 )
 from .public_results import (
     CLOSING_BOOKS, closing_coverage, load_directory,
@@ -26,6 +26,8 @@ from .public_results import (
 ONE = Decimal(1)
 BOOTSTRAP_ROUNDS = 2000
 BOOTSTRAP_SEED = 20261122
+FIXTURE_MAPPINGS_FILE = 'fixture-mappings.json'
+EXECUTABLE_QUOTES_FILE = 'executable-quotes.json'
 
 
 def _float(value):
@@ -88,11 +90,20 @@ def pair_clv(entry, closing):
 
     price_clv = quantized(entry_price / closing_price - ONE)
     implied_gain = quantized(ONE / entry_price - ONE / closing_price)
+    price_sign = (price_clv > 0) - (price_clv < 0)
+    implied_sign = (implied_gain > 0) - (implied_gain < 0)
+    # A better entry price (larger odds) must raise price CLV and lower the
+    # implied probability versus closing; equal non-zero signs signal an arithmetic bug.
+    if price_sign and implied_sign and price_sign == implied_sign:
+        return {'status': 'rejected', 'reasons': ['clv_sign_inconsistent']}
     return {
         'status': 'paired',
+        'fixture': entry.get('fixture'),
         'book': closing['book'],
         'price_clv': price_clv,
         'implied_probability_gain': implied_gain,
+        'price_clv_sign': price_sign,
+        'implied_probability_sign': implied_sign,
         'beats_closing': price_clv > 0,
     }
 
@@ -177,30 +188,130 @@ def _cohort_observations(cohort_dir):
     return sources, observations
 
 
+def _match_key(match):
+    return (match['div'], match['date'], match['home'], match['away'])
+
+
+def load_fixture_mappings(path):
+    """Read an externally verified cohort-to-public fixture mapping.
+
+    The file is a list under ``mappings`` (or a bare list) of
+    ``{fixture_id, div, date, home, away, kickoff}`` where ``date`` is ISO and
+    ``kickoff`` is a verified UTC instant. No mapping is inferred from names.
+    """
+    document, record = load_json(path, Path(path).parent)
+    rows = document.get('mappings', ()) if isinstance(document, dict) else document
+    if not isinstance(rows, list):
+        raise ValueError('fixture mapping file requires a list')
+    mappings = {}
+    for row in rows:
+        fixture = row.get('fixture_id')
+        if not fixture:
+            raise ValueError('fixture mapping row needs fixture_id')
+        mappings[fixture] = {
+            'div': row['div'], 'date': row['date'], 'home': row['home'], 'away': row['away'],
+            'kickoff': utc(row['kickoff']) if row.get('kickoff') else None,
+        }
+    return mappings, record
+
+
+def load_entry_quotes(path):
+    """Read externally supplied same-contract executable entry quotes."""
+    document, record = load_json(path, Path(path).parent)
+    rows = document.get('quotes', ()) if isinstance(document, dict) else document
+    if not isinstance(rows, list):
+        raise ValueError('entry quote file requires a list')
+    return rows, record
+
+
+def pair_entry(quote, mappings, public_index):
+    """Pair one executable entry quote with every closing book of its fixture."""
+    fixture = quote.get('fixture_id') or quote.get('fixture')
+    mapping = mappings.get(fixture)
+    if mapping is None:
+        return [{'status': 'rejected', 'fixture': fixture, 'reasons': ['fixture_mapping_missing']}]
+    match = public_index.get((mapping['div'], mapping['date'], mapping['home'], mapping['away']))
+    if match is None:
+        return [{'status': 'rejected', 'fixture': fixture, 'reasons': ['public_fixture_missing']}]
+    kickoff = mapping.get('kickoff')
+    try:
+        observed = utc(quote['observed_at'])
+    except (KeyError, TypeError, ValueError):
+        return [{'status': 'rejected', 'fixture': fixture, 'reasons': ['entry_observed_at_invalid']}]
+    entry = {
+        'fixture': fixture, 'period': quote.get('period'), 'kind': quote.get('kind'),
+        'line': quote.get('line'), 'direction': quote.get('direction'),
+        'score_basis': quote.get('score_basis'), 'price': quote.get('price'),
+        'observed_at': observed, 'kickoff': kickoff,
+    }
+    pairs = []
+    for book in CLOSING_BOOKS:
+        prices = match['closing'].get(book)
+        if prices is None:
+            continue
+        closing = {'fixture': fixture, 'period': entry['period'], 'kind': entry['kind'],
+                   'line': entry['line'], 'direction': entry['direction'],
+                   'score_basis': entry['score_basis'], 'kickoff': kickoff,
+                   'prices': prices, 'book': book}
+        pairs.append(pair_clv(entry, closing))
+    if not pairs:
+        return [{'status': 'rejected', 'fixture': fixture, 'reasons': ['closing_snapshot_absent']}]
+    return pairs
+
+
 def run(cohort_dir, public_dir, root=None):
-    """Read the frozen cohorts and public closing files; price only mapped pairs."""
+    """Read the frozen cohorts and public closing files; price only mapped pairs.
+
+    A verified fixture mapping and same-contract executable entry price must be
+    supplied externally; without them every observation stays unpaired with a
+    named missing reason rather than a hardcoded conclusion.
+    """
     sources, observations = _cohort_observations(cohort_dir)
     coverage = {'entry_observations': len(observations), 'mapped_observations': 0,
                 'paired_observations': 0, 'paired_fixtures': 0}
     missing = Counter()
     readiness = {}
+    mappings, quotes = {}, []
+    mapping_path = Path(cohort_dir) / FIXTURE_MAPPINGS_FILE
+    quotes_path = Path(cohort_dir) / EXECUTABLE_QUOTES_FILE
+    if mapping_path.is_file():
+        mappings, record = load_fixture_mappings(mapping_path)
+        sources.append(record)
+    else:
+        missing['verified_fixture_mapping_absent'] += len(observations) or 1
+    if quotes_path.is_file():
+        quotes, record = load_entry_quotes(quotes_path)
+        sources.append(record)
+    else:
+        missing['executable_entry_price_absent'] += len(observations) or 1
+
     try:
         public = load_directory(public_dir, root)
     except FileNotFoundError as error:
         missing[f'public_csv_unavailable: {error}'] += 1
         public = None
+    pairs = []
     if public is not None:
         sources.extend(public['provenance'])
         readiness = closing_coverage(public['matches'])
         missing.update({f'csv_skipped_{key}': value for key, value in public['skipped'].items()})
-        # A public row carries club names and a local kickoff clock; the frozen
-        # cohorts identify fixtures by provider id and carry no club names, so no
-        # observation can be matched without inventing a mapping.
-        missing['no_team_identity_in_frozen_cohorts'] += 1
         missing['closing_snapshot_is_reference_not_entry_price'] += 1
-    books = {book: summarize([], total_observations=len(observations)) for book in CLOSING_BOOKS}
+        if mappings and quotes:
+            index = {_match_key(match): match for match in public['matches']}
+            for quote in quotes:
+                pairs.extend(pair_entry(quote, mappings, index))
+            mapped = len({pair['fixture'] for pair in pairs if pair.get('fixture')})
+            coverage['mapped_observations'] = mapped
+            coverage['entry_observations'] += len(quotes)
+            coverage['paired_observations'] = sum(1 for pair in pairs if pair['status'] == 'paired')
+            coverage['paired_fixtures'] = len({pair['fixture'] for pair in pairs
+                                               if pair['status'] == 'paired'})
+    books = {book: summarize([pair for pair in pairs if pair.get('book') == book],
+                             total_observations=coverage['entry_observations'])
+             for book in CLOSING_BOOKS}
+    label = 'measured' if coverage['paired_observations'] else INSUFFICIENT
     return section(
-        label=INSUFFICIENT,
+        label=label,
         sources=sources,
         missing=missing,
         coverage=coverage,
@@ -212,5 +323,7 @@ def run(cohort_dir, public_dir, root=None):
         limitations=[
             'public closing odds have no verified snapshot timestamp or timezone',
             'closing prices were not executable and cannot justify an earlier entry',
+            'pairs require an externally verified fixture mapping and executable quote',
         ],
     )
+
