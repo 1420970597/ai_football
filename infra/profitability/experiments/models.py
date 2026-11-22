@@ -82,7 +82,9 @@ class Fit:
             for away_goals in range(max_goals + 1):
                 probability = _poisson_pmf(home_rate, home_goals) * _poisson_pmf(away_rate, away_goals)
                 tau = _tau(home_goals, away_goals, home_rate, away_rate, self.rho)
-                tau = tau[0] if tau else 1.0
+                if tau is None:
+                    raise ValueError('invalid low-score adjustment for this fixture')
+                tau = tau[0]
                 value = probability * tau
                 grid[(home_goals, away_goals)] = value
                 total += value
@@ -189,7 +191,6 @@ def fit(matches, *, teams=None, max_iterations=400, tolerance=1e-7, ridge=1e-4):
                 break
             learning *= 0.5
         if not stepped:
-            converged = True
             break
         if gain < tolerance * max(1.0, abs(current_ll)):
             converged = True
@@ -215,7 +216,7 @@ def _closing_probabilities(match, book):
     return {side: value / total for side, value in inverse.items()}
 
 
-def evaluate(model, matches, *, book='AvgC', max_goals=MAX_GOALS):
+def evaluate(model, matches, *, book='AvgC'):
     """Score 1X2 predictions against known results and public closing odds.
 
     Matches with an unseen club or without a complete closing triple are counted as
@@ -228,7 +229,11 @@ def evaluate(model, matches, *, book='AvgC', max_goals=MAX_GOALS):
         if match['home'] not in model.teams or match['away'] not in model.teams:
             missing['unseen_club'] += 1
             continue
-        probabilities = model.outcome_probabilities(match['home'], match['away'])
+        try:
+            probabilities = model.outcome_probabilities(match['home'], match['away'])
+        except ValueError:
+            missing['invalid_score_grid'] += 1
+            continue
         if abs(sum(probabilities.values()) - 1) > 1e-9:
             raise AssertionError('outcome probabilities are not normalised')
         market = _closing_probabilities(match, book)
@@ -249,27 +254,40 @@ def evaluate(model, matches, *, book='AvgC', max_goals=MAX_GOALS):
     model_logloss = -sum(log(max(row['probabilities'][row['actual']], 1e-12)) for row in scored) / len(scored)
     priced = [row for row in scored if row['market'] is not None]
     market_brier = (sum(brier(row['market'], row['actual']) for row in priced) / len(priced)) if priced else None
+    paired_model_brier = (
+        sum(brier(row['probabilities'], row['actual']) for row in priced) / len(priced) if priced else None
+    )
+    paired_model_log_loss = (
+        -sum(log(row['probabilities'][row['actual']]) for row in priced) / len(priced) if priced else None
+    )
+    market_log_loss = -sum(log(row['market'][row['actual']]) for row in priced) / len(priced) if priced else None
 
     bin_counts = Counter()
-    bin_totals = defaultdict(float)
+    bin_probabilities = defaultdict(float)
+    bin_wins = Counter()
     for row in scored:
         for side in ('home', 'draw', 'away'):
             probability = row['probabilities'][side]
             bucket = min(9, int(probability * 10))
             bin_counts[bucket] += 1
-            bin_totals[bucket] += probability if side == row['actual'] else 0.0
+            bin_probabilities[bucket] += probability
+            bin_wins[bucket] += side == row['actual']
     calibration = [
         {'bin': f'{bucket / 10:.1f}-{(bucket + 1) / 10:.1f}', 'count': bin_counts[bucket],
-         'mean_predicted': round(bin_totals[bucket] / bin_counts[bucket], 6)}
+         'mean_predicted': round(bin_probabilities[bucket] / bin_counts[bucket], 6),
+         'observed_rate': round(bin_wins[bucket] / bin_counts[bucket], 6)}
         for bucket in sorted(bin_counts)
     ]
     return {
-        'evidence_label': MEASURED if len(scored) >= 50 else INSUFFICIENT,
+        'evidence_label': MEASURED if priced and model.converged else INSUFFICIENT,
         'scored_matches': len(scored),
         'priced_matches': len(priced),
         'model_brier': round(model_brier, 6),
         'model_log_loss': round(model_logloss, 6),
+        'paired_model_brier': None if paired_model_brier is None else round(paired_model_brier, 6),
+        'paired_model_log_loss': None if paired_model_log_loss is None else round(paired_model_log_loss, 6),
         'market_brier': None if market_brier is None else round(market_brier, 6),
+        'market_log_loss': None if market_log_loss is None else round(market_log_loss, 6),
         'market_book': book,
         'calibration': calibration,
         'missing_reasons': dict(missing),
@@ -279,11 +297,13 @@ def evaluate(model, matches, *, book='AvgC', max_goals=MAX_GOALS):
 def split_by_season(matches, test_seasons):
     """Fixed chronological split: test seasons are held out entirely."""
     test = [match for match in matches if match['season'] in test_seasons]
-    train = [match for match in matches if match['season'] not in test_seasons]
+    cutoff = min((match['date'] for match in test), default=None)
+    train = [match for match in matches if match['season'] not in test_seasons
+             and (cutoff is None or match['date'] < cutoff)]
     return train, test
 
 
-def run(public_dir, *, test_seasons=('2526',), book='AvgC', max_goals=MAX_GOALS):
+def run(public_dir, *, test_seasons=('2526',), book='AvgC'):
     """Load the mounted public CSVs, fit on the past and evaluate the future."""
     document = load_directory(public_dir)
     matches = document['matches']
@@ -293,7 +313,7 @@ def run(public_dir, *, test_seasons=('2526',), book='AvgC', max_goals=MAX_GOALS)
         return section(label=INSUFFICIENT, sources=document['provenance'], missing=missing,
                        limitations=['a fixed season split needs both a training and a test season'])
     model = fit(train)
-    report = evaluate(model, test, book=book, max_goals=max_goals)
+    report = evaluate(model, test, book=book)
     results = {
         'training': {
             'matches': len(train), 'clubs': len(model.teams),

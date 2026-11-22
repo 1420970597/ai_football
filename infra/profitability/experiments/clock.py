@@ -3,9 +3,24 @@
 Two independent queues are reported because the frozen order export and the
 minute archive share no stable identifier. Delays are measured inside each
 queue only; a single record is never reconstructed across queues.
+
+Clock rules fixed by the capture/projection protocols:
+
+* a minute frame is usable only when its slot and boundaries match
+  ``begin = slot - 90s``, ``end = slot - 30s`` and ``observed_at`` falls in
+  ``[slot, slot + 30s)``;
+* a paper preflight is normally observed at or after ``frame.observed_at`` and
+  at most 15 seconds later; a check before the observation or beyond that
+  window is an invalid timepoint, not a negative delay;
+* ``quote_time`` is the upstream source time and normally precedes
+  ``created_at``. The quote metric therefore uses the **source age**
+  ``created_at - quote_time`` instead of a negative ``created -> quote`` gap;
+  the separate ``quote_to_observation`` age keeps the frame boundary visible;
+* expected minutes come from the fixed declared interval, never from the
+  observed first/last slot, so a truncated archive shows its missing slots.
 """
 
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import timedelta
 from decimal import Decimal
 
@@ -20,6 +35,8 @@ from infra.profitability.experiments.stats import (
 
 STUDY = 'C01'
 THRESHOLD_SECONDS = Decimal(30)
+PAPER_PREFLIGHT_MAX_SECONDS = 15
+ONE_MINUTE = timedelta(minutes=1)
 
 
 def _delay(start, stop):
@@ -32,11 +49,25 @@ def _tally(problems):
     return counter([name for name, count in problems.items() for _ in range(count)])
 
 
+def _window_measure(bucket):
+    complete = [row for row in bucket if row['_complete']]
+    return {
+        'denominator': {
+            'exported_orders': len(bucket),
+            'complete_clock': len(complete),
+            'excluded': len(bucket) - len(complete),
+        },
+        'problems': _tally(Counter(row['_problem'] for row in bucket if row['_problem'])),
+        'to_preflight': delays([row['_to_preflight'] for row in complete], THRESHOLD_SECONDS),
+        'to_entry': delays([row['_to_entry'] for row in complete], THRESHOLD_SECONDS),
+    }
+
+
 def frozen_orders(rows, cutoff):
     """Signal -> preflight -> native entry chain on accepted orders."""
     problems = Counter()
     complete, to_preflight, to_entry = [], [], []
-    strata_rows = []
+    strata_rows, window_rows = [], []
     for row in rows:
         try:
             signal = inputs.utc(row['signal_at'])
@@ -44,24 +75,33 @@ def frozen_orders(rows, cutoff):
             placed = inputs.utc(row['placed_at'])
         except (KeyError, TypeError, ValueError):
             problems['missing_timepoint'] += 1
+            window_rows.append({'_complete': False, '_problem': 'missing_timepoint'})
             continue
+        problem = None
         if signal > preflight:
-            problems['signal_after_preflight'] += 1
+            problem = 'signal_after_preflight'
+        elif preflight > placed:
+            problem = 'preflight_after_entry'
+        elif placed >= cutoff:
+            problem = 'entry_at_or_after_cutoff'
+        if problem:
+            problems[problem] += 1
+            window_rows.append({'_complete': False, '_problem': problem, '_day': signal.date().isoformat()})
             continue
-        if preflight > placed:
-            problems['preflight_after_entry'] += 1
-            continue
-        if placed >= cutoff:
-            problems['entry_at_or_after_cutoff'] += 1
-            continue
+        to_preflight_value = _delay(signal, preflight)
+        to_entry_value = _delay(preflight, placed)
         complete.append(row)
-        to_preflight.append(_delay(signal, preflight))
-        to_entry.append(_delay(preflight, placed))
+        to_preflight.append(to_preflight_value)
+        to_entry.append(to_entry_value)
+        window_rows.append({
+            '_complete': True, '_problem': None, '_day': signal.date().isoformat(),
+            '_to_preflight': to_preflight_value, '_to_entry': to_entry_value,
+        })
         strata_rows.append({
             'sport': row.get('sport'),
             'market_kind': row.get('market_kind'),
-            'to_preflight': _delay(signal, preflight),
-            'to_entry': _delay(preflight, placed),
+            'to_preflight': to_preflight_value,
+            'to_entry': to_entry_value,
         })
 
     def measure(bucket):
@@ -70,6 +110,10 @@ def frozen_orders(rows, cutoff):
             'to_preflight': delays([item['to_preflight'] for item in bucket], THRESHOLD_SECONDS),
             'to_entry': delays([item['to_entry'] for item in bucket], THRESHOLD_SECONDS),
         }
+
+    windows = defaultdict(list)
+    for row in window_rows:
+        windows[row.get('_day', 'unknown')].append(row)
 
     return {
         'denominator': {
@@ -80,46 +124,71 @@ def frozen_orders(rows, cutoff):
         'problems': _tally(problems),
         'to_preflight': delays(to_preflight, THRESHOLD_SECONDS),
         'to_entry': delays(to_entry, THRESHOLD_SECONDS),
+        'windows': [
+            {'day': day, 'value': _window_measure(bucket)}
+            for day, bucket in sorted(windows.items())
+        ],
         'strata': stratified(strata_rows, ('sport', 'market_kind'), measure),
     }
 
 
-def minute_archive(frames):
-    """Archive boundary, duplicate and sampling coverage for minute slots."""
+def minute_archive(frames, start=None, end=None, cutoff=None):
+    """Fixed-interval frame boundary, duplicate and source-age coverage."""
     problems = Counter()
-    slots, observed, rows = [], [], []
+    slots, rows = [], []
+    invalid_frames = 0
     for frame in frames:
         clock = inputs.frame_clock(frame)
-        problems.update(clock['problems'])
-        if 'slot' not in clock:
-            problems['unusable_frame'] += 1
+        for name in clock['problems']:
+            problems[name] += 1
+        if 'slot' not in clock or clock['problems']:
+            invalid_frames += 1
             continue
-        slots.append(clock['slot'])
-        observed.append(clock['observed'])
+        slot, observed = clock['slot'], clock['observed']
+        if start is not None and not start <= slot < end:
+            problems['frame_outside_interval'] += 1
+            continue
+        slots.append(slot)
         for row in frame.get('rows') or []:
-            rows.append(row | {'_observed': clock['observed']})
+            if not row.get('signal_id'):
+                problems['missing_signal_identifier'] += 1
+                continue
+            rows.append(row | {'_observed': observed, '_slot': slot})
 
-    slots.sort()
-    distinct = set(slots)
-    if slots:
-        span = (slots[-1] - slots[0]) // timedelta(minutes=1) + 1
-    else:
-        span = 0
+    if start is None and slots:
+        start = min(slots)
+    if end is None and slots:
+        end = max(slots) + ONE_MINUTE
+    if start is None or end is None or not start < end:
+        raise ValueError('minute archive requires a fixed start and end')
+    expected = int((end - start) // ONE_MINUTE)
+    distinct = {slot for slot in slots if start <= slot < end}
+    if len(distinct) != len(set(slots)):
+        problems['frame_outside_interval'] += len(set(slots)) - len(distinct)
+    if len(slots) != len(set(slots)):
+        problems['duplicate_slot'] += len(slots) - len(set(slots))
 
     kept, duplicate_rows = unique(rows, 'signal_id')
-    to_quote, to_check, check_to_observed, to_observed = [], [], [], []
+    source_age, quote_to_observation, to_checked, source_to_checked = [], [], [], []
     strata_rows = []
-    invalid_times = future_rows = 0
+    usable = 0
     for row in kept:
         try:
             created = inputs.utc(row['created_at'])
             quoted = inputs.utc(row['quote_time'])
         except (KeyError, TypeError, ValueError):
-            invalid_times += 1
+            problems['invalid_row_timepoint'] += 1
             continue
-        seen = row['_observed']
-        if created > seen:
-            future_rows += 1
+        slot, observed = row['_slot'], row['_observed']
+        begin, frame_end = slot - timedelta(seconds=90), slot - timedelta(seconds=30)
+        if not begin <= created < frame_end:
+            problems['created_outside_slot'] += 1
+            continue
+        if quoted > created:
+            problems['quote_after_created'] += 1
+            continue
+        if quoted > observed:
+            problems['quote_after_observation'] += 1
             continue
         checked = None
         checked_value = row.get('native_quote_checked_at')
@@ -127,62 +196,73 @@ def minute_archive(frames):
             try:
                 checked = inputs.utc(checked_value)
             except (TypeError, ValueError):
-                invalid_times += 1
-                continue
-            if checked > seen:
-                future_rows += 1
-                continue
-        to_quote.append(_delay(created, quoted))
-        to_observed.append(_delay(created, seen))
-        if checked:
-            to_check.append(_delay(created, checked))
-            check_to_observed.append(_delay(checked, seen))
+                problems['invalid_preflight_time'] += 1
+            else:
+                if checked < observed:
+                    problems['preflight_before_observation'] += 1
+                    checked = None
+                elif checked - observed > timedelta(seconds=PAPER_PREFLIGHT_MAX_SECONDS):
+                    problems['preflight_check_too_late'] += 1
+                    checked = None
+                elif cutoff is not None and checked > cutoff:
+                    problems['preflight_after_cutoff'] += 1
+                    checked = None
+        source_age.append(_delay(quoted, created))
+        quote_to_observation.append(_delay(quoted, observed))
+        if checked is not None:
+            to_checked.append(_delay(observed, checked))
+            source_to_checked.append(_delay(quoted, checked))
+        usable += 1
         strata_rows.append({
             'sport': row.get('sport'),
             'phase': row.get('phase'),
             'market_kind': row.get('market_kind'),
-            'to_quote': _delay(created, quoted),
-            'to_check': _delay(created, checked),
+            'source_age': _delay(quoted, created),
+            'to_checked': _delay(observed, checked) if checked else None,
         })
 
     def measure(bucket):
         return {
             'rows': len(bucket),
-            'to_quote': delays([item['to_quote'] for item in bucket], THRESHOLD_SECONDS),
-            'to_check': delays([item['to_check'] for item in bucket], THRESHOLD_SECONDS),
+            'source_age': delays([item['source_age'] for item in bucket], THRESHOLD_SECONDS),
+            'to_checked': delays([item['to_checked'] for item in bucket],
+                                 Decimal(PAPER_PREFLIGHT_MAX_SECONDS)),
         }
 
     return {
+        'interval': {'start': start, 'end': end},
         'denominator': {
             'frames': len(frames),
+            'valid_frames': len(slots),
+            'invalid_frames': invalid_frames,
             'distinct_slots': len(distinct),
-            'expected_slots': span,
-            'missing_slots': span - len(distinct),
-            'capture_share': Decimal(len(distinct)) / span if span else None,
+            'expected_slots': expected,
+            'missing_slots': expected - len(distinct),
+            'capture_share': Decimal(len(distinct)) / expected if expected else None,
             'archived_rows': len(rows),
             'unique_rows': len(kept),
+            'usable_rows': usable,
             'duplicate_rows': duplicate_rows,
         },
         'problems': _tally(problems),
-        'invalid_timepoints': invalid_times,
-        'future_observations': future_rows,
         'statuses': counter([row.get('status') for row in kept]),
-        'to_quote': delays(to_quote, THRESHOLD_SECONDS),
-        'to_check': delays(to_check, THRESHOLD_SECONDS),
-        'check_to_observed': delays(check_to_observed, THRESHOLD_SECONDS),
-        'to_observed': delays(to_observed, THRESHOLD_SECONDS),
+        'source_age': delays(source_age, THRESHOLD_SECONDS),
+        'quote_to_observation': delays(quote_to_observation, THRESHOLD_SECONDS),
+        'observed_to_preflight': delays(to_checked, Decimal(PAPER_PREFLIGHT_MAX_SECONDS)),
+        'source_to_preflight': delays(source_to_checked, THRESHOLD_SECONDS),
         'strata': stratified(strata_rows, ('sport', 'phase', 'market_kind'), measure),
     }
 
 
-def analyze(native_document, frames):
-    begin, end, cutoff = inputs.interval(native_document)
+def analyze(native_document, frames, start=None, end=None):
+    begin, end_interval, cutoff = inputs.interval(native_document)
     orders = frozen_orders(inputs.rows(native_document), cutoff)
-    archive = minute_archive(frames)
+    archive = minute_archive(frames, start=start, end=end)
     return {
         'experiment': STUDY,
         'threshold_seconds': THRESHOLD_SECONDS,
-        'interval': {'begin': begin, 'end': end, 'cutoff': cutoff},
+        'paper_preflight_max_seconds': PAPER_PREFLIGHT_MAX_SECONDS,
+        'interval': {'begin': begin, 'end': end_interval, 'cutoff': cutoff},
         'queues': {'frozen_orders': orders, 'minute_archive': archive},
         'cross_queue': {
             'common_identifier': None,
@@ -192,12 +272,13 @@ def analyze(native_document, frames):
         'coverage': {
             'included': {
                 'orders': orders['denominator']['complete_clock'],
-                'archive_rows': archive['denominator']['unique_rows'],
+                'archive_rows': archive['denominator']['usable_rows'],
             },
             'excluded': {
                 'orders': orders['denominator']['excluded'],
                 'duplicate_archive_rows': archive['denominator']['duplicate_rows'],
                 'missing_slots': archive['denominator']['missing_slots'],
+                'invalid_frames': archive['denominator']['invalid_frames'],
             },
             'unknown': {'signal_to_preflight_bridge': 'no common identifier'},
         },

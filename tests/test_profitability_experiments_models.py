@@ -2,6 +2,7 @@
 
 import math
 import unittest
+from datetime import date, timedelta
 
 from infra.profitability.experiments.evidence import INSUFFICIENT
 from infra.profitability.experiments.models import (
@@ -20,6 +21,7 @@ def dataset():
             'home_goals': home_goals,
             'away_goals': away_goals,
             'season': '2526' if index >= 66 else '2425',
+            'date': (date(2025, 1, 1) + timedelta(days=index)).isoformat(),
         })
     return matches
 
@@ -98,6 +100,8 @@ class LeakageTest(unittest.TestCase):
         self.assertTrue(test)
         self.assertTrue(train)
         self.assertFalse({m['season'] for m in train} & {'2526'})
+        future = dict(train[0], season='2627', date='2026-08-01')
+        self.assertEqual(split_by_season([*matches, future], {'2526'}), (train, test))
         baseline = fit(train)
         mutated = [dict(match, home_goals=9, away_goals=0) if match in test else match
                    for match in matches]
@@ -152,6 +156,10 @@ class NormalisationAndBoundaryTest(unittest.TestCase):
         self.assertIsNotNone(scored['market_brier'])
         self.assertTrue(0.0 <= scored['model_brier'] <= 2.0)
         self.assertEqual(scored['missing_reasons'], {})
+        for bucket in scored['calibration']:
+            lower, upper = map(float, bucket['bin'].split('-'))
+            self.assertLessEqual(lower, bucket['mean_predicted'])
+            self.assertLessEqual(bucket['mean_predicted'], upper)
 
 
 if __name__ == '__main__':
