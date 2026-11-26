@@ -126,3 +126,15 @@
 - 报告 `reports/profitability-stop-loss-20261122.md` 已替换旧表格并补入 Pi 审计逐项复核、明确日亏损口径及失败记录。下一步更新远端讨论，推送这批经验证结果，随后继续前瞻样本的价格、费用和现金风险证据审查。
 
 - 04:35 UTC，`git diff --check origin/fix/TASK-78-hermes-telegram-sync..HEAD` 退出 0；`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync` 退出 0，`git ls-remote` 核对远端提交为 `380b83ec78ea3595119d62b17174f3153e5cb88c`。GitHub Discussion #84 更新见 https://github.com/1420970597/ai_football/discussions/84#discussioncomment-19911159，#85 更新见 https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19911164；创建后分别回读确认，GraphQL 查询均退出 0。五个定期/终验任务状态回读全部 enabled，下一次 11 月 28 日 05:10 UTC。
+
+## 2026-11-26 04:45 UTC · 延伸核验容量、敞口与样本区间
+
+- 目标检查止损触发后仍在途的结算及现金峰值，并纠正任何继续使用未结回执的资金结果。已复用 C04/C05 原有隔离模块，没有另建影子实现。
+- 发现 C04/C05 的 `_valid` 只检查收益字段和观察时点，没有要求回执已结；同刻冲突版本还会按输入列表挑选。修改为只纳入有效已结且截止可见版本，最新观察时点若存在冲突则作为歧义排除。C05 的资金本金仍只读源入场字段，不从回执倒推。
+- 隔离容器中 `test_profitability_experiments_risk.py` 10 项通过，完整盈利相关回归 177 项通过 175 项、2 项因数据库隔离条件跳过，退出 0。覆盖未结回执、后续未结修订及同刻冲突版本。
+- 对同一冻结输入的 C04/C05/C06/P06 汇总回放双次运行，`cmp` 退出 0，摘要 SHA-256 为 `cca2bc75189e91829e59e98989f1ba169384dbf45296796155769e3d7e8a230f`。C04 453 笔有 437 笔有效已结，16 笔没有结果；已结组费用前单位收益 -39.368，费用/币种证据均缺。C05 同场 1/2 开放头寸分别拦截 137/35，开放头寸峰值从 43 降至 28/38；453 笔的入场本金仍全部未知。
+- C06 的 437 笔压力 ROI 为 -10.958%，按赛事区块 95% 下界 -19.324%；278 个赛事，只有 2 个完整周且仅 1 周为正，16 笔未结。P06 按赛事设计效应 1.168、有效样本约 374，赛事区块 95% 区间 -19.37% 至 -2.22%，两日区块 -16.51% 至 -4.77%。这些是同一历史样本的可复现负向估计，不是未来保证。
+- `reports/profitability-experiments-results-20261122.md` 与止损报告已更新 C04/C05/C06/P06 结果。资金风险回执口径修正已进入讨论回填，待报告提交推送后回到仍启用的前瞻窗口检查。
+- 04:48 UTC，#83/#84/#85/#91 更新分别为 https://github.com/1420970597/ai_football/discussions/83#discussioncomment-19911356、https://github.com/1420970597/ai_football/discussions/84#discussioncomment-19911359、https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19911357、https://github.com/1420970597/ai_football/discussions/91#discussioncomment-19911358。四个 GraphQL 创建调用退出 0，别名回读退出 0。初次用同字段不同参数的回读查询触发 fieldConflict 并退出 1，改用别名后验证成功。止损单项结果在最终提交 7a9d0faa 下再次双跑，`cmp` 退出 0，SHA-256 仍为 `ec4aaa59097886f2f2f9b4b0321b7cc9d5bb840412af66b356ba523d1d7d3f70`。下一步提交和推送报告/讨论回填，再按 11 月 28 日 05:10 UTC 前瞻检查继续。
+- 04:52 UTC，补测发现同一观察时刻的两份回执即使单位收益相同，只要 stake 不同也会改变 C04/C05 金额，故必须按原始回执行一起判断歧义。`c05b1692` 已拒绝该并列金额，不把列表顺序用于挑选。风险测试 11 项通过，完整盈利相关测试 178 项通过 176 项、2 项因数据库隔离跳过，退出 0。C04/C05/C06/P06 双跑 SHA-256 仍为 `cca2bc75189e91829e59e98989f1ba169384dbf45296796155769e3d7e8a230f`。止损最终提交 `c05b1692` 双跑结果仍为 `ec4aaa59097886f2f2f9b4b0321b7cc9d5bb840412af66b356ba523d1d7d3f70`，cmp 退出 0。下一步更正文档测试计数、推送并核对远端。
+- Discussion #85 原测试计数 177/175 已编辑为 178/176，`updateDiscussionComment` 与回读查询均退出 0，沿用原 comment URL。下一步提交、推送当前研究分支并回读远端 SHA。

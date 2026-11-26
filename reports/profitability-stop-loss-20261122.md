@@ -72,17 +72,17 @@ Pi 报告了 16 组失败。Codex 对照当前实现与隔离回归逐项复核�
 
 ## 隔离验证与复现
 
-最终源码提交为 `73ffbf0f27c45539210dab4896b75de34bc9f864`。全部命令通过固定本地 API 镜像 `sha256:b3910d921ed6fcb2968129aa43bac0803895de46ace2881351ea3e623ee6d93c` 在 Docker 中断网、只读源码和输入、CPU 0.5、内存 384 MiB 条件下执行。
+止损与资金风险相关的最终源码提交为 `c05b1692c0a235c92f400d8a20fc1f8c251f0c9bc`。全部命令通过固定本地 API 镜像 `sha256:b3910d921ed6fcb2968129aa43bac0803895de46ace2881351ea3e623ee6d93c` 在 Docker 中断网、只读源码和输入、CPU 0.5、内存 384 MiB 条件下执行。
 
-止损测试运行 23 项通过，策略模拟测试运行 6 项通过。盈利相关回归共 174 项，172 项通过，2 项因既有数据库隔离条件跳过。源码冻结后对同一输入独立回放两次，`cmp` 一致，JSON 结果 SHA-256 为 `ec4aaa59097886f2f2f9b4b0321b7cc9d5bb840412af66b356ba523d1d7d3f70`。
+止损测试运行 23 项通过，策略模拟测试运行 6 项通过，资金压力与敞口测试运行 11 项通过。盈利相关回归共 178 项，176 项通过，2 项因既有数据库隔离条件跳过。源码冻结后对同一输入独立回放两次，`cmp` 一致，JSON 结果 SHA-256 为 `ec4aaa59097886f2f2f9b4b0321b7cc9d5bb840412af66b356ba523d1d7d3f70`。
 
 ```bash
-bash infra/profitability/experiments/run-isolated.sh 73ffbf0f \
+bash infra/profitability/experiments/run-isolated.sh c05b1692 \
   .runtime/profitability-experiments-20261122/input \
   .runtime/profitability-experiments-20261122/public -- \
   -m infra.profitability.experiments.stop_loss /input/native-cohort.json
 
-bash infra/profitability/experiments/run-isolated.sh 73ffbf0f \
+bash infra/profitability/experiments/run-isolated.sh c05b1692 \
   .runtime/profitability-experiments-20261122/input \
   .runtime/profitability-experiments-20261122/public -- \
   -m unittest discover -s tests -p 'test_profitability*.py'
@@ -90,4 +90,4 @@ bash infra/profitability/experiments/run-isolated.sh 73ffbf0f \
 
 中间提交 `36348cc7` 的第一轮测试有 2 项回撤预期仍按旧的未扣压力成本数字断言，失败退出 1。测试断言按最终固定成本口径修正后，在 `73ffbf0f` 重新运行通过。失败记录保留在进度日志。
 
-此前报告中的止损收益表和旧 SHA 已由本报告替代。论文面板的同期报价、费用、参考合同和前瞻盈利缺口仍见[盈利可行性主报告](./profitability-experiments-results-20261122.md)及[盘口来源门槛研究](./profitability-data-provider-gates-20261126.md)。
+此前报告中的止损收益表和旧 SHA 已由本报告替代。盈利实验总览中的 C04/C05/C06/P06 数据也已按已结回执和统一压力口径更新。同期报价、费用、参考合同和前瞻盈利缺口见[盈利可行性主报告](./profitability-experiments-results-20261122.md)及[盘口来源门槛研究](./profitability-data-provider-gates-20261126.md)。
