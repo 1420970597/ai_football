@@ -7,10 +7,11 @@ integrity or infer manipulation.
 """
 
 from collections import defaultdict
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 from hashlib import sha256
 import argparse
 import json
+from math import factorial, prod
 from pathlib import Path
 from random import Random
 
@@ -61,6 +62,67 @@ def _bootstrap_fixture_means(fixture_returns, rounds, seed):
     return means
 
 
+def _exact_fixture_bootstrap_interval(fixture_returns, low_fraction, high_fraction):
+    """Enumerate all fixture-cluster bootstrap compositions for small groups."""
+    fixture_ids = sorted(fixture_returns)
+    count = len(fixture_ids)
+    if count < 5 or count > 7:
+        return None
+
+    clusters = [
+        (len(fixture_returns[fixture]), sum(fixture_returns[fixture], ZERO))
+        for fixture in fixture_ids
+    ]
+    distribution = []
+
+    def visit(position, remaining, counts):
+        if position == count - 1:
+            composition = counts + [remaining]
+            resampled_orders = sum(
+                multiplicity * clusters[index][0]
+                for index, multiplicity in enumerate(composition)
+            )
+            resampled_return = sum(
+                (multiplicity * clusters[index][1]
+                 for index, multiplicity in enumerate(composition)),
+                ZERO,
+            )
+            weight = factorial(count) // prod(factorial(value) for value in composition)
+            distribution.append((resampled_return / resampled_orders, weight))
+            return
+
+        for multiplicity in range(remaining + 1):
+            visit(position + 1, remaining - multiplicity, counts + [multiplicity])
+
+    visit(0, count, [])
+    distribution.sort(key=lambda item: item[0])
+    total_resamples = count ** count
+
+    def weighted_quantile(fraction):
+        position = Decimal(total_resamples - 1) * fraction
+        lower_rank = int(position.to_integral_value(rounding=ROUND_FLOOR))
+        upper_rank = min(lower_rank + 1, total_resamples - 1)
+        interpolation = position - lower_rank
+        lower_value = upper_value = None
+        cumulative = 0
+        for value, weight in distribution:
+            next_cumulative = cumulative + weight
+            if lower_value is None and lower_rank < next_cumulative:
+                lower_value = value
+            if upper_rank < next_cumulative:
+                upper_value = value
+                break
+            cumulative = next_cumulative
+        return lower_value + (upper_value - lower_value) * interpolation
+
+    return {
+        'low': weighted_quantile(low_fraction),
+        'high': weighted_quantile(high_fraction),
+        'resamples': total_resamples,
+        'compositions': len(distribution),
+    }
+
+
 def _market_summary(rows):
     groups = defaultdict(list)
     for row, receipt in rows:
@@ -82,6 +144,10 @@ def analyze(cohort, metadata, *, bootstrap_rounds=DEFAULT_ROUNDS):
         raise ValueError('bootstrap_rounds must be at least 100')
     cutoff = utc(cohort['cutoff'])
     fixture_metadata = _fixture_map(metadata)
+    fixtures_with_competition_id = sum(
+        competition_id is not None and competition_id != ''
+        for competition_id, _, _ in fixture_metadata.values()
+    )
     rows = cohort['rows']
     fills = [Fill.parse(row) for row in rows]
     order_ids = [fill.order for fill in fills]
@@ -137,6 +203,7 @@ def analyze(cohort, metadata, *, bootstrap_rounds=DEFAULT_ROUNDS):
         gross_units = sum((receipt.unit_return for _, _, receipt in trades), ZERO)
         bootstraps = None
         intervals = None
+        familywise_method = None
         if settled:
             bootstraps = _bootstrap_fixture_means(
                 fixture_returns, bootstrap_rounds, SEED + len(results),
@@ -150,11 +217,27 @@ def analyze(cohort, metadata, *, bootstrap_rounds=DEFAULT_ROUNDS):
                     'familywise_95_screen': None,
                 }
                 if settled >= MIN_CORRECTED_SAMPLE:
-                    intervals['familywise_95_screen'] = {
-                        'low': quantile(bootstraps, corrected_tail),
-                        'high': quantile(bootstraps, Decimal(1) - corrected_tail),
-                        'bonferroni_groups': total_groups,
-                    }
+                    exact_interval = _exact_fixture_bootstrap_interval(
+                        fixture_returns, corrected_tail, Decimal(1) - corrected_tail,
+                    )
+                    if exact_interval is not None:
+                        intervals['familywise_95_screen'] = {
+                            'low': exact_interval['low'],
+                            'high': exact_interval['high'],
+                            'bonferroni_groups': total_groups,
+                            'method': 'exact_fixture_cluster_bootstrap',
+                            'resamples': exact_interval['resamples'],
+                            'compositions': exact_interval['compositions'],
+                        }
+                        familywise_method = 'exact_fixture_cluster_bootstrap'
+                    else:
+                        intervals['familywise_95_screen'] = {
+                            'low': quantile(bootstraps, corrected_tail),
+                            'high': quantile(bootstraps, Decimal(1) - corrected_tail),
+                            'bonferroni_groups': total_groups,
+                            'method': 'monte_carlo_fixture_cluster_bootstrap',
+                        }
+                        familywise_method = 'monte_carlo_fixture_cluster_bootstrap'
 
         other_experts = {
             expert: values for expert, values in expert_totals.items()
@@ -187,6 +270,7 @@ def analyze(cohort, metadata, *, bootstrap_rounds=DEFAULT_ROUNDS):
             'missing_currency_orders': missing_currency,
             'market_mix': _market_summary([(fill, receipt) for _, fill, receipt in trades]),
             'fixture_cluster_intervals': intervals,
+            'familywise_interval_method': familywise_method,
             'same_expert_comparison': {
                 'paired_experts': len(paired),
                 'league_roi_lower_than_same_experts_outside': sum(
@@ -216,6 +300,12 @@ def analyze(cohort, metadata, *, bootstrap_rounds=DEFAULT_ROUNDS):
             'unresolved_orders': unresolved_orders,
             'fees_missing': sum(receipt.unit_fees is None for _, _, receipt in all_settled),
             'currency_missing': sum(receipt.currency is None for _, _, receipt in all_settled),
+        },
+        'competition_identity': {
+            'metadata_source': metadata.get('source'),
+            'metadata_fixtures': len(fixture_metadata),
+            'fixtures_with_non_null_competition_id': fixtures_with_competition_id,
+            'grouping_rule': 'competition_id, competition_name, sport; null IDs group by display name and sport',
         },
         'overall': {
             'gross_unit_return_per_settled_order': total_gross / len(all_settled) if all_settled else None,

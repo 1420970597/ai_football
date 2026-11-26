@@ -109,6 +109,34 @@ class CompetitionAnalysisTest(unittest.TestCase):
         self.assertEqual(4, league_b['settled_orders'])
         self.assertIsNone(league_b['fixture_cluster_intervals'])
 
+    def test_null_competition_ids_are_reported_as_display_name_groups(self):
+        fixture_metadata = {'source': 'read-only live fixture projection at 2026-11-26', 'fixtures': [
+            {'fixture_id': f'a{i}', 'competition_id': None,
+             'competition_name': 'League A', 'sport': 'football'}
+            for i in range(1, 7)
+        ]}
+        result = analyze(
+            cohort([order(str(i), f'a{i}', 'expert-x', '1') for i in range(1, 7)]),
+            fixture_metadata,
+            bootstrap_rounds=100,
+        )
+        self.assertEqual(0, result['competition_identity']['fixtures_with_non_null_competition_id'])
+        self.assertIn('display name', result['competition_identity']['grouping_rule'])
+        self.assertEqual(fixture_metadata['source'], result['competition_identity']['metadata_source'])
+
+    def test_small_familywise_interval_enumerates_all_fixture_resamples(self):
+        rows = [
+            order(f'{fixture}-{index}', f'a{fixture}', 'expert-x', '1' if index else '-1')
+            for fixture in range(1, 6)
+            for index in range(2)
+        ]
+        result = analyze(cohort(rows), metadata(), bootstrap_rounds=100)
+        league_a = next(row for row in result['competitions'] if row['competition_name'] == 'League A')
+        interval = league_a['fixture_cluster_intervals']['familywise_95_screen']
+        self.assertEqual('exact_fixture_cluster_bootstrap', interval['method'])
+        self.assertEqual(5 ** 5, interval['resamples'])
+        self.assertEqual(126, interval['compositions'])
+
 
 if __name__ == '__main__':
     unittest.main()
