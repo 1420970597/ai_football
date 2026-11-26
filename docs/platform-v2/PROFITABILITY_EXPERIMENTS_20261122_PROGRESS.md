@@ -140,6 +140,7 @@
 - Discussion #85 原测试计数 177/175 已编辑为 178/176，`updateDiscussionComment` 与回读查询均退出 0，沿用原 comment URL。下一步提交、推送当前研究分支并回读远端 SHA。
 - 04:57 UTC，冻结报告与修复提交 `199d9c624ca2dfb0260c49c07610f68f4b86674a` 已推送。`git diff --check origin/fix/TASK-78-hermes-telegram-sync..HEAD` 退出 0，push 退出 0，`git ls-remote` 读回同一 SHA。一次宿主 `jq` 摘要命令因未安装以退出 127 结束，改用固定 Docker 镜像内 Python 只读聚合，结果和 SHA 随后双跑核验。远端当前研究结论为止损降低了样本内总损失但没有产生正 ROI。活动工作包转回前瞻原生价格、费用和资金边界；原四周窗保持不变，下一次定时检查仍为 11 月 28 日 05:10 UTC。
 - 05:08 UTC，原生赔率劣化回放结果已更新至 #81 `https://github.com/1420970597/ai_football/discussions/81#discussioncomment-19911655`，#84 原回帖已编辑为最终结果 `https://github.com/1420970597/ai_football/discussions/84#discussioncomment-19911159`，#85 测试计数更新为 179/177 `https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19911357`。调用或编辑和别名回读均退出 0。源码提交 `a40740038449fae9d39b60c288e906dc3bd78108`，隔离止损测试 24 项通过、全量 179 项中 177 项通过、2 项按隔离条件跳过；两次回放 SHA-256 `bd79bce983c1defa47d8f038788b0100d5b66fc039e0e60d042d7d0c5d46711e`。下一步更新报告推送，继续保持原前瞻登记门槛。
+- 05:09 UTC，报告提交 `3aeb40e6a2de042a38fefacb6c014b1f5a0e7111` 的 `git diff --check` 退出 0，推送退出 0，`git ls-remote` 核对分支 SHA 为 `3aeb40e6a2de042a38fefacb6c014b1f5a0e7111`。价格劣化诊断的确定性结论为拦掉 48 笔后仍亏损；费用、过度率、同合同第二源和被拦后果仍不确定。下一阶段继续前瞻等待并核验新数据，不修改已登记阈值。
 
 ## 2026-11-26 05:03 UTC · 原生预检价格劣化规则回放
 
