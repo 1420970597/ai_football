@@ -185,7 +185,7 @@ def analyze(cohort, metadata, *, bootstrap_rounds=DEFAULT_ROUNDS):
             'stress_roi_per_settled_order': stress_units / settled if settled else None,
             'missing_fee_orders': missing_fees,
             'missing_currency_orders': missing_currency,
-            'market_mix': _market_summary(trades),
+            'market_mix': _market_summary([(row, receipt) for row, _, receipt in trades]),
             'fixture_cluster_intervals': intervals,
             'same_expert_comparison': {
                 'paired_experts': len(paired),
