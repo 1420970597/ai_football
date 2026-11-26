@@ -84,4 +84,3 @@ class StopLossReplayTest(unittest.TestCase):
         self.assertEqual(result["one_per_fixture"]["selected"], 2)
         self.assertEqual(result["daily_loss_1"]["selected"], 2)
         self.assertEqual(result["baseline"]["settled_receipts"], 2)
-
