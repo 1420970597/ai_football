@@ -155,6 +155,8 @@
 - 隔离验证：定向命令 `bash infra/profitability/experiments/run-isolated.sh e03ccfad .runtime/profitability-experiments-20261122/input .runtime/profitability-experiments-20261122/public -- -m unittest discover -s tests -p 'test_profitability_experiments_competition_analysis.py' -v` 退出 0，6/6 通过。完整命令 `... -- -m unittest discover -s tests -p 'test_profitability*.py'` 退出 0，185 项中 183 通过、2 项按既有数据库隔离条件跳过。
 - 真实归档命令在固定镜像、`--network none --read-only --cpus .5 --memory 384m` 容器运行两次：`bash infra/profitability/experiments/run-isolated.sh e03ccfad .runtime/profitability-experiments-20261122/input .runtime/profitability-experiments-20261122/public -- -m infra.profitability.experiments.competition_analysis /input/native-cohort.json /input/league-fixture-metadata.json --bootstrap-rounds 100000`。两份输出 `cmp` 退出 0，更新后结果 SHA-256 为 `80b1068e917dfd338a8d6d2426463725cb9f67825cc42627e472d5075edcb89c`。
 - 产物：`reports/profitability-league-integrity-20261126.md`。下一步更新 C06 远程讨论与结果索引，并将本阶段报告推送到已有任务分支；之后继续前瞻窗口，验证时间固定的联赛 ID、被拒绝机会分母、同合同市场报价和费用凭证。
+- 08:17 UTC，首次 `git diff --cached --check` 退出 2，原因是报告元信息两行有 Markdown 换行尾空格。删除尾空格后同一检查退出 0，提交 `b058eeef` 包含代码、测试、报告、索引和进度。`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync` 退出 0，`git ls-remote` 核对远端 SHA `b058eeef5bddade78d5761515841e7bacde7c24a`。
+- C06 Discussion #85 已新增联赛分层评论，`gh api graphql` 写入及按 comment ID 回读均退出 0，评论地址 https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19915363。评论内容披露赛事 ID 全空、费用缺失、样本小及“收益筛查不等于操纵证据”。
 
 ## 2026-11-26 05:03 UTC · 原生预检价格劣化规则回放
 
