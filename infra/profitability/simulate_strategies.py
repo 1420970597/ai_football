@@ -65,7 +65,9 @@ class Receipt:
     @property
     def stressed_return(self):
         # Unknown fees remain a separate coverage failure. This value is diagnostic in that case.
-        return self.unit_return - (self.unit_fees or ZERO) - self.slippage_cost
+        verified_fee = self.unit_fees if self.unit_fees is not None and self.currency is not None else ZERO
+        slippage = self.slippage_cost if self.unit_return != ZERO else ZERO
+        return self.unit_return - verified_fee - slippage
 
 
 @dataclass(frozen=True)

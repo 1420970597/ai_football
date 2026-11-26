@@ -3,8 +3,9 @@
 Decisions use only valid receipts observed before each placement. The daily loss
 budget uses the UTC settlement-observation day. Simultaneous settlements are
 applied as one batch so receipt ordering cannot change the stop result.
-Unknown fees and currency remain visible. The 0.02 haircut applies only to
-positive returns, matching the registered paper evaluator.
+Unknown fees and currency remain visible. The fixed 0.02 stress cost applies
+to non-push returns, matching the registered paper evaluator and the one-unit
+push rule.
 """
 
 from collections import defaultdict
@@ -15,7 +16,7 @@ import argparse
 import json
 from pathlib import Path
 
-from infra.profitability.simulate_strategies import Fill, STRESS_COST
+from infra.profitability.simulate_strategies import Fill
 
 
 ZERO = Decimal("0")
@@ -49,10 +50,7 @@ def _utc(value):
 def _stressed(receipt):
     if receipt.unit_return is None:
         return None
-    value = receipt.unit_return * (Decimal(1) - STRESS_COST) if receipt.unit_return > ZERO else receipt.unit_return
-    if receipt.unit_fees is not None and receipt.currency is not None:
-        value -= receipt.unit_fees
-    return value
+    return receipt.stressed_return
 
 
 def _visible_settlement(fill, cutoff):
@@ -216,7 +214,7 @@ def replay(document, policy_specs=POLICIES):
         "rows_in_archive": len(fills),
         "eligible_orders": len(eligible),
         "excluded_outside_window": len(fills) - len(eligible),
-        "stress": "98% of positive unit return; subtract only known per-unit fees with currency",
+        "stress": "fixed 0.02 per-unit cost on non-push returns; subtract fees only when fee and currency are known",
         "daily_loss_basis": "UTC settlement-observation date",
         "simultaneous_settlement_rule": "apply each timestamp group as one net batch; mixed batch resets consecutive-loss count",
         "policies": output,

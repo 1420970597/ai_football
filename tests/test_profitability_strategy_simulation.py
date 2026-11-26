@@ -70,6 +70,16 @@ class ProfitabilityStrategySimulationTest(unittest.TestCase):
         receipt = Receipt.parse(row, START)
         self.assertEqual(Decimal('0.97'), receipt.stressed_return)
 
+    def test_push_has_no_stress_cost_and_unknown_currency_fee_is_not_deducted(self):
+        receipt = Receipt.parse({
+            'observed_at': (START + timedelta(hours=3)).isoformat(),
+            'settled_at': (START + timedelta(hours=2)).isoformat(),
+            'stake': '1', 'payout': '1', 'net': '-0.1', 'fees': '0.1', 'currency': None,
+        }, START)
+        self.assertEqual(Decimal('0'), receipt.unit_return)
+        self.assertIsNone(receipt.currency)
+        self.assertEqual(Decimal('0'), receipt.stressed_return)
+
     def test_registered_synthetic_positive_series_exercises_all_validation_conditions(self):
         end = START + timedelta(days=28)
         rows = [fill(START + timedelta(days=day, minutes=n), day * 8 + n,

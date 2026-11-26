@@ -192,6 +192,14 @@ class StopLossReplayTest(unittest.TestCase):
         self.assertEqual(result["stressed_units_after_known_fees_before_unknown_fees"], Decimal("0.96"))
         self.assertEqual(result["settled_orders_missing_fee_or_currency_at_cutoff"], 1)
 
+    def test_stop_loss_uses_the_registered_fixed_stress_cost(self):
+        item = row("1", "f1", "2026-11-01T10:00:00", "2")
+        fill = Fill.parse(item)
+        receipt = fill.latest_receipt(datetime.fromisoformat(CUTOFF))
+        self.assertEqual(receipt.stressed_return, Decimal("0.18"))
+        result = policies_for(document([item]))["baseline"]
+        self.assertEqual(result["stressed_units_after_known_fees_before_unknown_fees"], Decimal("0.18"))
+
     def test_pushes_do_not_form_a_losing_streak(self):
         pushes = [
             row("1", "f1", "2026-11-01T10:00:00", "0"),
@@ -221,7 +229,7 @@ class StopLossReplayTest(unittest.TestCase):
         self.assertEqual(latest.unit_return, Decimal("-1"))
         result = policies_for(document([item]))["baseline"]
         self.assertEqual(result["settled_receipts"], 1)
-        self.assertEqual(result["stressed_units_after_known_fees_before_unknown_fees"], Decimal("-1"))
+        self.assertEqual(result["stressed_units_after_known_fees_before_unknown_fees"], Decimal("-1.02"))
 
     def test_conflicting_receipt_versions_with_identical_time_are_ambiguous(self):
         item = row("1", "f1", "2026-11-01T10:00:00", "-10",
