@@ -46,7 +46,9 @@ def _stressed(receipt):
 
 
 def _events(fill, cutoff):
-    visible = [receipt for receipt in fill.receipts if receipt.observed_at < cutoff]
+    visible = [receipt for receipt in fill.receipts
+               if receipt.settled_at is not None and receipt.unit_return is not None
+               and receipt.observed_at < cutoff]
     if not visible:
         return None
     receipt = max(visible, key=lambda item: item.observed_at)
@@ -147,7 +149,11 @@ def replay(document, policy_specs=POLICIES):
                 continue
             state["selected"].append({"fill": fill})
             state["open_by_fixture"][fill.fixture].append({"fill": fill})
-            if any(r.unit_fees is None or r.currency is None for r in fill.receipts):
+            latest = [r for r in fill.receipts
+                      if r.settled_at is not None and r.unit_return is not None
+                      and r.observed_at < cutoff]
+            receipt = max(latest, key=lambda item: item.observed_at) if latest else None
+            if receipt is not None and (receipt.unit_fees is None or receipt.currency is None):
                 state["unknown_fee_currency"] += 1
     output = []
     for state in states.values():
