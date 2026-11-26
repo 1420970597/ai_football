@@ -142,6 +142,7 @@
 - 05:08 UTC，原生赔率劣化回放结果已更新至 #81 `https://github.com/1420970597/ai_football/discussions/81#discussioncomment-19911655`，#84 原回帖已编辑为最终结果 `https://github.com/1420970597/ai_football/discussions/84#discussioncomment-19911159`，#85 测试计数更新为 179/177 `https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19911357`。调用或编辑和别名回读均退出 0。源码提交 `a40740038449fae9d39b60c288e906dc3bd78108`，隔离止损测试 24 项通过、全量 179 项中 177 项通过、2 项按隔离条件跳过；两次回放 SHA-256 `bd79bce983c1defa47d8f038788b0100d5b66fc039e0e60d042d7d0c5d46711e`。下一步更新报告推送，继续保持原前瞻登记门槛。
 - 05:09 UTC，报告提交 `3aeb40e6a2de042a38fefacb6c014b1f5a0e7111` 的 `git diff --check` 退出 0，推送退出 0，`git ls-remote` 核对分支 SHA 为 `3aeb40e6a2de042a38fefacb6c014b1f5a0e7111`。价格劣化诊断的确定性结论为拦掉 48 笔后仍亏损；费用、过度率、同合同第二源和被拦后果仍不确定。下一阶段继续前瞻等待并核验新数据，不修改已登记阈值。
 - 05:09 UTC，最新进度与已验证报告推送后，远端任务分支读回为 `b57cd055bd3b3dcbab64ad1ca481b51d1eabb61b`。`git diff --check origin/fix/TASK-78-hermes-telegram-sync..HEAD` 退出 0，任务涉及文件状态干净。五个自动后续任务仍 enabled，下一次首周检查在 11 月 28 日 05:10 UTC；本项目中其他既有脏文件均保留未动。继续目标为按原样本窗检查独立价格合同、费用凭证和风险边界，用户未确认完成前不停止。
+- 05:09 UTC，进度尾注提交后 push 和远端 `ls-remote` 均退出 0，分支现为 `1910aceaf64c1d4b02d6d436d621895e9fa8201e`。当前阶段交付已同步，长期验收与自动检查继续。
 
 ## 2026-11-26 05:03 UTC · 原生预检价格劣化规则回放
 
