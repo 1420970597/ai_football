@@ -16,7 +16,7 @@ import argparse
 import json
 from pathlib import Path
 
-from infra.profitability.simulate_strategies import Fill
+from infra.profitability.simulate_strategies import Fill, decimal
 
 
 ZERO = Decimal("0")
@@ -33,6 +33,7 @@ POLICIES = (
     {"name": "consecutive_losses_5", "kind": "consecutive", "loss_limit": 5},
     {"name": "fixture_1_daily_loss_2", "kind": "combined",
      "fixture_limit": 1, "daily_loss_limit": Decimal("2")},
+    {"name": "reject_native_price_degradation_only", "kind": "price_degradation"},
     {"name": "native_price_quality_only", "kind": "price_quality"},
     {"name": "price_quality_fixture_1_daily_loss_2", "kind": "quality_combined",
      "fixture_limit": 1, "daily_loss_limit": Decimal("2")},
@@ -63,10 +64,29 @@ def _visible_settlement(fill, cutoff):
     return receipt.observed_at, value, fill.placed_at.date(), fill.fixture, fill.order
 
 
-def _policy_block_reason(policy, state, fill):
+def _native_price_not_worse(row):
+    try:
+        placed = _utc(row["placed_at"])
+        signal_at = _utc(row["signal_at"])
+        preflight_at = _utc(row["preflight_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    signal_price = decimal(row.get("signal_price"))
+    preflight_price = decimal(row.get("preflight_price"))
+    return (
+        signal_at <= preflight_at <= placed
+        and signal_price is not None
+        and preflight_price is not None
+        and preflight_price >= signal_price > Decimal(1)
+    )
+
+
+def _policy_block_reason(policy, state, fill, price_not_worse):
     kind = policy["kind"]
     if kind == "evidence_gate":
         return "no_verified_cost_schedule"
+    if kind == "price_degradation" and not price_not_worse:
+        return "native_price_degradation_or_missing"
     if kind in {"price_quality", "quality_combined"} and not fill.price_quality:
         return "native_price_quality"
     if kind in {"fixture", "combined", "quality_combined"}:
@@ -136,6 +156,7 @@ def replay(document, policy_specs=POLICIES):
 
     order_ids = []
     fills = []
+    price_not_worse_by_order = {}
     for row in document["rows"]:
         if not isinstance(row, dict):
             raise ValueError("cohort rows must be objects")
@@ -148,6 +169,7 @@ def replay(document, policy_specs=POLICIES):
             raise ValueError("cohort order_id must be a non-empty string")
         order_ids.append(order_id)
         fills.append(fill)
+        price_not_worse_by_order[order_id] = _native_price_not_worse(row)
     if len(order_ids) != len(set(order_ids)):
         raise ValueError("duplicate order_id in cohort")
 
@@ -174,7 +196,9 @@ def replay(document, policy_specs=POLICIES):
         for state in states.values():
             _rebuild_visible(state, fill.placed_at)
             _release(state, fill.placed_at)
-            reason = _policy_block_reason(state["policy"], state, fill)
+            reason = _policy_block_reason(
+                state["policy"], state, fill, price_not_worse_by_order[fill.order]
+            )
             if reason is not None:
                 state["blocked"] += 1
                 state["blocked_reasons"][reason] += 1

@@ -265,6 +265,21 @@ class StopLossReplayTest(unittest.TestCase):
         self.assertEqual((result["selected"], result["blocked"]), (1, 1))
         self.assertEqual(result["blocked_reasons"], {"native_price_quality": 1})
 
+    def test_price_degradation_gate_is_separate_from_overround_evidence(self):
+        unchanged = row("1", "f1", "2026-11-01T10:00:00", "-10")
+        unchanged["overround"] = None
+        worse = row("2", "f2", "2026-11-01T10:02:00", "10", preflight_price="1.9")
+        missing = row("3", "f3", "2026-11-01T10:04:00", "10")
+        missing["preflight_price"] = None
+        result = policies_for(document([unchanged, worse, missing]))
+        degradation = result["reject_native_price_degradation_only"]
+        strict = result["native_price_quality_only"]
+        self.assertEqual((degradation["selected"], degradation["blocked"]), (1, 2))
+        self.assertEqual(degradation["blocked_reasons"], {
+            "native_price_degradation_or_missing": 2,
+        })
+        self.assertEqual(strict["selected"], 0)
+
     def test_unknown_fees_do_not_use_a_future_revision_at_decision(self):
         item = row("1", "f1", "2026-11-01T10:00:00", "-5",
                    observed="2026-11-01T10:01:00")
