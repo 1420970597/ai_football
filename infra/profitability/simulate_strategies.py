@@ -96,9 +96,11 @@ class Fill:
                    tuple(Receipt.parse(receipt, placed) for receipt in row['receipts']))
 
     def latest_receipt(self, cutoff):
-        # A correction received at the decision timestamp is not known to that decision.
+        # Only settled, valid results count as realized outcomes. A correction
+        # received at the decision timestamp is not known to that decision.
         visible = [receipt for receipt in self.receipts
-                   if receipt.observed_at < cutoff and receipt.unit_return is not None]
+                   if receipt.observed_at < cutoff and receipt.settled_at is not None
+                   and receipt.unit_return is not None]
         if not visible:
             return None
         latest_at = max(receipt.observed_at for receipt in visible)

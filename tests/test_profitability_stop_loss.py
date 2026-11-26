@@ -278,3 +278,21 @@ class StopLossReplayTest(unittest.TestCase):
         second = row("2", "f2", "2026-11-01T10:00:30", "-10")
         result = policies_for(document([first, second]))["daily_loss_1"]
         self.assertEqual((result["selected"], result["blocked"]), (2, 0))
+
+    def test_simulator_excludes_unsettled_receipt_from_realized_outcomes(self):
+        pending = row("1", "f1", "2026-11-01T10:00:00", "-10", settled=False)
+        fill = Fill.parse(pending)
+        self.assertIsNone(fill.latest_receipt(datetime.fromisoformat(CUTOFF)))
+
+    def test_unsettled_revision_does_not_replace_latest_settled_outcome(self):
+        item = row("1", "f1", "2026-11-01T10:00:00", "10",
+                   observed="2026-11-01T10:05:00")
+        item["receipts"].append({
+            "net": "-10", "fees": None, "stake": "10", "payout": "0", "currency": None,
+            "settled_at": None,
+            "observed_at": "2026-11-01T10:10:00+00:00",
+        })
+        fill = Fill.parse(item)
+        latest = fill.latest_receipt(datetime.fromisoformat(CUTOFF))
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.unit_return, Decimal("1"))
