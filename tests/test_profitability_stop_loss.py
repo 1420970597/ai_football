@@ -73,3 +73,15 @@ class StopLossReplayTest(unittest.TestCase):
         self.assertEqual(result["baseline"]["settled_receipts"], 1)
         self.assertEqual(result["baseline"]["stressed_units_before_verified_fees"], Decimal("0.98"))
 
+    def test_unsettled_receipt_does_not_trigger_stop_or_release_fixture(self):
+        first = row("1", "same", "2026-11-01T10:00:00", "-10")
+        first["receipts"][0]["settled_at"] = None
+        second = row("2", "same", "2026-11-01T10:00:30", "-10")
+        third = row("3", "other", "2026-11-01T10:02:00", "-10")
+        result = {item["policy"]: item for item in replay({
+            "cutoff": "2026-11-04T00:00:00+00:00", "rows": [first, second, third],
+        })["policies"]}
+        self.assertEqual(result["one_per_fixture"]["selected"], 2)
+        self.assertEqual(result["daily_loss_1"]["selected"], 2)
+        self.assertEqual(result["baseline"]["settled_receipts"], 2)
+
