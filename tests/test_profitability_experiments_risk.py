@@ -179,6 +179,19 @@ class ExposureTest(unittest.TestCase):
         self.assertEqual(0, exposure_result['settled_entries'])
         self.assertEqual(1, exposure_result['pending_entries'])
 
+    def test_same_unit_return_with_conflicting_stakes_is_ambiguous(self):
+        placed = START + timedelta(hours=1)
+        observed = placed + timedelta(hours=1)
+        same_unit = [
+            receipt('10', '20', '10', observed, settled=placed + timedelta(minutes=30)),
+            receipt('20', '40', '20', observed, settled=placed + timedelta(minutes=30)),
+        ]
+        cap = capacity(document([order('a', placed, receipts=same_unit)]))
+        exposure_result = exposure(document([order('a', placed, receipts=same_unit)]))['policies']['all']
+        self.assertEqual(0, cap['denominator']['valid_receipt_orders'])
+        self.assertEqual(0, exposure_result['settled_entries'])
+        self.assertEqual(1, exposure_result['pending_entries'])
+
 
 if __name__ == '__main__':
     unittest.main()

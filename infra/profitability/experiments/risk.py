@@ -79,8 +79,8 @@ def _latest_valid(values, cutoff):
         return None
     latest_at = usable[-1][1].observed_at
     latest = [item for item in usable if item[1].observed_at == latest_at]
-    reference = latest[0][1]
-    if any(receipt != reference for _, receipt in latest[1:]):
+    reference_row, reference = latest[0]
+    if any(raw != reference_row or receipt != reference for raw, receipt in latest[1:]):
         return None
     return latest[-1]
 
