@@ -34,6 +34,8 @@
 
 本阶段没有购买 API、创建新账户或调用受限赔率接口。未把 API套餐价格转化为预期收益或投资建议。
 
+只读复核运行中的 API 与 reference-price 容器环境变量名称及挂载类型后，没有发现 The Odds API、Betfair、Polymarket 的接入密钥变量。参考服务只挂载本地 reference data、既有 public orderbook/score archives 和价格服务 socket。此检查只确认当前这两个容器配置，不能代替其他备份或外部用户账号盘点；没有读取或输出密钥值。
+
 若继续评估 The Odds API，先仅针对当前支持的精确足球联赛、滚球大小球和 half/full period做只读覆盖检查，必须保存请求区域、bookmaker、source timestamp、接收时间、盘口线和完整价格组。只要连续采样无法满足原 15 秒门槛，就不进入成本后策略收益测试。5分钟 historical odds适合模型校准，不作为回填成交价。
 
 Betfair 应先只读核验原账户是否可取得交易所 API stream、目标市场 catalogue/orderbook和 commission evidence。Polymarket只纳入能够证明 YES/NO问句、即时比分基础、结算规则、同一盘口线和可成交盘口深度完全相等的赛事。否则继续留作未映射，不降级成近似合同。

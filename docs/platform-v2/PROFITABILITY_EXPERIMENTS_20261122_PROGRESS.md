@@ -114,3 +114,4 @@
 - The Odds API官方价目页标明免费500 credits/月，20,000 credits档当前30美元/月。商业应用可使用其报价，但原始feed不可单独转售。仅文档研究，没有购买、注册、请求新密钥或访问受限账户。
 - Betfair 官方 Exchange API 有价格、成交量和低延迟 Stream API，现有样本映射与费用未证。Polymarket CLOB 提供二元 YES/NO 当前orderbook，官方说明显示价可以是中间价且开赛时自动撤单，不能将其视为滚球大小球直接替代价。
 - 阶段决策：不购买赔率API。只有先对新原生样本完成精确合同匹配、timestamp不超过15秒、全选项深度、费用和币种证明后，才纳入费后盈利计算。报告和官方链接已入库。
+- 当前运行的 API 和 reference-price 容器只读核对环境变量名与挂载类别，未发现 The Odds API / Betfair / Polymarket 的接入键。价格容器实际挂载仅含本地reference data、已有public orderbook/score archives及Unix socket，没有读/输出密钥值。范围仅涵盖这两个当前运行容器，不能外推外部账号。
