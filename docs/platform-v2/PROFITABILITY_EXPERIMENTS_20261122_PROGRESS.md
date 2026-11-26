@@ -144,6 +144,18 @@
 - 05:09 UTC，最新进度与已验证报告推送后，远端任务分支读回为 `b57cd055bd3b3dcbab64ad1ca481b51d1eabb61b`。`git diff --check origin/fix/TASK-78-hermes-telegram-sync..HEAD` 退出 0，任务涉及文件状态干净。五个自动后续任务仍 enabled，下一次首周检查在 11 月 28 日 05:10 UTC；本项目中其他既有脏文件均保留未动。继续目标为按原样本窗检查独立价格合同、费用凭证和风险边界，用户未确认完成前不停止。
 - 05:09 UTC，进度尾注提交后 push 和远端 `ls-remote` 均退出 0，分支现为 `1910aceaf64c1d4b02d6d436d621895e9fa8201e`。当前阶段交付已同步，长期验收与自动检查继续。
 
+## 2026-11-26 08:05 UTC · 联赛表现差异与比赛操纵假设初筛
+
+- 目标：检验专家结果是否随联赛/赛事分层变化，并判断亏损数据是否能支持比赛操纵假设。分析只读冻结受理订单及只读 API 数据库投影，没有改自动投注配置、生产代码或账户行为。
+- 结果队列：窗口 `2026-11-02T00:00:00Z` 至 `2026-11-20T03:00:00Z`，截止 `03:20Z`；453 笔已受理单、288 场、437 笔已结、16 笔未结、118 个显示名称分组；437 笔均缺费用和币种。总体压力单位 ROI −10.96%。让球 115 笔为 −22.63%，大小球 322 笔为 −6.79%。该差异可以由玩法构成影响联赛聚合值。
+- 映射审计修正：订单档不含联赛字段。按 `fixture_id` 连接的只读来源明确为 2026-11-26 当前赛事投影，288 行 `competition_id` 全部为 null。因此结果只能称为“按当前赛事显示名称分组”，不能视为下单时联赛 ID。报告已标注此限制，持久化层应在推荐时保存不可变赛事 ID 与名称快照。
+- 局部负向信号：巴西甲级联赛显示名称组 15 笔、7 场、5 位专家，压力 ROI −40.8%，6/7 场的平均压力收益为负；组内只有 2 位专家满足同专家配对最低样本。对 118 组调整后，穷举 7 个赛事簇的全部 823,543 个有序区块重采样结果（折叠为 1,716 个组合），familywise 区间约 −94.86% 至 −1.71%。精确枚举消除了蒙特卡洛尾部噪声，但 7 场仍不足以确认稳定分层效果，且不用于判定操纵。澳大利亚锦标赛 16 笔/5 场 ROI −50.7%、东南亚球会锦标赛 14 笔/6 场 ROI −38.1%，相应 familywise 区间均跨零。
+- 确定/不确定边界：确定的是冻结队列存在组间回报差异、全样本为负、费用币种未知且市场组合不同。可能的解释包括专家组成、赛事信息质量、市场效率、盘口构成、被接受样本选择和赛果方差，当前无法区分。没有本样本比赛对应的完整性预警、投注量/流动性轨迹、账户信息或赛事现场证据，因此不能从收益异常推断“某联赛严重假赛”。公开官方资料记录了巴西 2022–2023 年特定赛事的操纵案件，MPGO 于 2025 年通报首批三名被告判刑；该历史案件与本次 2026 年回放没有比赛级连接，不能外推到整个联赛。
+- 实现与提交：`e03ccfad` 补入联赛 ID 覆盖字段，对 5–7 个赛事簇精确枚举 familywise 区间，并添加两个边界测试。修改仅涉及 `competition_analysis.py` 和对应测试。
+- 隔离验证：定向命令 `bash infra/profitability/experiments/run-isolated.sh e03ccfad .runtime/profitability-experiments-20261122/input .runtime/profitability-experiments-20261122/public -- -m unittest discover -s tests -p 'test_profitability_experiments_competition_analysis.py' -v` 退出 0，6/6 通过。完整命令 `... -- -m unittest discover -s tests -p 'test_profitability*.py'` 退出 0，185 项中 183 通过、2 项按既有数据库隔离条件跳过。
+- 真实归档命令在固定镜像、`--network none --read-only --cpus .5 --memory 384m` 容器运行两次：`bash infra/profitability/experiments/run-isolated.sh e03ccfad .runtime/profitability-experiments-20261122/input .runtime/profitability-experiments-20261122/public -- -m infra.profitability.experiments.competition_analysis /input/native-cohort.json /input/league-fixture-metadata.json --bootstrap-rounds 100000`。两份输出 `cmp` 退出 0，更新后结果 SHA-256 为 `80b1068e917dfd338a8d6d2426463725cb9f67825cc42627e472d5075edcb89c`。
+- 产物：`reports/profitability-league-integrity-20261126.md`。下一步更新 C06 远程讨论与结果索引，并将本阶段报告推送到已有任务分支；之后继续前瞻窗口，验证时间固定的联赛 ID、被拒绝机会分母、同合同市场报价和费用凭证。
+
 ## 2026-11-26 05:03 UTC · 原生预检价格劣化规则回放
 
 - 目标区分价格质量门禁的证据覆盖失败与实际赔率变差。固定输入内 453 笔的价格字段和时钟齐全；预检价高于推荐价 93 笔、相同 312 笔、低于推荐价 48 笔。价差中位数 0，P90 +0.02，最小 -0.26、最大 +0.17。过度率缺失 450 笔，另 3 笔超出 0–0.05，严格价格质量通过 0 笔。
