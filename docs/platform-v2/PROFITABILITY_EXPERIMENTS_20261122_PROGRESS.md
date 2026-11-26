@@ -124,3 +124,5 @@
 - 本轮再次发现注册策略模拟器和止损回放对 0.02 压力成本定义不同。已统一为非走盘回报扣固定 0.02，费用和币种同时可核实时扣费。当前 36348cc7 首次目标测试有 2 个断言仍沿用旧压力成本回撤值，退出 1。修正测试预期后，73ffbf0f 的止损测试 23 项通过、策略模拟测试 6 项通过，盈利相关测试 174 项通过，其中 2 项依既有数据库隔离条件跳过。失败与修复链均保留。
 - 最终固定源码 `73ffbf0f27c45539210dab4896b75de34bc9f864` 在固定镜像、断网只读容器中对冻结输入运行两次，`cmp` 退出 0，JSON 摘要 SHA-256 为 `ec4aaa59097886f2f2f9b4b0321b7cc9d5bb840412af66b356ba523d1d7d3f70`。基线 453 笔中 437 笔已结，费用或币种仍全部缺失；基线压力单位收益为 -47.888。最大回撤 2 单位留下 22 笔、-3.635；每日已结亏损 1 单位留下 234 笔、-19.563；每日已结亏损 2 单位留下 300 笔、-24.446。每个可计收益方案仍为负，且被拦机会后果未知，不能据此宣布止损方案盈利。
 - 报告 `reports/profitability-stop-loss-20261122.md` 已替换旧表格并补入 Pi 审计逐项复核、明确日亏损口径及失败记录。下一步更新远端讨论，推送这批经验证结果，随后继续前瞻样本的价格、费用和现金风险证据审查。
+
+- 04:35 UTC，`git diff --check origin/fix/TASK-78-hermes-telegram-sync..HEAD` 退出 0；`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync` 退出 0，`git ls-remote` 核对远端提交为 `380b83ec78ea3595119d62b17174f3153e5cb88c`。GitHub Discussion #84 更新见 https://github.com/1420970597/ai_football/discussions/84#discussioncomment-19911159，#85 更新见 https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19911164；创建后分别回读确认，GraphQL 查询均退出 0。五个定期/终验任务状态回读全部 enabled，下一次 11 月 28 日 05:10 UTC。
