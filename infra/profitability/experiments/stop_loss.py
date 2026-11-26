@@ -1,33 +1,40 @@
 """Replay conservative stop-loss policies on the accepted native cohort.
 
-Only receipts observed before the next placement can affect that placement.
-Unknown fees and currencies remain an evidence gap. The reported stressed units
-subtract the registered 0.02 profit haircut, but do not invent account fees.
+Decisions use only valid receipts observed before each placement. The daily loss
+budget uses the UTC settlement-observation day. Simultaneous settlements are
+applied as one batch so receipt ordering cannot change the stop result.
+Unknown fees and currency remain visible. The 0.02 haircut applies only to
+positive returns, matching the registered paper evaluator.
 """
 
 from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import groupby
 import argparse
 import json
 from pathlib import Path
 
-from infra.profitability.simulate_strategies import Fill, Receipt, STRESS_COST
+from infra.profitability.simulate_strategies import Fill, STRESS_COST
 
 
 ZERO = Decimal("0")
 POLICIES = (
     {"name": "baseline", "kind": "baseline"},
-    {"name": "one_per_fixture", "kind": "fixture", "limit": 1},
-    {"name": "two_per_fixture", "kind": "fixture", "limit": 2},
-    {"name": "daily_loss_1", "kind": "daily_loss", "limit": Decimal("1")},
-    {"name": "daily_loss_2", "kind": "daily_loss", "limit": Decimal("2")},
-    {"name": "daily_loss_3", "kind": "daily_loss", "limit": Decimal("3")},
-    {"name": "drawdown_2", "kind": "drawdown", "limit": Decimal("2")},
-    {"name": "drawdown_3", "kind": "drawdown", "limit": Decimal("3")},
-    {"name": "consecutive_losses_3", "kind": "consecutive", "limit": 3},
-    {"name": "consecutive_losses_5", "kind": "consecutive", "limit": 5},
-    {"name": "fixture_1_daily_loss_2", "kind": "combined", "limit": Decimal("2")},
+    {"name": "one_per_fixture", "kind": "fixture", "fixture_limit": 1},
+    {"name": "two_per_fixture", "kind": "fixture", "fixture_limit": 2},
+    {"name": "daily_loss_1", "kind": "daily_loss", "daily_loss_limit": Decimal("1")},
+    {"name": "daily_loss_2", "kind": "daily_loss", "daily_loss_limit": Decimal("2")},
+    {"name": "daily_loss_3", "kind": "daily_loss", "daily_loss_limit": Decimal("3")},
+    {"name": "drawdown_2", "kind": "drawdown", "drawdown_limit": Decimal("2")},
+    {"name": "drawdown_3", "kind": "drawdown", "drawdown_limit": Decimal("3")},
+    {"name": "consecutive_losses_3", "kind": "consecutive", "loss_limit": 3},
+    {"name": "consecutive_losses_5", "kind": "consecutive", "loss_limit": 5},
+    {"name": "fixture_1_daily_loss_2", "kind": "combined",
+     "fixture_limit": 1, "daily_loss_limit": Decimal("2")},
+    {"name": "native_price_quality_only", "kind": "price_quality"},
+    {"name": "price_quality_fixture_1_daily_loss_2", "kind": "quality_combined",
+     "fixture_limit": 1, "daily_loss_limit": Decimal("2")},
     {"name": "strict_cost_evidence_gate", "kind": "evidence_gate"},
 )
 
@@ -42,77 +49,114 @@ def _utc(value):
 def _stressed(receipt):
     if receipt.unit_return is None:
         return None
-    return receipt.unit_return - STRESS_COST
+    value = receipt.unit_return * (Decimal(1) - STRESS_COST) if receipt.unit_return > ZERO else receipt.unit_return
+    if receipt.unit_fees is not None and receipt.currency is not None:
+        value -= receipt.unit_fees
+    return value
 
 
-def _events(fill, cutoff):
-    visible = [receipt for receipt in fill.receipts
-               if receipt.settled_at is not None and receipt.unit_return is not None
-               and receipt.observed_at < cutoff]
-    if not visible:
+def _visible_settlement(fill, cutoff):
+    receipt = fill.latest_receipt(cutoff)
+    if receipt is None or receipt.settled_at is None:
         return None
-    receipt = max(visible, key=lambda item: item.observed_at)
     value = _stressed(receipt)
-    return (receipt.observed_at, value) if value is not None else None
+    if value is None:
+        return None
+    return receipt.observed_at, value, fill.placed_at.date(), fill.fixture, fill.order
 
 
-def _peak_drawdown(balance, peak):
-    return max(ZERO, peak - balance)
-
-
-def _policy_allows(policy, state, fixture, placed):
+def _policy_block_reason(policy, state, fill):
     kind = policy["kind"]
-    if kind in {"drawdown", "consecutive"} and state["latched"]:
-        return False
-    if kind in {"fixture", "combined"}:
-        held = state["open_by_fixture"].get(fixture, [])
-        if len(held) >= policy["limit"] if kind == "fixture" else len(held) >= 1:
-            return False
-    if kind in {"daily_loss", "combined"}:
-        if placed.date() in state["daily_latched"] or state["daily"][placed.date()] <= -policy["limit"]:
-            return False
-    if kind == "drawdown" and state["peak"] - state["balance"] >= policy["limit"]:
-        return False
-    if kind == "consecutive" and state["consecutive_losses"] >= policy["limit"]:
-        return False
     if kind == "evidence_gate":
-        return False
-    return True
+        return "no_verified_cost_schedule"
+    if kind in {"price_quality", "quality_combined"} and not fill.price_quality:
+        return "native_price_quality"
+    if kind in {"fixture", "combined", "quality_combined"}:
+        positions = state["open_by_fixture"].get(fill.fixture, ())
+        if len(positions) >= policy["fixture_limit"]:
+            return "fixture_limit"
+    if kind in {"daily_loss", "combined", "quality_combined"}:
+        if state["daily"][fill.placed_at.date()] <= -policy["daily_loss_limit"]:
+            return "daily_loss"
+    if kind == "drawdown" and state["peak"] - state["balance"] >= policy["drawdown_limit"]:
+        return "drawdown"
+    if kind == "consecutive" and state["consecutive_losses"] >= policy["loss_limit"]:
+        return "consecutive_losses"
+    return None
 
 
 def _release(state, current):
     for fixture, positions in state["open_by_fixture"].items():
-        remaining = []
-        for entry in positions:
-            visible = _events(entry["fill"], current)
-            if visible is None or visible[0] >= current:
-                remaining.append(entry)
-        positions[:] = remaining
+        positions[:] = [
+            entry for entry in positions
+            if _visible_settlement(entry["fill"], current) is None
+        ]
 
 
 def _rebuild_visible(state, current):
-    state["balance"] = ZERO
     state["daily"] = defaultdict(lambda: ZERO)
+    state["balance"] = ZERO
     state["peak"] = ZERO
+    state["max_drawdown"] = ZERO
     state["consecutive_losses"] = 0
+
     events = []
     for selected in state["selected"]:
-        visible = _events(selected["fill"], current)
-        if visible is not None:
-            events.append(visible)
-    for observed, value in sorted(events):
-        state["balance"] += value
+        event = _visible_settlement(selected["fill"], current)
+        if event is not None:
+            events.append(event)
+
+    events.sort(key=lambda event: (event[0], event[2], event[3], event[4]))
+    for _, timestamp_group in groupby(events, key=lambda event: event[0]):
+        batch = list(timestamp_group)
+        batch_return = sum((event[1] for event in batch), ZERO)
+        state["balance"] += batch_return
         state["peak"] = max(state["peak"], state["balance"])
-        state["daily"][observed.date()] += value
-        state["max_drawdown"] = max(state["max_drawdown"], _peak_drawdown(state["balance"], state["peak"]))
-        state["consecutive_losses"] = state["consecutive_losses"] + 1 if value < 0 else 0
+        state["max_drawdown"] = max(
+            state["max_drawdown"],
+            max(ZERO, state["peak"] - state["balance"]),
+        )
+        settlement_day = batch[0][0].date()
+        state["daily"][settlement_day] += batch_return
+        if batch and all(event[1] < ZERO for event in batch):
+            state["consecutive_losses"] += len(batch)
+        else:
+            state["consecutive_losses"] = 0
 
 
 def replay(document, policy_specs=POLICIES):
     if not isinstance(document, dict) or not isinstance(document.get("rows"), list):
-        raise ValueError("cohort requires rows")
-    cutoff = _utc(document["cutoff"])
-    fills = sorted((Fill.parse(row) for row in document["rows"]), key=lambda f: (f.placed_at, f.order))
+        raise ValueError("cohort requires a rows array")
+    try:
+        begin = _utc(document["begin"])
+        end = _utc(document["end"])
+        cutoff = _utc(document["cutoff"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("cohort requires begin, end and cutoff UTC timestamps") from error
+    if not begin < end <= cutoff:
+        raise ValueError("cohort interval must be ordered and no later than cutoff")
+
+    order_ids = []
+    fills = []
+    for row in document["rows"]:
+        if not isinstance(row, dict):
+            raise ValueError("cohort rows must be objects")
+        try:
+            order_id = row["order_id"]
+            fill = Fill.parse(row)
+        except (KeyError, TypeError, ValueError, ArithmeticError) as error:
+            raise ValueError("cohort contains a malformed order row") from error
+        if not isinstance(order_id, str) or not order_id:
+            raise ValueError("cohort order_id must be a non-empty string")
+        order_ids.append(order_id)
+        fills.append(fill)
+    if len(order_ids) != len(set(order_ids)):
+        raise ValueError("duplicate order_id in cohort")
+
+    eligible = [
+        fill for fill in fills
+        if begin <= fill.placed_at < end and fill.placed_at < cutoff
+    ]
     states = {}
     for policy in policy_specs:
         states[policy["name"]] = {
@@ -123,64 +167,63 @@ def replay(document, policy_specs=POLICIES):
             "peak": ZERO,
             "max_drawdown": ZERO,
             "consecutive_losses": 0,
-            "latched": False,
-            "daily_latched": set(),
             "selected": [],
             "blocked": 0,
             "blocked_reasons": defaultdict(int),
-            "unknown_fee_currency": 0,
         }
-    for fill in fills:
+
+    for fill in sorted(eligible, key=lambda item: (item.placed_at, item.order)):
         for state in states.values():
             _rebuild_visible(state, fill.placed_at)
             _release(state, fill.placed_at)
-            policy = state["policy"]
-            if policy["kind"] == "evidence_gate":
+            reason = _policy_block_reason(state["policy"], state, fill)
+            if reason is not None:
                 state["blocked"] += 1
-                state["blocked_reasons"]["no_verified_cost_schedule"] += 1
-                continue
-            if not _policy_allows(policy, state, fill.fixture, fill.placed_at):
-                state["blocked"] += 1
-                state["blocked_reasons"][policy["kind"]] += 1
-                if policy["kind"] in {"drawdown", "consecutive"}:
-                    state["latched"] = True
-                if policy["kind"] in {"daily_loss", "combined"}:
-                    state["daily_latched"].add(fill.placed_at.date())
+                state["blocked_reasons"][reason] += 1
                 continue
             state["selected"].append({"fill": fill})
             state["open_by_fixture"][fill.fixture].append({"fill": fill})
-            latest = [r for r in fill.receipts
-                      if r.settled_at is not None and r.unit_return is not None
-                      and r.observed_at < cutoff]
-            receipt = max(latest, key=lambda item: item.observed_at) if latest else None
-            if receipt is not None and (receipt.unit_fees is None or receipt.currency is None):
-                state["unknown_fee_currency"] += 1
+
     output = []
     for state in states.values():
         _rebuild_visible(state, cutoff)
-        settlements = sum(_events(selected["fill"], cutoff) is not None for selected in state["selected"])
+        latest_settlements = [
+            _visible_settlement(entry["fill"], cutoff)
+            for entry in state["selected"]
+        ]
+        latest_settlements = [event for event in latest_settlements if event is not None]
+        unknown_fees = 0
+        for entry in state["selected"]:
+            receipt = entry["fill"].latest_receipt(cutoff)
+            if receipt is not None and receipt.settled_at is not None:
+                unknown_fees += int(receipt.unit_fees is None or receipt.currency is None)
+
         output.append({
             "policy": state["policy"]["name"],
             "selected": len(state["selected"]),
             "blocked": state["blocked"],
-            "settled_receipts": settlements,
-            "stressed_units_before_verified_fees": state["balance"],
+            "settled_receipts": len(latest_settlements),
+            "stressed_units_after_known_fees_before_unknown_fees": state["balance"],
             "max_drawdown_units": state["max_drawdown"],
-            "unknown_fee_or_currency_orders": state["unknown_fee_currency"],
+            "settled_orders_missing_fee_or_currency_at_cutoff": unknown_fees,
             "blocked_reasons": dict(state["blocked_reasons"]),
             "evidence_status": "insufficient_fee_currency_evidence",
-            "uses_future_receipts": False,
         })
+
     return {
         "study": "stop_loss_replay",
-        "cutoff": cutoff.isoformat(),
-        "rows": len(fills),
-        "stress": "unit_return - 0.02 profit haircut; account fees remain unknown",
+        "window": {"begin": begin.isoformat(), "end": end.isoformat(), "cutoff": cutoff.isoformat()},
+        "rows_in_archive": len(fills),
+        "eligible_orders": len(eligible),
+        "excluded_outside_window": len(fills) - len(eligible),
+        "stress": "98% of positive unit return; subtract only known per-unit fees with currency",
+        "daily_loss_basis": "UTC settlement-observation date",
+        "simultaneous_settlement_rule": "apply each timestamp group as one net batch; mixed batch resets consecutive-loss count",
         "policies": output,
         "limits": [
             "accepted native cohort only; rejected opportunities are not estimable",
-            "a pending receipt cannot trigger a stop before it is observed",
-            "this is a loss containment replay, not proof of profitability",
+            "a pending, invalid, or future receipt cannot trigger a stop or release fixture exposure",
+            "the replay is loss containment analysis, not proof of profitability",
         ],
     }
 

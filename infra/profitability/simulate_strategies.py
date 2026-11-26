@@ -97,7 +97,16 @@ class Fill:
 
     def latest_receipt(self, cutoff):
         # A correction received at the decision timestamp is not known to that decision.
-        return next((receipt for receipt in reversed(self.receipts) if receipt.observed_at < cutoff), None)
+        visible = [receipt for receipt in self.receipts
+                   if receipt.observed_at < cutoff and receipt.unit_return is not None]
+        if not visible:
+            return None
+        latest_at = max(receipt.observed_at for receipt in visible)
+        latest = [receipt for receipt in visible if receipt.observed_at == latest_at]
+        reference = latest[0]
+        if any(receipt != reference for receipt in latest[1:]):
+            return None
+        return latest[-1]
 
 
 def expert_has_edge(candidate, history):
