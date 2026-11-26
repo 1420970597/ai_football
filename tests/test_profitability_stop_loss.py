@@ -49,8 +49,8 @@ class StopLossReplayTest(unittest.TestCase):
         result = {item["policy"]: item for item in replay(document)["policies"]}
         self.assertEqual(result["one_per_fixture"]["selected"], 1)
         self.assertEqual(result["one_per_fixture"]["blocked"], 1)
-        self.assertEqual(result["verified_fee_currency_only"]["selected"], 0)
-        self.assertEqual(result["verified_fee_currency_only"]["blocked"], 2)
+        self.assertEqual(result["strict_cost_evidence_gate"]["selected"], 0)
+        self.assertEqual(result["strict_cost_evidence_gate"]["blocked"], 2)
 
     def test_output_marks_unknown_fees_without_zero_filling(self):
         document = {"cutoff": "2026-11-04T00:00:00+00:00",

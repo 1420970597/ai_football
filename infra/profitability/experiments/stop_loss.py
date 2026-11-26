@@ -28,7 +28,7 @@ POLICIES = (
     {"name": "consecutive_losses_3", "kind": "consecutive", "limit": 3},
     {"name": "consecutive_losses_5", "kind": "consecutive", "limit": 5},
     {"name": "fixture_1_daily_loss_2", "kind": "combined", "limit": Decimal("2")},
-    {"name": "verified_fee_currency_only", "kind": "evidence"},
+    {"name": "strict_cost_evidence_gate", "kind": "evidence_gate"},
 )
 
 
@@ -75,7 +75,7 @@ def _policy_allows(policy, state, fixture, placed):
         return False
     if kind == "consecutive" and state["consecutive_losses"] >= policy["limit"]:
         return False
-    if kind == "evidence":
+    if kind == "evidence_gate":
         return False
     return True
 
@@ -135,9 +135,9 @@ def replay(document, policy_specs=POLICIES):
             _rebuild_visible(state, fill.placed_at)
             _release(state, fill.placed_at)
             policy = state["policy"]
-            if policy["kind"] == "evidence":
+            if policy["kind"] == "evidence_gate":
                 state["blocked"] += 1
-                state["blocked_reasons"]["missing_fee_currency_evidence"] += 1
+                state["blocked_reasons"]["no_verified_cost_schedule"] += 1
                 continue
             if not _policy_allows(policy, state, fill.fixture, fill.placed_at):
                 state["blocked"] += 1
