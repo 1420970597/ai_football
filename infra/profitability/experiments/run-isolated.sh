@@ -23,7 +23,7 @@ git -C "$root" archive "$commit" infra/profitability services \
 
 # This is the existing locally verified research runtime. A different image must
 # be evaluated independently and recorded with the resulting experiment.
-image=sha256:4acfffccaa3ea8ec8ef4f4775c779d1fd55fcc8bcef51ad2082e7e2594e2cfa4
+image=sha256:b3910d921ed6fcb2968129aa43bac0803895de46ace2881351ea3e623ee6d93c
 docker run --rm -i --pull never --network none --read-only \
     --cpus .5 --memory 384m --pids-limit 64 \
     --cap-drop ALL --security-opt no-new-privileges \
