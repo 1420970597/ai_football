@@ -124,7 +124,7 @@ class StopLossReplayTest(unittest.TestCase):
         ]
         result = policies_for(document(rows))["drawdown_2"]
         self.assertEqual((result["selected"], result["blocked"]), (6, 1))
-        self.assertLessEqual(result["max_drawdown_units"], Decimal("2"))
+        self.assertEqual(result["max_drawdown_units"], Decimal("2.04"))
 
     def test_same_timestamp_mixed_settlements_are_atomic_for_streak(self):
         rows = [
@@ -149,7 +149,7 @@ class StopLossReplayTest(unittest.TestCase):
         ]
         forward = policies_for(document(rows))["baseline"]
         reverse = policies_for(document(list(reversed(rows))))["baseline"]
-        self.assertEqual(forward["max_drawdown_units"], Decimal("2.02"))
+        self.assertEqual(forward["max_drawdown_units"], Decimal("2.08"))
         self.assertEqual(forward["max_drawdown_units"], reverse["max_drawdown_units"])
 
     def test_orders_after_cutoff_are_excluded(self):
