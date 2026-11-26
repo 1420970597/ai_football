@@ -1,10 +1,11 @@
 """C04/C05: accepted-order capacity stress and same-fixture exposure replay.
 
 Both studies read the frozen native cohort only. A receipt contributes money or
-a return only after ``simulate_strategies.Receipt.parse`` accepts it; a receipt
-that fails that contract is never repaired with zero. Entry principal is taken
-from the source row when it exists. It is never inferred from a later receipt,
-so an order without a source principal stays explicitly unknown.
+a return only after ``simulate_strategies.Receipt.parse`` accepts it and it is
+settled and visible; a receipt that fails that contract is never repaired with
+zero. Entry principal is taken from the source row when it exists. It is never
+inferred from a later receipt, so an order without a source principal stays
+explicitly unknown.
 
 C04 reports a capped-stake/fee matrix and a profit-part slippage matrix. The
 matrices are hypothetical stresses on accepted orders, not measured account
@@ -13,8 +14,10 @@ costs, and the unaccepted opportunity set is not estimable from this export.
 C05 replays orders in native ``placed_at`` order. A same-fixture position is
 released only by the first valid settled receipt that is strictly visible before
 the next entry. A receipt observed at the same instant keeps the position
-occupied. Final profit uses the latest valid receipt visible at the cutoff, so a
-correction changes the outcome without rewriting the historical decision.
+occupied. Final profit uses the latest valid settled receipt visible at the
+cutoff, so a correction changes the outcome without rewriting the historical
+decision. Conflicting versions with the same latest observation time are
+ambiguous and excluded from outcome totals.
 """
 
 from datetime import datetime, timedelta
@@ -65,13 +68,21 @@ def _receipts(row):
 
 def _valid(values, cutoff):
     usable = [(raw, receipt) for raw, receipt in values
-              if receipt.unit_return is not None and receipt.observed_at <= cutoff]
+              if receipt.settled_at is not None and receipt.unit_return is not None
+              and receipt.observed_at <= cutoff]
     return sorted(usable, key=lambda item: item[1].observed_at)
 
 
 def _latest_valid(values, cutoff):
     usable = _valid(values, cutoff)
-    return usable[-1] if usable else None
+    if not usable:
+        return None
+    latest_at = usable[-1][1].observed_at
+    latest = [item for item in usable if item[1].observed_at == latest_at]
+    reference = latest[0][1]
+    if any(receipt != reference for _, receipt in latest[1:]):
+        return None
+    return latest[-1]
 
 
 def _first_settled(values, cutoff):
@@ -249,7 +260,7 @@ def exposure(document):
         'study': 'C05',
         'denominator': {'rows': len(rows), 'ordered_entries': len(ordered)},
         'release_rule': 'first valid settled receipt observed strictly before the next entry',
-        'outcome_rule': 'latest valid receipt observed at or before cutoff',
+        'outcome_rule': 'latest valid settled receipt observed at or before cutoff; conflicting latest versions are excluded',
         'policies': results,
         'assumptions': [
             'entry principal is read from the source row only (stake/principal/source)',

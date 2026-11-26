@@ -87,6 +87,14 @@ class CapacityTest(unittest.TestCase):
         self.assertEqual(Decimal('20'), result['amounts']['recognized_turnover'])
         self.assertEqual(Decimal('0.5'), result['amounts']['recognized_gross_units'])
 
+    def test_unsettled_receipt_does_not_contribute_to_capacity_totals(self):
+        placed = START + timedelta(hours=1)
+        pending = receipt('10', '20', '10', placed + timedelta(hours=1))
+        result = capacity(document([order('pending', placed, receipts=[pending])]))
+        self.assertEqual({'rows': 1, 'valid_receipt_orders': 0,
+                          'orders_without_valid_receipt': 1}, result['denominator'])
+        self.assertEqual(Decimal('0'), result['amounts']['recognized_turnover'])
+
 
 class ExposureTest(unittest.TestCase):
     def test_release_is_strictly_before_the_next_entry(self):
@@ -145,6 +153,31 @@ class ExposureTest(unittest.TestCase):
         self.assertEqual(2, result['policies']['all']['pending_entries'])
         self.assertEqual('first valid settled receipt observed strictly before the next entry',
                          result['release_rule'])
+
+    def test_unsettled_revision_does_not_replace_last_settled_result(self):
+        placed = START + timedelta(hours=1)
+        revisions = [
+            receipt('10', '20', '10', placed + timedelta(hours=1),
+                    settled=placed + timedelta(minutes=30)),
+            receipt('10', '0', '-10', placed + timedelta(hours=2)),
+        ]
+        result = exposure(document([order('a', placed, receipts=revisions)]))['policies']['all']
+        self.assertEqual(1, result['settled_entries'])
+        self.assertEqual(0, result['pending_entries'])
+        self.assertEqual(Decimal('10'), result['realized_units'])
+
+    def test_conflicting_latest_settled_versions_are_excluded(self):
+        placed = START + timedelta(hours=1)
+        observed = placed + timedelta(hours=1)
+        same_time = [
+            receipt('10', '20', '10', observed, settled=placed + timedelta(minutes=30)),
+            receipt('10', '0', '-10', observed, settled=placed + timedelta(minutes=30)),
+        ]
+        cap = capacity(document([order('a', placed, receipts=same_time)]))
+        exposure_result = exposure(document([order('a', placed, receipts=same_time)]))['policies']['all']
+        self.assertEqual(0, cap['denominator']['valid_receipt_orders'])
+        self.assertEqual(0, exposure_result['settled_entries'])
+        self.assertEqual(1, exposure_result['pending_entries'])
 
 
 if __name__ == '__main__':
