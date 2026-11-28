@@ -158,6 +158,18 @@
 - 08:17 UTC，首次 `git diff --cached --check` 退出 2，原因是报告元信息两行有 Markdown 换行尾空格。删除尾空格后同一检查退出 0，提交 `b058eeef` 包含代码、测试、报告、索引和进度。`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync` 退出 0，`git ls-remote` 核对远端 SHA `b058eeef5bddade78d5761515841e7bacde7c24a`。
 - C06 Discussion #85 已新增联赛分层评论，`gh api graphql` 写入及按 comment ID 回读均退出 0，评论地址 https://github.com/1420970597/ai_football/discussions/85#discussioncomment-19915363。评论内容披露赛事 ID 全空、费用缺失、样本小及“收益筛查不等于操纵证据”。
 
+## 2026-11-28 05:15 UTC · 冻结登记首周 checkpoint
+
+- 目标：按冻结登记 `6997aecb206fc539ad02ed1da2d32416a5653f04`、评估器 `195369c25e9b0403953fd464e2cb187afe0a510d` 和 `2026-11-20T05:00:00Z` 起点，完成首周到 `2026-11-27T05:00:00Z`、结算 cutoff `2026-11-28T05:00:00Z` 的 checkpoint。结果分类采用通过/实测未通过/证据不足，不调参迎合本周数据。
+- 前置验证：`sha256sum "$d/sha256sums.txt"` 与指定摘要一致，退出 0；在 runner 目录执行 `sha256sum -c sha256sums.txt`，3/3 文件通过，退出 0。登记 JSON SHA 为 `bb83d1a7fdf956017840682a4555476862b04d1a5ea50fb5b944e9fb6dd8ed06`；登记的评估器 SHA 与从冻结提交重算的 `644895b4c1e194aea36ce1e1f03e7593e3415d2777ead3ed32577d6d0d7e2253` 一致。runner 固定应用镜像摘要匹配。
+- 首次启动在 runner 子目录中未定义 `d`，命令退出 127，提示 `/run_paper_holdout.sh` 不存在，没有 checkpoint 包。回到仓库根定义 `d=.runtime/profitability-experiments-20261122/event-followup/holdout-runner` 后执行原窗口命令，退出 0，归档为 `.runtime/profitability-simulation-20261120/holdout-bundles/checkpoint-20261128T051201.785445Z`。这一失败只为路径变量使用错误，未修改 runner、登记、样本或服务。
+- 归档完整性：包内 `sha256sum -c sha256sums.txt` 所列文件全部通过，退出 0；result SHA-256 `de5640040abc1434294619551806e53b17fe0f231c9f4bae3e69990772f72cb9`，包内清单 SHA-256 `fac80446bda255f1fd96920756edf8d0903a61ecdf4b43e216cd13e5f82ebc0d`，帧内容 SHA `97ee555e42fbce64da81505c5217f2800a70f91471ae37998590ae78b40f5daa`，结算 SHA `1071ba47533b18fd6fd16bbb44d12edffe783160320ebbf55a23088142731b48`，参考清单 SHA `49dacebcfd58755bc6822a0da36c1cd52fdca262aa4f904175659add317224b6`。
+- 确定数据：10,068/10,080 分钟档，缺 12；1,334 条候选观察分类中 9 条完整原生预检、4 条不可用；状态还包括盘口不完整 833、比分变更/未核实 268、来源不合格 118、来源超时 78、合同不支持 17、预算拦截 5、赛事未开放 2。9 条完整预检全部因 `reference_contract_missing` 被排除。参考清单 14 场、批准合同 0。费用目录 0 份文件，候选成本状态均为 `not_assessed`，上游报价时间 9 条均缺。
+- 结算：在 cutoff 可见版本中，8 条结果确认为 version 1，收到/计算时间均早于 cutoff；1 条 `versioned_settlement_pending`。这些结果只支持纸面逐项诊断，不解除 9 条的价格合同排除。API reader 为固定 SQL SELECT，在 `default_transaction_read_only=on` 和 repeatable-read readonly 事务运行。运行前后 `ai-football-v2-api-1` 容器 ID 均 `477e67637ad3`、状态 healthy。
+- 判定：正式策略 arm `selected=0, settled=0, fixtures=0`，ROI 和 95% 下界为 null。不能把 null 写成 0% 收益或零成本。当前周证据不足、checkpoint 未通过盈利验收；不能据此判定有合格策略下的负收益。本周只有一个完整周，200 场和四个正收益周门槛都未满足；本次结论不是实盘盈利或亏损。此前冻结受理样本压力回报仍负，止损试验不构成盈利证明。
+- 报告：`reports/profitability-paper-checkpoint-20261128.md`；索引同步至 `reports/profitability-experiments-results-20261122.md`。未改生产配置、限额或下单行为。
+- 下一阶段：把本周证据分别更新到 Discussions #80（12 个缺帧及报价时间）、#81（合同/来源/成本门槛）、#84（零选中和风险分母）、#85（判定与冻结四周门槛）、#86（候选拒绝分母）、#92（独立同合同双源），逐帖回读。随后提交推送进度和报告，并安排第二周 checkpoint `end=2026-12-04T05:00:00Z`, `cutoff=2026-12-05T05:00:00Z` 的有界自动检查。
+
 ## 2026-11-26 05:03 UTC · 原生预检价格劣化规则回放
 
 - 目标区分价格质量门禁的证据覆盖失败与实际赔率变差。固定输入内 453 笔的价格字段和时钟齐全；预检价高于推荐价 93 笔、相同 312 笔、低于推荐价 48 笔。价差中位数 0，P90 +0.02，最小 -0.26、最大 +0.17。过度率缺失 450 笔，另 3 笔超出 0–0.05，严格价格质量通过 0 笔。
