@@ -1,0 +1,73 @@
+# Overlay for the existing ai-football-v2 project. Keep its role-specific
+# image overrides; source credentials stay in private runtime env files.
+services:
+  migrate:
+    environment:
+      DATABASE_URL: ${LOCAL_DATABASE_MIGRATION_URL:?Configure the local migration role}
+      DATABASE_TRANSPORT: tls
+    volumes:
+      - {type: bind, source: ./.runtime/nov11-local-db/ca.crt, target: /run/secrets/local-db-ca.crt, read_only: true, bind: {create_host_path: false}}
+  api:
+    environment:
+      DATABASE_URL: ${LOCAL_DATABASE_URL:?Configure the local application role}
+      DATABASE_TRANSPORT: tls
+    volumes:
+      - {type: bind, source: ./.runtime/nov11-local-db/ca.crt, target: /run/secrets/local-db-ca.crt, read_only: true, bind: {create_host_path: false}}
+  review-worker:
+    environment:
+      DATABASE_URL: ${LOCAL_DATABASE_URL:?Configure the local application role}
+      DATABASE_TRANSPORT: tls
+    volumes:
+      - {type: bind, source: ./.runtime/nov11-local-db/ca.crt, target: /run/secrets/local-db-ca.crt, read_only: true, bind: {create_host_path: false}}
+  hermes-mcp:
+    environment:
+      PLATFORM_INTERNAL_API: http://local-mcp-api:8080/internal/mcp
+    depends_on: !override
+      local-mcp-api: {condition: service_healthy}
+  local-mcp-api:
+    image: ${LOCAL_MCP_API_IMAGE:?Pin the verified original MCP image plus storage migration}
+    command: [uvicorn, app.mcp_app:app, --host, 0.0.0.0, --port, '8080', --workers, '1', --no-access-log]
+    environment:
+      DATABASE_URL: ${LOCAL_DATABASE_URL:?Configure the local application role}
+      EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Reuse existing token}
+      COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Reuse existing token}
+      TELEGRAM_CONTROL_URL: http://remote-link:18092
+      QUOTE_MAX_AGE_SECONDS: ${QUOTE_MAX_AGE_SECONDS:-15}
+    volumes:
+      - {type: bind, source: ./.runtime/nov11-local-db/ca.crt, target: /run/secrets/local-db-ca.crt, read_only: true, bind: {create_host_path: false}}
+    networks: [app-private, storage-private]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=16m']
+    cpus: .4
+    mem_limit: 256m
+    pids_limit: 64
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/readyz',timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 6
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
+  raw-retention:
+    image: ${LOCAL_RETENTION_IMAGE:?Pin the verified API image with the bounded retention worker}
+    command: [python, -m, app.raw_retention]
+    env_file: [./.runtime/nov11-local-db/retention.env]
+    volumes:
+      - {type: bind, source: ./.runtime/nov11-local-db/ca.crt, target: /run/secrets/local-db-ca.crt, read_only: true, bind: {create_host_path: false}}
+    networks: [storage-private]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: .2
+    mem_limit: 192m
+    pids_limit: 32
+    healthcheck:
+      test: [CMD, python, -m, app.raw_retention, --health]
+      interval: 20s
+      timeout: 6s
+      retries: 3
+      start_period: 30s
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}

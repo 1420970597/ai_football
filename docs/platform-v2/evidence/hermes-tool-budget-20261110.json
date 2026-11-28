@@ -1,0 +1,86 @@
+{
+  "source_commit": "fde25d4931f46a1d431719298c2acc1f172b62cf",
+  "application_identical_to_local_suite_commit": "c7d4723859fa5edbb59646df7b59fcfc34641ffe",
+  "local_full_suite": {
+    "source_parent_commit": "c7d4723859fa5edbb59646df7b59fcfc34641ffe",
+    "committed_source_verified": true,
+    "tests": 2131,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1474.275
+  },
+  "remote_ci": {
+    "all_four_remote_jobs_success": true,
+    "remote_tests": 2134,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "frozen_source_hashes_verified": 1199,
+    "workflow_head_sha": "fde25d4931f46a1d431719298c2acc1f172b62cf",
+    "artifact_source_parent_sha": "c21c67beb4c1b8d2d5841ff33b8ea1773fc59aa0",
+    "pull_request_merge_sha_difference_recorded": true,
+    "complete_artifact_content_matches_frozen_source": true,
+    "profitable_browser_artifact_present": true,
+    "production_changes": 0
+  },
+  "isolated_native_tools": {
+    "authenticated_mcp_connections": 2,
+    "native_tools_exact": 10,
+    "full_rules_and_skill_injected": true,
+    "both_compact_description_budget_verified": true,
+    "actual_eight_function_bytes": 15689,
+    "actual_configured_headers_preserved": true,
+    "no_host_header_added_or_required": true,
+    "explicit_intent_schema_loaded": true,
+    "skill_sha256": "1d965600951bca03aed3386a41535743c84d920204b8c25e81bbea021882fab5",
+    "model_generation_calls": 0,
+    "production_changes": 0
+  },
+  "production_native_tools": {
+    "authenticated_mcp_connections": 2,
+    "native_tools_exact": 10,
+    "full_rules_and_skill_injected": true,
+    "both_compact_description_budget_verified": true,
+    "actual_eight_function_bytes": 15689,
+    "actual_configured_headers_preserved": true,
+    "no_host_header_added_or_required": true,
+    "explicit_intent_schema_loaded": true,
+    "skill_sha256": "1d965600951bca03aed3386a41535743c84d920204b8c25e81bbea021882fab5",
+    "model_generation_calls": 0,
+    "production_changes": 0
+  },
+  "rollout": {
+    "two_intended_local_services_recreated": true,
+    "six_other_local_and_original_remote_unchanged": true,
+    "only_mcp_image_and_hermes_two_profile_headers_changed": true,
+    "full_skill_rules_and_native_ten_tools_verified": true,
+    "provider_model_secrets_user_live_choices_and_limits_preserved": true,
+    "resources_permissions_and_worker_slots_preserved": true,
+    "schema_migrations": 0,
+    "historical_backfill": false,
+    "funded_tests": 0,
+    "natural_postrelease_latency_acceptance_pending": true
+  },
+  "completed_at": "2026-11-10T06:17:54Z",
+  "mcp_image": "sha256:01b019b3be32d187b8f6ed5f7e3445adc1aae11294a2997a5e4c38f6bd47f362",
+  "dependencies": {
+    "all_resolved_dependencies_unchanged": true,
+    "package_count": 32,
+    "mcp": "2.3.0",
+    "httpx": "0.28.1"
+  },
+  "static_wire_bytes": {
+    "tool_schema_bytes": {
+      "market-intent-v1": 12751,
+      "parallel-intent-v1": 10211,
+      "market-budget-v1": 8140,
+      "parallel-budget-v1": 8050
+    },
+    "model_generation_calls": 0,
+    "production_writes": 0
+  },
+  "ten_second_natural_order_acceptance": "not_verified",
+  "funded_tests": 0,
+  "historical_backfill": false
+}

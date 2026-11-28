@@ -1,0 +1,24 @@
+--- independent_review.py
++++ independent_review.py
+@@ -123,12 +123,11 @@
+ def run(value):
+-    from gateway.run import _resolve_runtime_agent_kwargs,_resolve_gateway_model
++    from audit_connection import runtime
+     from run_agent import AIAgent
+     logging.disable(logging.CRITICAL)
+     sink=io.StringIO()
+     with contextlib.redirect_stdout(sink),contextlib.redirect_stderr(sink):
+-        kwargs=_resolve_runtime_agent_kwargs()
+-        model=kwargs.pop('model',None)or _resolve_gateway_model()
+-        kwargs.pop('_fallback_notice',None)
++        model,kwargs,revision=runtime()
++        kwargs['fallback_model']=None
+         kwargs.update(enabled_toolsets=[],disabled_toolsets=['all'],quiet_mode=True,skip_memory=True,
+             skip_context_files=True,skip_background_review=True,session_db=None,save_trajectories=False,
+             max_iterations=1,max_tokens=1200,run_budget_seconds=45,platform='expert_window_audit')
+@@ -158,4 +157,5 @@
+         'source_intent_sha256':hashlib.sha256(json.dumps(intent,sort_keys=True).encode()).hexdigest(),
+         'source_first_agents':2,
++        'connection_revision':revision,
+         'input_sha256':hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest(),
+         'tool_count':0,'persistent_session':False,'internal_output_bytes':len(sink.getvalue())}

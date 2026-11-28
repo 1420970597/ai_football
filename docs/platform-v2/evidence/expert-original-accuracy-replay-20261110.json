@@ -1,0 +1,2692 @@
+{
+  "model": "deepseek-v4.1-flash",
+  "original_provider_configuration_unchanged": true,
+  "tested_source_sha256": {
+    "services/api/app/review_completion.py": "3eb6589c509cb9f0eb55a468a8a4514bde2d81c0cfb96ed61dddad08276127b3",
+    "tests/test_review_tool_availability.py": "13f069600b17ddfc1b975daa5bd0483d8100f34dd8fdca9f4154e4ad1c91423a",
+    "integrations/hermes/skills/expert-review/SKILL.md": "3c1cfc15f30b9fa41231a308dfecc277de7a8ec69527bfc4e493251c0a6dadd4"
+  },
+  "inventory": "named disposable database with synthetic fixtures and quotes",
+  "original_images_sha256_verified": true,
+  "production_writes": 0,
+  "funded_tests": 0,
+  "global_accuracy_or_live_acceptance_claim": false,
+  "runs": [
+    {
+      "evidence_id": "e2886",
+      "passed": false,
+      "native_exit": 1,
+      "cases": [
+        {
+          "case": "thai-source-alias",
+          "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+          "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 14014.664
+        },
+        {
+          "case": "mixed-feedback-new-selection",
+          "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+          "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 18689.87
+        },
+        {
+          "case": "three-basketball-image-rows",
+          "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+          "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": false,
+          "actual": [
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "bindings": 3,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 38077.105
+        },
+        {
+          "case": "cheering-is-not-pick",
+          "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+          "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 2848.707
+        },
+        {
+          "case": "results-are-not-new-picks",
+          "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+          "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 9406.735
+        }
+      ],
+      "tool_profile": "earlier intent profile; not current production budget profile"
+    },
+    {
+      "evidence_id": "e2897",
+      "passed": true,
+      "native_exit": 0,
+      "cases": [
+        {
+          "case": "thai-source-alias",
+          "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+          "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 32102.489
+        },
+        {
+          "case": "mixed-feedback-new-selection",
+          "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+          "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 29604.458
+        },
+        {
+          "case": "three-basketball-image-rows",
+          "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+          "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "bindings": 3,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 98743.36
+        },
+        {
+          "case": "cheering-is-not-pick",
+          "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+          "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 3595.998
+        },
+        {
+          "case": "results-are-not-new-picks",
+          "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+          "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 14275.986
+        }
+      ],
+      "tool_profile": "earlier intent profile; not current production budget profile"
+    },
+    {
+      "evidence_id": "e2926",
+      "passed": false,
+      "native_exit": 1,
+      "tool_profile": "actual unchanged production market-budget-v1/parallel-budget-v1",
+      "cases": [
+        {
+          "case": "thai-source-alias-attempt-1",
+          "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+          "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 19211.141,
+          "base_case": "thai-source-alias",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "mixed-feedback-new-selection-attempt-1",
+          "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+          "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 24098.74,
+          "base_case": "mixed-feedback-new-selection",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "three-basketball-image-rows-attempt-1",
+          "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+          "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": false,
+          "actual": [
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "bindings": 3,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 28311.656,
+          "base_case": "three-basketball-image-rows",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "cheering-is-not-pick-attempt-1",
+          "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+          "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 12782.781,
+          "base_case": "cheering-is-not-pick",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "results-are-not-new-picks-attempt-1",
+          "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+          "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 17161.969,
+          "base_case": "results-are-not-new-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "native-tool-absence-source-attempt-1",
+          "original_message_id": "e7af5db3-b626-4dc4-bdfb-2a806ee973e0",
+          "original_image_sha256": "5d1fa4a570389ea1a198a89c29d1dff22be69d8d955b750023540363a02ac46f",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 61785.719,
+          "base_case": "native-tool-absence-source",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "two-football-three-picks-attempt-1",
+          "original_message_id": "cf58e94d-90e6-4bf4-b967-52116fc9ab44",
+          "original_image_sha256": "bee940a46bbd36301236c7703509332928e24f9148a3c34679a2a479243f1b1b",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "bindings": 2,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 69685.986,
+          "base_case": "two-football-three-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "second-half-image-full-time-pick-attempt-1",
+          "original_message_id": "196399e4-a728-4b8e-90c1-b829ab11f225",
+          "original_image_sha256": "6afc0e1f906f7771ae4cd52f0deae80c5d5854668e916cc96c2f702bed7a3eef",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 21421.634,
+          "base_case": "second-half-image-full-time-pick",
+          "attempt_ordinal": 1
+        }
+      ],
+      "provider_failures": 0
+    },
+    {
+      "evidence_id": "e2937",
+      "passed": true,
+      "native_exit": 0,
+      "tool_profile": "actual unchanged production market-budget-v1/parallel-budget-v1",
+      "cases": [
+        {
+          "case": "three-basketball-image-rows-attempt-1",
+          "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+          "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "bindings": 3,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 53110.957,
+          "base_case": "three-basketball-image-rows",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "thai-source-alias-attempt-1",
+          "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+          "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 17511.187,
+          "base_case": "thai-source-alias",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "mixed-feedback-new-selection-attempt-1",
+          "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+          "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 24096.439,
+          "base_case": "mixed-feedback-new-selection",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "cheering-is-not-pick-attempt-1",
+          "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+          "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 13889.89,
+          "base_case": "cheering-is-not-pick",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "results-are-not-new-picks-attempt-1",
+          "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+          "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 15232.926,
+          "base_case": "results-are-not-new-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "native-tool-absence-source-attempt-1",
+          "original_message_id": "e7af5db3-b626-4dc4-bdfb-2a806ee973e0",
+          "original_image_sha256": "5d1fa4a570389ea1a198a89c29d1dff22be69d8d955b750023540363a02ac46f",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 32771.099,
+          "base_case": "native-tool-absence-source",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "two-football-three-picks-attempt-1",
+          "original_message_id": "cf58e94d-90e6-4bf4-b967-52116fc9ab44",
+          "original_image_sha256": "bee940a46bbd36301236c7703509332928e24f9148a3c34679a2a479243f1b1b",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "bindings": 2,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 49715.929,
+          "base_case": "two-football-three-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "second-half-image-full-time-pick-attempt-1",
+          "original_message_id": "196399e4-a728-4b8e-90c1-b829ab11f225",
+          "original_image_sha256": "6afc0e1f906f7771ae4cd52f0deae80c5d5854668e916cc96c2f702bed7a3eef",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 19799.083,
+          "base_case": "second-half-image-full-time-pick",
+          "attempt_ordinal": 1
+        }
+      ],
+      "provider_failures": 0,
+      "tested_source_sha256": {
+        "services/api/app/review_completion.py": "3eff98ba581ea76e08d33343aea72c68a12ddf2e03ad8e679572e316d79761bf",
+        "services/api/app/review_summary.py": "17e0ef7653b23b194c95789706d04084e725a477a90c7e9b044857a0ee1e8b71",
+        "services/api/app/worker.py": "d66b2cd1a41b6de6c832bbc284b90378128f5bfec700a043e90da53daeacef35",
+        "services/api/app/review_quote_claims.py": "e27072481baa7951de1990d0cd354ee23464b85bf149676ad69e0e5a374b0d16",
+        "integrations/hermes/skills/expert-review/SKILL.md": "b971f2b3dfe8bcef6c97144bc25a14896334705656a7d46a6de7d24eea62bb4f"
+      },
+      "tested_source_matches_current_for_these_files": true
+    },
+    {
+      "evidence_id": "e2953",
+      "passed": false,
+      "native_exit": 1,
+      "tested_source_commit": "3bf7b721dd93d1f10c98b224161e05c51bf510de",
+      "tested_image_id": "sha256:5f00f8a9e2268bb134914f450c4e6bba1d9605a4ca228e79027b586f6df31ae7",
+      "no_api_source_overlay": true,
+      "tool_profile": "actual unchanged production market-budget-v1/parallel-budget-v1",
+      "cases": [
+        {
+          "case": "three-basketball-image-rows-attempt-1",
+          "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+          "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "bindings": 3,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 44364.771,
+          "base_case": "three-basketball-image-rows",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "thai-source-alias-attempt-1",
+          "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+          "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": false,
+          "actual": [],
+          "expected": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 13603.857,
+          "base_case": "thai-source-alias",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "mixed-feedback-new-selection-attempt-1",
+          "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+          "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 35209.545,
+          "base_case": "mixed-feedback-new-selection",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "cheering-is-not-pick-attempt-1",
+          "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+          "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 20671.219,
+          "base_case": "cheering-is-not-pick",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "results-are-not-new-picks-attempt-1",
+          "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+          "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 27893.447,
+          "base_case": "results-are-not-new-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "native-tool-absence-source-attempt-1",
+          "original_message_id": "e7af5db3-b626-4dc4-bdfb-2a806ee973e0",
+          "original_image_sha256": "5d1fa4a570389ea1a198a89c29d1dff22be69d8d955b750023540363a02ac46f",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 46713.291,
+          "base_case": "native-tool-absence-source",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "two-football-three-picks-attempt-1",
+          "original_message_id": "cf58e94d-90e6-4bf4-b967-52116fc9ab44",
+          "original_image_sha256": "bee940a46bbd36301236c7703509332928e24f9148a3c34679a2a479243f1b1b",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": false,
+          "actual": [
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "bindings": 2,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 68594.63,
+          "base_case": "two-football-three-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "second-half-image-full-time-pick-attempt-1",
+          "original_message_id": "196399e4-a728-4b8e-90c1-b829ab11f225",
+          "original_image_sha256": "6afc0e1f906f7771ae4cd52f0deae80c5d5854668e916cc96c2f702bed7a3eef",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 32100.815,
+          "base_case": "second-half-image-full-time-pick",
+          "attempt_ordinal": 1
+        }
+      ],
+      "provider_failures": 0
+    },
+    {
+      "evidence_id": "e2969",
+      "source_commit": "34d8ac999a8d661a6d432ed4b6f8caec65cd80e9",
+      "api_image": "sha256:59c797a768a364d1721e5ecd6d5654069262dda86ecdef0ba019b5eee769cf0c",
+      "configuration_sha256": "76a385a188d5ff62706f9d4e056e5281e04b635c3e00744c4b2eb29ee8b2a36c",
+      "skill_sha256": "1dbd2da80e8bc423ab2ec1cd8c5ce32e7436a85d7cc7ed74bec5124b42868451",
+      "passed": false,
+      "native_exit": 1,
+      "case_count": 11,
+      "pass_count": 9,
+      "provider_failures": 0,
+      "actual_image_without_source_overlay": true,
+      "production_writes": 0,
+      "funded_tests": 0,
+      "cases": [
+        {
+          "case": "three-basketball-image-rows-attempt-1",
+          "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+          "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": false,
+          "actual": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "bindings": 2,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 58153.787,
+          "base_case": "three-basketball-image-rows",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "thai-source-alias-attempt-1",
+          "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+          "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 27985.56,
+          "base_case": "thai-source-alias",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "mixed-feedback-new-selection-attempt-1",
+          "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+          "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 39893.32,
+          "base_case": "mixed-feedback-new-selection",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "cheering-is-not-pick-attempt-1",
+          "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+          "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 28399.806,
+          "base_case": "cheering-is-not-pick",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "results-are-not-new-picks-attempt-1",
+          "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+          "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 29715.671,
+          "base_case": "results-are-not-new-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "native-tool-absence-source-attempt-1",
+          "original_message_id": "e7af5db3-b626-4dc4-bdfb-2a806ee973e0",
+          "original_image_sha256": "5d1fa4a570389ea1a198a89c29d1dff22be69d8d955b750023540363a02ac46f",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 52704.586,
+          "base_case": "native-tool-absence-source",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "two-football-three-picks-attempt-1",
+          "original_message_id": "cf58e94d-90e6-4bf4-b967-52116fc9ab44",
+          "original_image_sha256": "bee940a46bbd36301236c7703509332928e24f9148a3c34679a2a479243f1b1b",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "bindings": 2,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 70802.283,
+          "base_case": "two-football-three-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "second-half-image-full-time-pick-attempt-1",
+          "original_message_id": "196399e4-a728-4b8e-90c1-b829ab11f225",
+          "original_image_sha256": "6afc0e1f906f7771ae4cd52f0deae80c5d5854668e916cc96c2f702bed7a3eef",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": false,
+          "actual": [],
+          "expected": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 41516.279,
+          "base_case": "second-half-image-full-time-pick",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "bare-caption-unreadable-original-attempt-1",
+          "original_message_id": "d3f50b5a-0f6e-4923-8c86-3a2285304171",
+          "original_image_sha256": "3a3218cc57e0bc41c9c3e8f8a02875a9179f7f6267a31df3dc060cc3593ea165",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "expected_bindings": 1,
+          "actual_declared_source_periods": [
+            []
+          ],
+          "elapsed_ms": 38461.427,
+          "base_case": "bare-caption-unreadable-original",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "bare-caption-translation-original-attempt-1",
+          "original_message_id": "a117d4ad-1fab-4aa9-af6a-71a28399ea0e",
+          "original_image_sha256": "3a3218cc57e0bc41c9c3e8f8a02875a9179f7f6267a31df3dc060cc3593ea165",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "expected_bindings": 1,
+          "actual_declared_source_periods": [
+            []
+          ],
+          "elapsed_ms": 45039.383,
+          "base_case": "bare-caption-translation-original",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "explicit-u20-full-time-text-attempt-1",
+          "original_message_id": "b5546a92-1089-4bee-8b95-b7fae0cbe843",
+          "original_image_sha256": null,
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886009",
+              "total",
+              "full_time",
+              "2.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886009",
+              "total",
+              "full_time",
+              "2.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 41579.112,
+          "base_case": "explicit-u20-full-time-text",
+          "attempt_ordinal": 1
+        }
+      ]
+    },
+    {
+      "evidence_id": "e2983",
+      "source_commit": "850f92b6099839214caa9f687a5621a7fc2c322e",
+      "api_image": "sha256:869a0a4d3b63cf9a2a0a1723df533d1b91deef693ef0d1833d45abfe3029d21b",
+      "configuration_sha256": "76a385a188d5ff62706f9d4e056e5281e04b635c3e00744c4b2eb29ee8b2a36c",
+      "skill_sha256": "83deb3e16120f9273ae97ff9e8eaf13d87d5bf8e936b9c9f5d0d7860c3eebbf0",
+      "passed": true,
+      "native_exit": 0,
+      "case_count": 12,
+      "pass_count": 12,
+      "provider_failures": 0,
+      "actual_image_without_source_overlay": true,
+      "production_writes": 0,
+      "funded_tests": 0,
+      "cases": [
+        {
+          "case": "three-basketball-image-rows-attempt-1",
+          "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+          "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886003",
+              "handicap",
+              "full_time",
+              "1.5",
+              "home"
+            ],
+            [
+              "leyu:98886004",
+              "handicap",
+              "full_time",
+              "11.5",
+              "home"
+            ],
+            [
+              "leyu:98886005",
+              "total",
+              "full_time",
+              "172.5",
+              "over"
+            ]
+          ],
+          "bindings": 3,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 73033.614,
+          "base_case": "three-basketball-image-rows",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "thai-source-alias-attempt-1",
+          "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+          "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886001",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 21354.509,
+          "base_case": "thai-source-alias",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "mixed-feedback-new-selection-attempt-1",
+          "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+          "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "handicap",
+              "full_time",
+              "1.5",
+              "away"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 37011.949,
+          "base_case": "mixed-feedback-new-selection",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "cheering-is-not-pick-attempt-1",
+          "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+          "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 10510.319,
+          "base_case": "cheering-is-not-pick",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "results-are-not-new-picks-attempt-1",
+          "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+          "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 0,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 18589.801,
+          "base_case": "results-are-not-new-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "native-tool-absence-source-attempt-1",
+          "original_message_id": "e7af5db3-b626-4dc4-bdfb-2a806ee973e0",
+          "original_image_sha256": "5d1fa4a570389ea1a198a89c29d1dff22be69d8d955b750023540363a02ac46f",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": false,
+          "synthetic_fresh_source_timestamp": true,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886006",
+              "total",
+              "first_half",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 44261.855,
+          "base_case": "native-tool-absence-source",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "two-football-three-picks-attempt-1",
+          "original_message_id": "cf58e94d-90e6-4bf4-b967-52116fc9ab44",
+          "original_image_sha256": "bee940a46bbd36301236c7703509332928e24f9148a3c34679a2a479243f1b1b",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886007",
+              "handicap",
+              "full_time",
+              "0.25",
+              "away"
+            ],
+            [
+              "leyu:98886007",
+              "total",
+              "full_time",
+              "3.25",
+              "over"
+            ],
+            [
+              "leyu:98886008",
+              "handicap",
+              "full_time",
+              "-0.25",
+              "home"
+            ]
+          ],
+          "bindings": 2,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 161037.003,
+          "base_case": "two-football-three-picks",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "second-half-image-full-time-pick-attempt-1",
+          "original_message_id": "196399e4-a728-4b8e-90c1-b829ab11f225",
+          "original_image_sha256": "6afc0e1f906f7771ae4cd52f0deae80c5d5854668e916cc96c2f702bed7a3eef",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886002",
+              "total",
+              "full_time",
+              "0.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 28477.433,
+          "base_case": "second-half-image-full-time-pick",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "bare-caption-unreadable-original-attempt-1",
+          "original_message_id": "d3f50b5a-0f6e-4923-8c86-3a2285304171",
+          "original_image_sha256": "3a3218cc57e0bc41c9c3e8f8a02875a9179f7f6267a31df3dc060cc3593ea165",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "expected_bindings": 1,
+          "actual_declared_source_periods": [
+            []
+          ],
+          "elapsed_ms": 78996.888,
+          "base_case": "bare-caption-unreadable-original",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "bare-caption-translation-original-attempt-1",
+          "original_message_id": "a117d4ad-1fab-4aa9-af6a-71a28399ea0e",
+          "original_image_sha256": "3a3218cc57e0bc41c9c3e8f8a02875a9179f7f6267a31df3dc060cc3593ea165",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [],
+          "expected": [],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "expected_bindings": 1,
+          "actual_declared_source_periods": [
+            []
+          ],
+          "elapsed_ms": 73381.591,
+          "base_case": "bare-caption-translation-original",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "explicit-u20-full-time-text-attempt-1",
+          "original_message_id": "b5546a92-1089-4bee-8b95-b7fae0cbe843",
+          "original_image_sha256": null,
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886009",
+              "total",
+              "full_time",
+              "2.75",
+              "over"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886009",
+              "total",
+              "full_time",
+              "2.75",
+              "over"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 20504.045,
+          "base_case": "explicit-u20-full-time-text",
+          "attempt_ordinal": 1
+        },
+        {
+          "case": "context-tool-absence-original-attempt-1",
+          "original_message_id": "1d63c1c0-f3d2-414f-b9a7-39587fa90c82",
+          "original_image_sha256": "ee292411bc3d02ac127064b6983cb788c6c4144927943e2975359289bc54b372",
+          "original_text_preserved": true,
+          "original_timestamp_preserved": true,
+          "synthetic_fresh_source_timestamp": false,
+          "synthetic_inventory": true,
+          "production_writes": 0,
+          "funded_tests": 0,
+          "passed": true,
+          "actual": [
+            [
+              "leyu:98886010",
+              "total",
+              "full_time",
+              "3.5",
+              "under"
+            ]
+          ],
+          "expected": [
+            [
+              "leyu:98886010",
+              "total",
+              "full_time",
+              "3.5",
+              "under"
+            ]
+          ],
+          "bindings": 1,
+          "orders": 0,
+          "completion_verified": true,
+          "completion_issues": {},
+          "completion_rounds": 1,
+          "elapsed_ms": 20317.933,
+          "base_case": "context-tool-absence-original",
+          "attempt_ordinal": 1
+        }
+      ]
+    }
+  ],
+  "candidate_image_regression": {
+    "passed": true,
+    "source_commit": "226ec71ba9b0b6f933fe3402cdc814f2a5475b8b",
+    "api_image": "sha256:7ef3918e6c46556c3288eb742bce1e814e182a639ad8786f2ffecdcfe62249a4",
+    "original_images": 8,
+    "aggregate_of_seven_valid_initial_cases_and_two_corrected_qatar_cases": true,
+    "initial_test_setup_failure_retained": true,
+    "missing_total_quote_was_not_a_model_extraction_failure": true,
+    "real_model": "deepseek-v4.1-flash",
+    "synthetic_inventory": true,
+    "funded_tests": 0,
+    "production_writes": 0,
+    "global_accuracy_claim": false,
+    "cases": [
+      {
+        "case": "thai-source-alias",
+        "original_message_id": "74732fe2-e238-4fba-80f5-0452dd531926",
+        "original_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": false,
+        "synthetic_fresh_source_timestamp": true,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [
+          [
+            "leyu:98886001",
+            "total",
+            "first_half",
+            "0.75",
+            "over"
+          ]
+        ],
+        "expected": [
+          [
+            "leyu:98886001",
+            "total",
+            "first_half",
+            "0.75",
+            "over"
+          ]
+        ],
+        "bindings": 1,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 19049.393
+      },
+      {
+        "case": "mixed-feedback-new-selection",
+        "original_message_id": "9125e481-df61-4da7-af78-97b303e17086",
+        "original_image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": true,
+        "synthetic_fresh_source_timestamp": false,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [
+          [
+            "leyu:98886002",
+            "handicap",
+            "full_time",
+            "1.5",
+            "away"
+          ]
+        ],
+        "expected": [
+          [
+            "leyu:98886002",
+            "handicap",
+            "full_time",
+            "1.5",
+            "away"
+          ]
+        ],
+        "bindings": 1,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 17077.918
+      },
+      {
+        "case": "three-basketball-image-rows",
+        "original_message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+        "original_image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": true,
+        "synthetic_fresh_source_timestamp": false,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [
+          [
+            "leyu:98886003",
+            "handicap",
+            "full_time",
+            "1.5",
+            "home"
+          ],
+          [
+            "leyu:98886004",
+            "handicap",
+            "full_time",
+            "11.5",
+            "home"
+          ],
+          [
+            "leyu:98886005",
+            "total",
+            "full_time",
+            "172.5",
+            "over"
+          ]
+        ],
+        "expected": [
+          [
+            "leyu:98886003",
+            "handicap",
+            "full_time",
+            "1.5",
+            "home"
+          ],
+          [
+            "leyu:98886004",
+            "handicap",
+            "full_time",
+            "11.5",
+            "home"
+          ],
+          [
+            "leyu:98886005",
+            "total",
+            "full_time",
+            "172.5",
+            "over"
+          ]
+        ],
+        "bindings": 3,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 57767.867
+      },
+      {
+        "case": "cheering-is-not-pick",
+        "original_message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+        "original_image_sha256": "90f8e6db56b1074c1f457a4f44e2eca97bc8b20046b1af3ded306653d5554875",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": true,
+        "synthetic_fresh_source_timestamp": false,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [],
+        "expected": [],
+        "bindings": 0,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 2811.585
+      },
+      {
+        "case": "results-are-not-new-picks",
+        "original_message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+        "original_image_sha256": "346b5c34e78785c0b2cb5cdf9428250110644afdf700b51efa391b4a08d5d7ac",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": true,
+        "synthetic_fresh_source_timestamp": false,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [],
+        "expected": [],
+        "bindings": 0,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 10031.335
+      },
+      {
+        "case": "native-tool-absence-source",
+        "original_message_id": "e7af5db3-b626-4dc4-bdfb-2a806ee973e0",
+        "original_image_sha256": "5d1fa4a570389ea1a198a89c29d1dff22be69d8d955b750023540363a02ac46f",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": false,
+        "synthetic_fresh_source_timestamp": true,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [
+          [
+            "leyu:98886006",
+            "total",
+            "first_half",
+            "0.75",
+            "over"
+          ]
+        ],
+        "expected": [
+          [
+            "leyu:98886006",
+            "total",
+            "first_half",
+            "0.75",
+            "over"
+          ]
+        ],
+        "bindings": 1,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 25540.476
+      },
+      {
+        "case": "two-football-three-picks",
+        "original_message_id": "cf58e94d-90e6-4bf4-b967-52116fc9ab44",
+        "original_image_sha256": "bee940a46bbd36301236c7703509332928e24f9148a3c34679a2a479243f1b1b",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": true,
+        "synthetic_fresh_source_timestamp": false,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [
+          [
+            "leyu:98886007",
+            "handicap",
+            "full_time",
+            "0.25",
+            "away"
+          ],
+          [
+            "leyu:98886007",
+            "total",
+            "full_time",
+            "3.25",
+            "over"
+          ],
+          [
+            "leyu:98886008",
+            "handicap",
+            "full_time",
+            "-0.25",
+            "home"
+          ]
+        ],
+        "expected": [
+          [
+            "leyu:98886007",
+            "handicap",
+            "full_time",
+            "0.25",
+            "away"
+          ],
+          [
+            "leyu:98886007",
+            "total",
+            "full_time",
+            "3.25",
+            "over"
+          ],
+          [
+            "leyu:98886008",
+            "handicap",
+            "full_time",
+            "-0.25",
+            "home"
+          ]
+        ],
+        "bindings": 2,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 131230.964
+      },
+      {
+        "case": "second-half-image-full-time-pick",
+        "original_message_id": "196399e4-a728-4b8e-90c1-b829ab11f225",
+        "original_image_sha256": "6afc0e1f906f7771ae4cd52f0deae80c5d5854668e916cc96c2f702bed7a3eef",
+        "original_text_preserved": true,
+        "original_timestamp_preserved": true,
+        "synthetic_fresh_source_timestamp": false,
+        "synthetic_inventory": true,
+        "production_writes": 0,
+        "funded_tests": 0,
+        "passed": true,
+        "actual": [
+          [
+            "leyu:98886002",
+            "total",
+            "full_time",
+            "0.75",
+            "over"
+          ]
+        ],
+        "expected": [
+          [
+            "leyu:98886002",
+            "total",
+            "full_time",
+            "0.75",
+            "over"
+          ]
+        ],
+        "bindings": 1,
+        "orders": 0,
+        "completion_verified": true,
+        "completion_issues": {},
+        "completion_rounds": 1,
+        "elapsed_ms": 14810.416
+      }
+    ],
+    "initial_incomplete_inventory_run": "e2907: seven cases passed; last case correctly stayed unresolved because the synthetic Qatar inventory omitted total quotes",
+    "corrected_inventory_run": "e2911: both Qatar originals passed with full-time and first-half total quotes at the same line; API, skill and model unchanged"
+  },
+  "baseline_runtime_sources_match_commit": "226ec71ba9b0b6f933fe3402cdc814f2a5475b8b",
+  "latest_actual_profile_eight_case_batch_passed": true,
+  "candidate_released": true,
+  "updated_at_utc": "2026-11-10T12:04:00Z",
+  "latest_actual_profile_expanded_batch_passed": true,
+  "accuracy_release": {
+    "source_commit": "850f92b6099839214caa9f687a5621a7fc2c322e",
+    "api_image": "sha256:869a0a4d3b63cf9a2a0a1723df533d1b91deef693ef0d1833d45abfe3029d21b",
+    "completed_at_utc": "2026-11-10T11:59:28Z",
+    "local_full_suite": {
+      "source_commit": "850f92b6099839214caa9f687a5621a7fc2c322e",
+      "tests": 2197,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1542.252,
+      "complete_frozen_source_verified": 1228,
+      "production_writes": 0,
+      "funded_tests": 0
+    },
+    "remote_ci": {
+      "all_four_remote_jobs_success": true,
+      "remote_tests": 2197,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "frozen_source_hashes_verified": 1228,
+      "workflow_head_sha": "850f92b6099839214caa9f687a5621a7fc2c322e",
+      "artifact_source_parent_sha": "e1cb70cd0a695766d4b96fcaf5091d195bccc3e9",
+      "pull_request_merge_sha_difference_recorded": true,
+      "complete_artifact_content_matches_frozen_source": true,
+      "profitable_browser_artifact_present": true,
+      "production_changes": 0
+    },
+    "handoff": {
+      "three_intended_local_services_recreated": true,
+      "five_other_local_and_four_original_remote_unchanged": true,
+      "only_api_worker_images_and_hermes_skill_mounts_changed": true,
+      "provider_model_secrets_and_owner_live_policies_preserved": true,
+      "resources_permissions_and_four_slots_preserved": true,
+      "source_scope_tools_verified": true,
+      "schema_migrations": 0,
+      "historical_backfill": false,
+      "funded_tests": 0,
+      "natural_postrelease_acceptance_pending": true
+    },
+    "model_original_cases_passed": 12,
+    "original_input_contract_exact": true,
+    "original_reply_contexts_checked": 12,
+    "original_reply_contexts_all_absent": true,
+    "preflight_browser_cases_passed": 16,
+    "preflight_browser_widths": [
+      1440,
+      390
+    ],
+    "browser_response_injection": false,
+    "production_model_gateway_changes": 0,
+    "owner_policy_changes": 0,
+    "historical_signal_backfill": false,
+    "funded_tests": 0,
+    "natural_accuracy_acceptance_pending": true,
+    "known_unsupported_intents": [
+      "basketball quarter total",
+      "football odd/even total"
+    ],
+    "postrelease_browser": {
+      "passed": 16,
+      "widths": [
+        1440,
+        390
+      ],
+      "native_exit": 0,
+      "controller_exit": 0,
+      "response_injection": false,
+      "production_writes": 0,
+      "funded_tests": 0,
+      "artifacts": "output/playwright/e3000-source-accuracy-postrelease"
+    },
+    "overlapping_watch": {
+      "window_start": "2026-11-10T11:32:11.021931+00:00",
+      "window_end": "2026-11-10T12:02:11.816282+00:00",
+      "official_raw_posts": 47,
+      "normalized_posts": 46,
+      "matched": 46,
+      "missing": [],
+      "eligible": {
+        "eligible": 41,
+        "missing_jobs": 0,
+        "archived_with_suppression_receipt": 0,
+        "in_progress": 0,
+        "with_receipt": 41,
+        "missing_receipt": 0
+      },
+      "api_non_200_samples": [
+        {
+          "observed_at": "2026-11-10T11:57:06.451169+00:00",
+          "health": {
+            "healthz": null,
+            "readyz": null
+          }
+        }
+      ],
+      "includes_release_warmup": true,
+      "natural_positive_acceptance_claim": false
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "window_start": "2026-11-08T15:36:11.655601+00:00",
+  "window_end": "2026-11-08T16:06:12.906685+00:00",
+  "database_samples": 56,
+  "database_errors": 0,
+  "tg_all_healthy": true,
+  "active_source_count": 6,
+  "lease_owners": 1,
+  "source_states": {
+    "caught_up": 1,
+    "catching_up": 5
+  },
+  "window_published_posts_including_later_deletions": 3,
+  "window_reviews": {
+    "eligible": 3,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 3,
+    "missing_receipt": 0
+  },
+  "official_scan_raw_messages": 3,
+  "official_normalized_current_posts": 2,
+  "official_matched_posts": 2,
+  "official_missing": [],
+  "accounting_explanation": "One feedback post was already deleted before official scan; another promotion post was deleted after the window. Stored originals/reviews/deletion timestamps were retained.",
+  "human_semantic_review": {
+    "feedback_posts": 2,
+    "promotion_posts": 1,
+    "new_supported_recommendations": 0,
+    "authorized_original_images_viewed_and_hash_verified": 4,
+    "historical_reply_not_treated_as_new_pick": true
+  },
+  "event_latency": {
+    "event_versions": 4,
+    "avg_ms": "6410.7",
+    "p95_ms": "12459.6",
+    "within_3s": 1,
+    "older_backlog_versions_received": 164
+  },
+  "three_message_conclusion_latencies_ms": [
+    16768.688,
+    17040.574,
+    18167.415
+  ],
+  "market_samples": 61,
+  "market_fresh_samples": 0,
+  "newest_quote_age_seconds": 17.9,
+  "quote_max_age_seconds": 15,
+  "three_second_goal_verified": false,
+  "natural_positive_recommendation_success_verified": false,
+  "production_test_writes": 0,
+  "credentials_retained": false
+}

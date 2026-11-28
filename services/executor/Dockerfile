@@ -5,5 +5,7 @@ COPY services/executor/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt && useradd --system --uid 10004 --create-home executor
 COPY services/collector /app/services/collector
 COPY services/executor /app/services/executor
+COPY --chmod=0444 services/execution_scope.py /app/services/execution_scope.py
+COPY --chmod=0444 services/basketball_scores.py /app/basketball_scores.py
 USER 10004:10004
 CMD ["python", "-m", "services.executor.worker"]

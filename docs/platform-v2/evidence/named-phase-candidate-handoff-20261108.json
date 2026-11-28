@@ -1,0 +1,84 @@
+{
+  "schema": "safe-deployment-evidence-v1",
+  "source_commit": "19b0157265b9540f4c0d589dffbd6e678736e4d8",
+  "completed_at": "2026-11-08T19:32:47Z",
+  "full_regression": {
+    "source_parent_commit": "19b0157265b9540f4c0d589dffbd6e678736e4d8",
+    "committed_source_verified": true,
+    "tests": 1905,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1295.879
+  },
+  "gates": {
+    "e1465-full-controller": 0,
+    "e1466-framework": 0,
+    "e1497-real-replay-chain": 0,
+    "e1478-manual-semantic": 0,
+    "e1492-build-controller": 0,
+    "e1493-preparation": 0,
+    "e1493-apply": 0,
+    "e1493-controller": 0,
+    "e1493-gate-native": 0,
+    "e1493-gate-release": 0
+  },
+  "images": {
+    "api": {
+      "name": "ai-football-api:2.0.0-dev-e1492-19b0157",
+      "id": "sha256:aa17cebd7e4370e219459e1587a7798f34fa7b118f528d526914bc5ccafe2400"
+    },
+    "hermes-mcp": {
+      "name": "ai-football-hermes-mcp:2.0.0-dev-e1492-19b0157",
+      "id": "sha256:0a43afa8acaa93eba734d06a22be6d22b7c9b089bf70d67d88d86c8b5bcc57be"
+    }
+  },
+  "configuration_precheck": {
+    "only_api_worker_mcp_images_and_hermes_skill_mount_change": true,
+    "model_config_runner_context_identical": true,
+    "other_effective_configuration_unchanged": true,
+    "rollback_from_actual_configuration": true
+  },
+  "rollout": {
+    "only_api_worker_mcp_images_and_hermes_skill_profile_recreated": true,
+    "other_three_local_and_four_remote_unchanged": true,
+    "provider_environment_config_context_runner_and_personal_permissions_unchanged": true
+  },
+  "ledger": {
+    "signals_before": 624,
+    "signals_after": 624,
+    "old_ledger_rows": 879,
+    "immutable_signals_quotes_and_ledger_preserved": true,
+    "database_rollback": false
+  },
+  "financial": {
+    "old_orders_preserved": 2,
+    "policy_and_account_ownership_unchanged": true,
+    "financial_pre_and_post_snapshots_idle": true,
+    "no_funds_lock_or_order_mutation": true
+  },
+  "prompt_transition": {
+    "prompt_artifact_only": true,
+    "model_and_provider_unchanged": true,
+    "history_preserved": true,
+    "quality_approval": false
+  },
+  "api_health": {
+    "statuses": [
+      200,
+      200
+    ]
+  },
+  "historical_backfill": false,
+  "funded_tests": 0,
+  "natural_post_release_acceptance_pending": true,
+  "three_second_target_passed": false,
+  "evidence_sha256": {
+    "e1465-full-verification.json": "2fbcef0cbe313437c2a0db206f7ae3e1f3fa01ef6fc820587cf8b79cec8d4501",
+    "e1492-api-image-source-verification.json": "e2ffa706c725360663db107bebb30a671d6ca92bbeec1a9d1bd65596aae7e375",
+    "e1492-mcp-image-source-verification.json": "b5386d93e9a56a3493e7cc277b789350c45092a519a95c3e1da76f13f4ffbc5f",
+    "e1493-rollout-verification.json": "9026e4abcae43d1011f42ecab20bced4dcdf340d6db160902243e61de6f408cb",
+    "e1493-ledger-preservation.json": "16e5efeb6dde2487610abbaafdd6b9d51ffbac593dc6d9eafce23ac26cd3ad03",
+    "e1493-financial-verification.json": "d2591d0af078b366cc36f3a3ac39377125c2d3c6093d1271e3aa96de903e753c"
+  }
+}

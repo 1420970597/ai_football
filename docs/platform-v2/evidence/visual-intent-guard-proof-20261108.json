@@ -1,0 +1,146 @@
+{
+  "schema": "safe-visual-intent-guard-proof-v1",
+  "source_parent_commit": "7d59e17da43cfa94c5bbefe6440b1379c906de94",
+  "source_sha256": {
+    "services/api/app/review_intent_claims.py": "080dd6846f0a6ad5b763327b7492f32dbd2d4d58ca1e46473fa51151e1eb78a8",
+    "services/api/app/review_completion.py": "48c159b3b203f2a1cf3e6be819600dcce82e7bd20e3387338fefb1df4e4088f1",
+    "services/api/app/worker.py": "54bdb7921f3b4974de08ccd22fb0ab5a2fcc66fb0dc426c386fe59c3b033d80b",
+    "services/api/app/review_summary_evidence.py": "6ae356a5482477c6caec36ea6595d13ee36cfd1c74c49b372275bc26cc77cac3",
+    "services/api/app/review_summary.py": "00ce5b8bcbbed6798b98f53361fbb8192083b2db79e8521fdcf600e27dffc53a",
+    "tests/test_visual_review_intent_completion.py": "5ff06e0c5f18244395a31b5c7a83727bb3fe85b5527ec4532b91f5754117f59b",
+    "integrations/hermes/skills/expert-review/SKILL.md": "c2162f43ae81aa1e53c4c2a1ef3fd62c01a921b743d663697c3f1126593c7791"
+  },
+  "current_final_source_behavior": {
+    "tests": 19,
+    "seconds": 11.575,
+    "native_exit_code": 0,
+    "failures": 0,
+    "errors": 0
+  },
+  "current_final_source_unit_boundaries": {
+    "tests": 10,
+    "seconds": 0.002,
+    "native_exit_code": 0,
+    "failures": 0,
+    "errors": 0
+  },
+  "related_before_last_local_negation_check": {
+    "tests": 152,
+    "seconds": 230.797,
+    "native_exit_code": 0,
+    "failures": 0,
+    "errors": 0
+  },
+  "related_scope_note": "Same other source modules; final intent helper negation refinement independently covered by current 19 tests; new committed full suite still required.",
+  "preserved_failures": [
+    {
+      "case": "e1552",
+      "tests": 15,
+      "failures_including_subtests": 12,
+      "native_exit_code": 1,
+      "reason": "missing_intent_completion_guard"
+    },
+    {
+      "case": "e1557",
+      "native_exit_code": 1,
+      "reason": "original_time_headings_not_recognized"
+    },
+    {
+      "case": "e1559",
+      "tests": 18,
+      "failures": 5,
+      "native_exit_code": 1,
+      "reason": "complete_original_caption_regression"
+    },
+    {
+      "case": "e1565",
+      "tests": 1,
+      "failures_including_subtests": 4,
+      "native_exit_code": 1,
+      "reason": "negated_denial_false_positive"
+    }
+  ],
+  "actual_original_final_recheck": {
+    "passed": true,
+    "read_only": true,
+    "production_writes": 0,
+    "model_calls": 0,
+    "original_finals_rechecked": 9,
+    "cases": [
+      {
+        "case": "e1536",
+        "explicit_visual_caption": false,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1537",
+        "explicit_visual_caption": false,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1538",
+        "explicit_visual_caption": false,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1539",
+        "explicit_visual_caption": true,
+        "source_visual_intent_conflict": true,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1540",
+        "explicit_visual_caption": true,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1541",
+        "explicit_visual_caption": true,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1542",
+        "explicit_visual_caption": false,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1543",
+        "explicit_visual_caption": false,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      },
+      {
+        "case": "e1544",
+        "explicit_visual_caption": false,
+        "source_visual_intent_conflict": false,
+        "phase_conflicts": [],
+        "line_conflicts": []
+      }
+    ],
+    "does_not_clear_e1543_rule_semantics": true
+  },
+  "no_image_content_inference": true,
+  "does_not_authorize_fixture_market_or_price": true,
+  "correct_zero_quote_retains_single_snapshot_read": true,
+  "accepted_evidence_preserved": true,
+  "provider_configuration_changed": false,
+  "production_writes": 0,
+  "funded_tests": 0,
+  "fresh_natural_recommendation_passed": false,
+  "three_second_target_passed": false,
+  "full_framework_new_image_and_deployment_pending": true
+}

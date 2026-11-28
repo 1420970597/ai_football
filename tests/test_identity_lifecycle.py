@@ -1,6 +1,8 @@
 """Temporary PostgreSQL only: recovery, step-up, export and safe anonymization behavior."""
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from email.utils import parsedate_to_datetime
+from http.cookies import SimpleCookie
 import unittest
 import uuid
 
@@ -34,7 +36,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         return await self.client.post("/api/v1/auth/recovery/complete", json={"email": email, "code": code, "new_password": password})
 
     async def close(self):
-        return await self.client.post("/api/v1/auth/closure", headers=self.csrf(), json={"password": legacy.PASSWORD, "confirmation_phrase": "注销我的球讯账户"})
+        return await self.client.post("/api/v1/auth/closure", headers=self.csrf(), json={"confirmation_phrase": "注销我的球讯账户"})
 
     async def test_no_delivery_channel_never_claims_message_sent(self):
         state = await self.client.get("/api/v1/auth/recovery/status")
@@ -43,39 +45,25 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(503, request.status_code)
         self.assertIn("没有发送", request.text)
 
-    async def test_user_reauthentication_csrf_password_and_session_scope(self):
+    async def test_user_step_up_endpoint_removed_and_export_uses_active_session(self):
         await self.register()
         await self.expire_stepup()
-        self.assertEqual(403, (await self.client.post("/api/v1/auth/reauthenticate", json={"password": legacy.PASSWORD})).status_code)
-        self.assertEqual(401, (await self.client.post("/api/v1/auth/reauthenticate", headers=self.csrf(), json={"password": "wrong"})).status_code)
-        ok = await self.client.post("/api/v1/auth/reauthenticate", headers=self.csrf(), json={"password": legacy.PASSWORD})
-        self.assertEqual(200, ok.status_code, ok.text)
-        self.assertEqual("user", ok.json()["session_kind"])
         self.assertEqual(200, (await self.client.get("/api/v1/auth/export")).status_code)
+        self.assertEqual(404, (await self.client.post("/api/v1/auth/reauthenticate", json={})).status_code)
 
-    async def test_refresh_cannot_renew_old_stepup_window(self):
+    async def test_refresh_rotates_session_without_step_up_state(self):
         await self.register()
         await self.expire_stepup()
-        old = await self.pool.fetchval("SELECT reauthenticated_at FROM v2_sessions WHERE token_hash=$1", token_hash(self.client.cookies[auth.USER_COOKIE]))
         refreshed = await self.client.post("/api/v1/auth/refresh", headers=self.csrf())
         self.assertEqual(200, refreshed.status_code)
-        now = await self.pool.fetchval("SELECT reauthenticated_at FROM v2_sessions WHERE token_hash=$1", token_hash(self.client.cookies[auth.USER_COOKIE]))
-        self.assertEqual(old, now)
-        denied = await self.client.get("/api/v1/auth/export")
-        self.assertEqual(403, denied.status_code)
-        self.assertEqual("reauthentication_required", denied.json()["detail"]["code"])
+        self.assertEqual(200, (await self.client.get("/api/v1/auth/export")).status_code)
 
-    async def test_expired_admin_sensitive_write_requires_password_and_new_totp(self):
+    async def test_stale_admin_step_up_timestamp_does_not_block_admin_write(self):
         user = await self.register()
         await self.admin_login()
         await self.expire_stepup("admin")
-        denied = await self.issue(user["user"]["id"])
-        self.assertEqual(403, denied.status_code)
-        replay = await self.client.post("/api/v1/admin/reauthenticate", headers=self.csrf(True), json={"password": legacy.PASSWORD, "totp_code": legacy.otp()})
-        self.assertEqual(401, replay.status_code)
-        step = await self.pool.fetchval("SELECT totp_last_step FROM v2_users WHERE id=$1", self.admin_id)
-        verified = await self.client.post("/api/v1/admin/reauthenticate", headers=self.csrf(True), json={"password": legacy.PASSWORD, "totp_code": legacy.otp(now=(step+1)*30)})
-        self.assertEqual(200, verified.status_code, verified.text)
+        denied = await self.client.post("/api/v1/admin/reauthenticate", headers=self.csrf(True), json={})
+        self.assertEqual(404, denied.status_code)
         self.assertEqual(201, (await self.issue(user["user"]["id"])).status_code)
 
     async def test_expired_admin_can_still_logout(self):
@@ -139,26 +127,17 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(429, limited.status_code)
         self.assertIn("retry-after", limited.headers)
 
-    async def test_admin_recovery_codes_are_hashed_single_use_and_rotatable(self):
+    async def test_admin_recovery_code_routes_are_removed(self):
         await self.admin_login()
         issued = await self.client.post("/api/v1/admin/mfa/recovery-codes", headers=self.csrf(True))
-        self.assertEqual(200, issued.status_code, issued.text)
-        codes = issued.json()["codes"]
-        self.assertEqual(10, len(codes))
-        self.assertNotIn(codes[0], str(await self.pool.fetch("SELECT * FROM v2_admin_recovery_codes")))
-        self.assertNotIn(codes[0], str(await self.pool.fetch("SELECT details FROM v2_audit_log")))
-        login = {"email": "admin@example.invalid", "password": legacy.PASSWORD, "recovery_code": codes[0]}
-        self.assertEqual(200, (await self.client.post("/api/v1/admin/recovery-login", json=login)).status_code)
-        self.assertEqual(401, (await self.client.post("/api/v1/admin/recovery-login", json=login)).status_code)
-        rotated = await self.client.post("/api/v1/admin/mfa/recovery-codes", headers=self.csrf(True))
-        self.assertEqual(200, rotated.status_code)
-        login["recovery_code"] = codes[1]
-        self.assertEqual(401, (await self.client.post("/api/v1/admin/recovery-login", json=login)).status_code)
+        self.assertEqual(404, issued.status_code)
+        self.assertEqual(404, (await self.client.post("/api/v1/admin/recovery-login", json={})).status_code)
 
-    async def test_stale_user_cannot_bind_but_can_stop(self):
+    async def test_stale_user_can_bind_but_cannot_skip_csrf(self):
         await self.register(); await self.expire_stepup()
-        denied = await self.client.put("/api/v1/accounts/leyu", headers=self.csrf(), json={"account_label":"本人", "username":"test-user", "password":"test-password"})
-        self.assertEqual(403, denied.status_code)
+        bound = await self.client.put("/api/v1/accounts/leyu", headers=self.csrf(), json={"account_label":"本人", "username":"test-user", "password":"test-password"})
+        self.assertEqual(200, bound.status_code, bound.text)
+        self.assertEqual("unverified", bound.json()["state"])
         stopped = await self.client.put("/api/v1/accounts/leyu/auto-betting", headers=self.csrf(), json={"enabled":False})
         self.assertEqual(200, stopped.status_code, stopped.text)
         self.assertEqual(200, (await self.client.post("/api/v1/accounts/leyu/emergency-stop", headers=self.csrf())).status_code)
@@ -189,12 +168,10 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(set(row["id"] for row in rows)&set(row["id"] for row in following.json()["items"]))
         self.assertEqual(422,(await self.client.get("/api/v1/auth/export?section=orders&cursor=broken")).status_code)
 
-    async def test_closure_requires_exact_consent_and_current_password(self):
+    async def test_closure_requires_exact_consent_without_password_step_up(self):
         await self.register()
-        bad = await self.client.post("/api/v1/auth/closure",headers=self.csrf(),json={"password":legacy.PASSWORD,"confirmation_phrase":"yes"})
+        bad = await self.client.post("/api/v1/auth/closure",headers=self.csrf(),json={"confirmation_phrase":"yes"})
         self.assertEqual(422,bad.status_code)
-        bad = await self.client.post("/api/v1/auth/closure",headers=self.csrf(),json={"password":"wrong","confirmation_phrase":"注销我的球讯账户"})
-        self.assertEqual(401,bad.status_code)
 
     async def test_no_open_accounting_anonymizes_and_keeps_ledger_identity(self):
         user=await self.register(); uid=uuid.UUID(user["user"]["id"])
@@ -227,7 +204,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         user=await self.register(); uid=uuid.UUID(user["user"]["id"])
         await self.pool.execute("UPDATE v2_users SET closure_requested_at=now() WHERE id=$1",uid)
         await self.pool.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,emergency_stopped) VALUES($1,FALSE,TRUE)",uid)
-        cancelled=await self.client.post("/api/v1/auth/closure/cancel",headers=self.csrf(),json={"password":legacy.PASSWORD})
+        cancelled=await self.client.post("/api/v1/auth/closure/cancel",headers=self.csrf())
         self.assertEqual(200,cancelled.status_code,cancelled.text)
         policy=await self.pool.fetchrow("SELECT * FROM v2_user_bet_settings WHERE user_id=$1",uid)
         self.assertFalse(policy["auto_enabled"]); self.assertTrue(policy["emergency_stopped"])
@@ -273,12 +250,46 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(other),response.text)
         self.assertNotIn("accounting-evidence",response.text)
 
-    async def test_admin_idle_expiry_and_absolute_session_window(self):
-        await self.admin_login()
+    async def test_admin_cookie_and_server_session_last_180_days(self):
+        response = await self.admin_login()
+        self.assert_session_cookies(response, (auth.ADMIN_COOKIE, auth.ADMIN_CSRF_COOKIE))
         session=await self.pool.fetchrow("SELECT expires_at,created_at FROM v2_sessions WHERE user_id=$1",self.admin_id)
-        self.assertLessEqual((session["expires_at"]-session["created_at"]).total_seconds(),3601)
+        self.assertAlmostEqual((session["expires_at"]-session["created_at"]).total_seconds(),180*86400,delta=2)
         await self.pool.execute("UPDATE v2_sessions SET last_seen_at=now()-interval '16 minutes' WHERE user_id=$1",self.admin_id)
-        self.assertEqual(401,(await self.client.get("/api/v1/admin/me")).status_code)
+        self.assertEqual(200,(await self.client.get("/api/v1/admin/me")).status_code)
+
+    def assert_session_cookies(self, response, names):
+        cookies = SimpleCookie()
+        for value in response.headers.get_list("set-cookie"):
+            cookies.load(value)
+        deadline = datetime.fromisoformat(response.json()["expires_at"])
+        for name in names:
+            cookie = cookies[name]
+            self.assertEqual("15552000", cookie["max-age"])
+            self.assertAlmostEqual(parsedate_to_datetime(cookie["expires"]).timestamp(),deadline.timestamp(),delta=1)
+            self.assertEqual("strict", cookie["samesite"])
+        self.assertTrue(cookies[names[0]]["httponly"])
+
+    async def test_user_login_refresh_expiry_and_revocation_with_long_cookie(self):
+        user = await self.register()
+        uid = uuid.UUID(user["user"]["id"])
+        response = await self.client.post("/api/v1/auth/login",json={"email":"user@example.invalid","password":legacy.PASSWORD})
+        self.assertEqual(200,response.status_code,response.text)
+        self.assert_session_cookies(response,(auth.USER_COOKIE,auth.CSRF_COOKIE))
+        old_token = self.client.cookies[auth.USER_COOKIE]
+        await self.pool.execute("UPDATE v2_sessions SET created_at=now()-interval '179 days',last_seen_at=now()-interval '30 days',expires_at=now()+interval '1 day',reauthenticated_at=now()-interval '30 days' WHERE user_id=$1",uid)
+        self.assertEqual(200,(await self.client.get("/api/v1/auth/me")).status_code)
+        refreshed = await self.client.post("/api/v1/auth/refresh",headers=self.csrf())
+        self.assertEqual(200,refreshed.status_code,refreshed.text)
+        self.assert_session_cookies(refreshed,(auth.USER_COOKIE,auth.CSRF_COOKIE))
+        self.assertNotEqual(old_token,self.client.cookies[auth.USER_COOKIE])
+        denied = await self.client.get("/api/v1/auth/me",headers={"Authorization":"Bearer "+old_token})
+        self.assertEqual(401,denied.status_code)
+        exported = await self.client.get("/api/v1/auth/export")
+        self.assertEqual(200, exported.status_code, exported.text)
+        await self.pool.execute("UPDATE v2_sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1",uid)
+        self.assertEqual(401,(await self.client.get("/api/v1/auth/me")).status_code)
+        self.assertEqual(401,(await self.client.post("/api/v1/auth/refresh",headers=self.csrf())).status_code)
 
     async def test_audit_failure_rolls_back_recovery_and_anonymization(self):
         user=await self.register(); await self.admin_login()
@@ -296,7 +307,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         user=await self.register(); uid=uuid.UUID(user["user"]["id"])
         await self.pool.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,emergency_stopped,consent_account_id) VALUES($1,TRUE,FALSE,$2)",uid,uuid.uuid4())
         pending=await self.seed_order(uid,"pending"); unknown=await self.seed_order(uid,"unknown")
-        changed=await self.client.put("/api/v1/auth/password",headers=self.csrf(),json={"current_password":legacy.PASSWORD,"new_password":"new-current-password-123"})
+        changed=await self.client.put("/api/v1/auth/password",headers=self.csrf(),json={"new_password":"new-current-password-123"})
         self.assertEqual(200,changed.status_code,changed.text); self.assertFalse(changed.json()["auto_betting"])
         policy=await self.pool.fetchrow("SELECT * FROM v2_user_bet_settings WHERE user_id=$1",uid)
         self.assertFalse(policy["auto_enabled"]); self.assertTrue(policy["emergency_stopped"]); self.assertIsNone(policy["consent_account_id"])
@@ -309,9 +320,15 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.pool.fetchval("SELECT auto_enabled FROM v2_user_bet_settings WHERE user_id=$1",uid))
         self.assertEqual("unknown",await self.pool.fetchval("SELECT state FROM v2_bet_orders WHERE id=$1",unknown))
 
-    async def test_legacy_long_admin_session_still_has_absolute_one_hour_limit(self):
+    async def test_long_admin_session_write_and_expiration(self):
+        user = await self.register()
         await self.admin_login()
-        await self.pool.execute("UPDATE v2_sessions SET created_at=now()-interval '2 hours',expires_at=now()+interval '4 hours',last_seen_at=now() WHERE user_id=$1",self.admin_id)
+        await self.pool.execute("UPDATE v2_sessions SET created_at=now()-interval '179 days',expires_at=now()+interval '1 day',last_seen_at=now()-interval '1 day' WHERE user_id=$1",self.admin_id)
+        self.assertEqual(200,(await self.client.get("/api/v1/admin/me")).status_code)
+        self.assertEqual(201,(await self.issue(user["user"]["id"])).status_code)
+        await self.expire_stepup("admin")
+        self.assertEqual(201,(await self.issue(user["user"]["id"])).status_code)
+        await self.pool.execute("UPDATE v2_sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1",self.admin_id)
         self.assertEqual(401,(await self.client.get("/api/v1/admin/me")).status_code)
 
     async def test_revoked_session_cannot_bind_after_waiting_for_user_lock(self):

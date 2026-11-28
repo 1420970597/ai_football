@@ -1,0 +1,230 @@
+{
+  "stage": "targeted_filter_production_acceptance_passed_case_history_visibility_unproven",
+  "source_parent_commit": "657017c244a526c45302eea86385b054100a12f7",
+  "source_sha256": {
+    "services/api/app/recommendation_eligibility.py": "701ebc563329b566d67b0cdb4b8f2bb9a919530e272a103edc8cbbf9a615f5bf"
+  },
+  "baseline": {
+    "tests": 1,
+    "failures": 3,
+    "exit_code": 1,
+    "failed_tied_scores": [
+      1,
+      2,
+      6
+    ]
+  },
+  "backend": {
+    "tests": 96,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 39.577
+  },
+  "case": {
+    "fixture_id": "leyu:5737851",
+    "home_team": "欧克莱卡诺",
+    "away_team": "马可尼骏马",
+    "before_end_checked_at_utc": "2026-11-13T10:29:06.855687+00:00",
+    "before_end_score": [
+      2,
+      2
+    ],
+    "signals": 2,
+    "signal_phase": "scheduled",
+    "native_market": "4",
+    "period": "full_time",
+    "selection": "away",
+    "provider_home_line": "-1",
+    "selection_line": "+1",
+    "exact_quote_status": "closed",
+    "exact_quote_last_received_at_utc": "2026-11-13T09:42:35.839643+00:00",
+    "before_end_active_quotes": 0,
+    "native_readonly_checked_at_utc": "2026-11-13T10:33:15.810650+00:00",
+    "native_active_quotes": 0,
+    "native_phase_projection": [
+      {
+        "id": "leyu:5737851",
+        "phase": "live",
+        "match_state": "50",
+        "home_score": 2,
+        "away_score": 2,
+        "clock_minute": 95
+      }
+    ],
+    "actual_case_restored": false,
+    "reason": "Original exact line closed; other live lines cannot replace this recommendation."
+  },
+  "scope": "Known tied scores permit only verified native4 full-time same-line manual compatibility; automatic phase rule unchanged.",
+  "limitations": [
+    "Case quote closure is established before the report, but complete historical homepage visibility was not recorded.",
+    "No funded or real order tests; production case is not a recovered actionable recommendation."
+  ],
+  "database_writes": 0,
+  "funded_test_orders": 0,
+  "source_revision": "3a034d5b970eb3a491d7e4017370bf6eeaad7765",
+  "production": {
+    "api_image": "sha256:f4f5aa124ea399e3251f0ef3fa80eaf31c9ed9b96f722b797ae11d7a9b226c92",
+    "previous_api_image": "sha256:eec79eb0213eab6f6b0592aa450625eb356a5c02c86490ecd2c5f38dcfe37dad",
+    "four_dependents_unchanged": true,
+    "preflight": {
+      "preflight": "passed",
+      "changed_role": "api",
+      "image": "sha256:f4f5aa124ea399e3251f0ef3fa80eaf31c9ed9b96f722b797ae11d7a9b226c92",
+      "environment_mounts_networks_ports_resources_preserved": true,
+      "review_and_frontend_restart": false,
+      "schema_changes": 0,
+      "funded_test_orders": 0
+    },
+    "postcheck": {
+      "checked_at_utc": "2026-11-13T10:40:40.621705+00:00",
+      "read_only": "on",
+      "module_sha256": "701ebc563329b566d67b0cdb4b8f2bb9a919530e272a103edc8cbbf9a615f5bf",
+      "readonly_policy_probes": [
+        {
+          "home_score": 0,
+          "away_score": 0,
+          "compatible": true
+        },
+        {
+          "home_score": 1,
+          "away_score": 1,
+          "compatible": true
+        },
+        {
+          "home_score": 2,
+          "away_score": 2,
+          "compatible": true
+        },
+        {
+          "home_score": 6,
+          "away_score": 6,
+          "compatible": true
+        },
+        {
+          "home_score": 1,
+          "away_score": 2,
+          "compatible": false
+        },
+        {
+          "home_score": 2,
+          "away_score": 1,
+          "compatible": false
+        },
+        {
+          "home_score": null,
+          "away_score": null,
+          "compatible": false
+        },
+        {
+          "home_score": 2,
+          "away_score": null,
+          "compatible": false
+        },
+        {
+          "home_score": -1,
+          "away_score": -1,
+          "compatible": false
+        }
+      ],
+      "case_current": {
+        "phase": "finished",
+        "home_score": 2,
+        "away_score": 2,
+        "outcome": "pending",
+        "signals": 2,
+        "active_quotes": 0
+      },
+      "public_reads": [
+        {
+          "sport": "football",
+          "status": 200,
+          "returned_fixtures": 1,
+          "has_more": false
+        },
+        {
+          "sport": "basketball",
+          "status": 200,
+          "returned_fixtures": 0,
+          "has_more": false
+        }
+      ],
+      "deployment_interval": {
+        "started_at_utc": "2026-11-13T10:39:14Z",
+        "ended_at_utc": "2026-11-13T10:39:33Z",
+        "analysis_jobs_detected_in_interval": []
+      },
+      "migrations": 38,
+      "funded_test_orders": 0
+    },
+    "browser": {
+      "results": [
+        {
+          "width": 1440,
+          "passed": true,
+          "current_recommended_fixtures": 1,
+          "date_navigation_visible": true,
+          "default_all_dates": true,
+          "explicit_date_request": true,
+          "date_reload": true,
+          "production_mutations": 0
+        },
+        {
+          "width": 390,
+          "passed": true,
+          "current_recommended_fixtures": 1,
+          "date_navigation_visible": true,
+          "default_all_dates": true,
+          "explicit_date_request": true,
+          "date_reload": true,
+          "production_mutations": 0
+        }
+      ],
+      "errors": [],
+      "writes": [],
+      "production_mutations": 0
+    },
+    "positive_sample": {
+      "checked_at_utc": "2026-11-13T10:41:35.784292+00:00",
+      "read_only": true,
+      "homepage": [
+        {
+          "id": "leyu:5850279",
+          "home_team": "沙特阿拉伯",
+          "away_team": "韩国",
+          "phase": "scheduled",
+          "home_score": null,
+          "away_score": null,
+          "kickoff_at": "2026-11-13T14:30:00+00:00",
+          "expert_signals": [
+            {
+              "signal_phase": "scheduled",
+              "market_id": "2",
+              "market_kind": "total",
+              "period": "full_time",
+              "line": "2.500",
+              "selection": "over",
+              "home_score": null,
+              "away_score": null,
+              "status": "active",
+              "current_price": "2.06000"
+            },
+            {
+              "signal_phase": "scheduled",
+              "market_id": "2",
+              "market_kind": "total",
+              "period": "full_time",
+              "line": "2.500",
+              "selection": "over",
+              "home_score": null,
+              "away_score": null,
+              "status": "active",
+              "current_price": "2.06000"
+            }
+          ]
+        }
+      ]
+    },
+    "synthetic_data_written": false
+  }
+}

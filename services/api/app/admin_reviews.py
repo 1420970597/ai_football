@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+import re
 import uuid
 
 from fastapi import HTTPException
@@ -12,7 +14,8 @@ from .review_state import trace
 
 STATES = {'queued', 'running', 'succeeded', 'unresolved', 'retry', 'failed'}
 SECRET_FIELDS = {'authorization', 'api_key', 'access_token', 'refresh_token', 'token', 'password',
-                 'secret', 'api_hash', 'session_string', 'cookie', 'set-cookie', 'object_key', 'bucket'}
+                 'secret', 'api_hash', 'session_string', 'cookie', 'set-cookie', 'object_key', 'bucket',
+                 'headers', 'request_headers', 'response_headers', 'x-api-key', 'proxy_authorization'}
 
 
 def trace_payload(value):
@@ -22,8 +25,19 @@ def trace_payload(value):
                 for key, item in value.items()}
     if isinstance(value, list):
         return [trace_payload(item) for item in value]
-    if isinstance(value, str) and value.lower().startswith('data:image/'):
-        return '[图片编码已省略，请查看消息原图]'
+    if isinstance(value, str):
+        if value.lstrip().lower().startswith('data:image/'):
+            return '[图片编码已省略，请查看消息原图]'
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                nested = json.loads(value)
+            except (ValueError, TypeError):
+                pass
+            else:
+                return json.dumps(trace_payload(nested), ensure_ascii=False)
+        value = re.sub(r'data:image/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+',
+                       '[图片编码已省略，请查看消息原图]', value, flags=re.IGNORECASE)
+        value = re.sub(r'(?i)\bBearer\s+[a-z0-9._~+/-]+=*', 'Bearer [已隐藏]', value)
     return value
 
 

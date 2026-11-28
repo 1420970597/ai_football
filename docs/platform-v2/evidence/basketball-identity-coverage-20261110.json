@@ -1,0 +1,127 @@
+{
+  "checked_at_utc": "2026-11-10T10:43:00Z",
+  "native_read_only": {
+    "read_only": true,
+    "fixtures": [
+      {
+        "id": "leyu:5833464",
+        "sport": "basketball",
+        "competition_id": "48",
+        "competition_name": "日本B联赛超级组",
+        "home_team_id": "26119",
+        "home_team": "神户鹳鸟",
+        "home_aliases": [],
+        "away_team_id": "26100",
+        "away_team": "东京太阳摇滚",
+        "away_aliases": [],
+        "kickoff_at": "2026-11-10 10:05:00+00:00",
+        "phase": "live",
+        "clock_minute": 0,
+        "match_state": "13",
+        "home_score": 19,
+        "away_score": 36,
+        "received_at": "2026-11-10 10:40:26.355173+00:00",
+        "source_updated_at": null
+      },
+      {
+        "id": "leyu:5833477",
+        "sport": "basketball",
+        "competition_id": "208",
+        "competition_name": "韩国篮球联赛",
+        "home_team_id": "27267",
+        "home_team": "蔚山现代太阳神",
+        "home_aliases": [],
+        "away_team_id": "24449",
+        "away_team": "高阳天空枪手",
+        "away_aliases": [],
+        "kickoff_at": "2026-11-10 10:00:00+00:00",
+        "phase": "live",
+        "clock_minute": 3,
+        "match_state": "14",
+        "home_score": null,
+        "away_score": null,
+        "received_at": "2026-11-10 10:40:23.196114+00:00",
+        "source_updated_at": null
+      }
+    ]
+  },
+  "public_fetch_manifest": [
+    {
+      "key": "sunrockers-official",
+      "url": "https://www.sunrockers.jp/team/about/",
+      "checked_at": "2026-11-10T10:41:59.241072+00:00",
+      "status": 200,
+      "bytes": 86615,
+      "sha256": "74513b6f00e3df06463c8f70a98547bcdd35589f1d95d00ce760583e1c93fbba",
+      "final_url": "https://www.sunrockers.jp/team/about/",
+      "identity_terms_found": [
+        "サンロッカーズ渋谷",
+        "東京サンロッカーズ"
+      ]
+    },
+    {
+      "key": "tokyo-government-zh",
+      "url": "https://zh-cn.sports-tokyo-info.metro.tokyo.lg.jp/eventblog/2026/8/bm_26082101.html",
+      "checked_at": "2026-11-10T10:41:59.725693+00:00",
+      "status": 200,
+      "bytes": 114604,
+      "sha256": "0fe4b2e27825a5755ff6ea0a336010eb4ca411fc99b5e650e62e2c08afd673ee",
+      "final_url": "https://zh-cn.sports-tokyo-info.metro.tokyo.lg.jp/eventblog/2026/8/bm_26082101.html",
+      "identity_terms_found": [
+        "东京太阳摇滚"
+      ]
+    },
+    {
+      "key": "goyang-easl-official",
+      "url": "https://www.easl.basketball/news/goyang-sono-skygunners-qualify-for-2026-27-season",
+      "checked_at": "2026-11-10T10:41:59.833544+00:00",
+      "status": 200,
+      "bytes": 162544,
+      "sha256": "2d210f657b18190ed097803a0520fff7a381e4a789eb588a3e925be51d39a5a5",
+      "final_url": "https://www.easl.basketball/news/goyang-sono-skygunners-qualify-for-2026-27-season",
+      "identity_terms_found": [
+        "Goyang Sono Skygunners"
+      ]
+    },
+    {
+      "key": "goyang-publisher",
+      "url": "https://www.henduoqiu.com/qiudui/210162",
+      "checked_at": "2026-11-10T10:42:00.069502+00:00",
+      "status": 403,
+      "bytes": 350,
+      "sha256": "b72735e4e28443559c617b519c7ce5bc98f54502dac72851e589e8e9401c76d6",
+      "final_url": "https://www.henduoqiu.com/qiudui/210162",
+      "identity_terms_found": []
+    },
+    {
+      "key": "tokyo-publisher",
+      "url": "https://www.henduoqiu.com/qiudui/211465",
+      "checked_at": "2026-11-10T10:42:03.282928+00:00",
+      "status": 403,
+      "bytes": 350,
+      "sha256": "4af2f44fb258a0ec166859b499f7ee64c639ec04fc8a11e6b1fe6faf8f2ee530",
+      "final_url": "https://www.henduoqiu.com/qiudui/211465",
+      "identity_terms_found": []
+    }
+  ],
+  "web_search_cached_publisher_evidence": [
+    {
+      "url": "https://www.henduoqiu.com/qiudui/210162",
+      "title": "高阳索诺天枪数据统计和赛程表2026-2027",
+      "observation": "高阳索诺天枪（Goyang Sono Skygunners）；11/10 18:00 蔚山现代太阳神 VS 高阳索诺天枪",
+      "access": "web search cached page; Docker direct fetch 403; no successful direct-body SHA"
+    },
+    {
+      "url": "https://www.henduoqiu.com/qiudui/211465",
+      "title": "东京太阳摇滚数据统计和赛程表2026-2027",
+      "observation": "东京太阳摇滚（Tokyo Sunrockers）；11/10 18:05 神户鹳鸟 VS 东京太阳摇滚",
+      "access": "web search cached page; Docker direct fetch 403; no successful direct-body SHA"
+    }
+  ],
+  "limitations": [
+    "Cross-publisher labels are reviewed translations, not claims of official Chinese names.",
+    "Tokyo government Chinese page explicitly identifies machine translation.",
+    "Public pages provide identity vocabulary only; fixture/quote/score/order facts remain native Leyu.",
+    "Native names are not rewritten; only reviewed whole basketball labels are registered."
+  ]
+}

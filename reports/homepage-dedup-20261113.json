@@ -1,0 +1,178 @@
+{
+  "status": "deployed_and_runtime_verified",
+  "date_utc": "2026-11-13",
+  "authoritative_branch": "refactor/TASK-78-web-ux",
+  "source_parent_commit": "b992195f5258dc64295822e7f396be4caec4e114",
+  "tests": {
+    "tests": 253,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 81.665
+  },
+  "browser": {
+    "homepage_widths": [
+      1440,
+      1030,
+      390
+    ],
+    "manual_scenarios": 20,
+    "errors": 0,
+    "funded_orders": 0
+  },
+  "diagnosis": {
+    "snapshot_utc": "2026-11-13T09:03:27Z",
+    "signals_72h": 469,
+    "orders_72h": 65,
+    "duplicate_intent_order_groups": 6,
+    "orders_in_groups": 12,
+    "states": {
+      "accepted": 2,
+      "settled": 8,
+      "cancelled": 2
+    }
+  },
+  "tested_source_sha256": {
+    "services/api/app/signal_identity.py": "272016ed77f42e8b901a5b5d008aeb2ca203f1732f4c3b86f83a6914cd935285",
+    "services/api/app/recommendation_eligibility.py": "d240f513ae8aa239109beee7ff3c082e45431bd30f7dba9bada0ca8ddc4b6364",
+    "services/api/app/signal_persistence.py": "467ca96179df7445a118fbd6467325da89313eb38c11e10d1cace0d5591a6dcc",
+    "services/api/app/orders.py": "5b5cb313092c563184c4f79446f45751efbd82d6e29d9000a1eac1295d99701b",
+    "services/api/app/expert_statistics.py": "7376a4f347c40c140a23d0eba782f4226f2b2e6fd5a80ea456cc9334fc5ad0a8",
+    "services/api/app/result_ledger.py": "ce4297aba9ef2c80e08990975b2d7294e89e363588f14d006f95c59622b11b7e",
+    "services/api/app/routes/accounts.py": "54373a8b305c63f2bc888a7199199cd7d9a9ca15ae61ed8198651f6f0a6fd04c",
+    "services/api/app/routes/public.py": "20317021dfdf2c004eac9c1f718ab65d4b6562b3b39c7fd7114fe15152cdd9ee",
+    "web/app/app.js": "dcb56a0057d8024b5436c56acd220ff93636e03f4f6a52f25266aabfe0c7ebdd"
+  },
+  "schema_changes": 0,
+  "historical_financial_records_modified": false,
+  "manual_independent_confirmations_preserved": true,
+  "production_source_strategy": "thin overlays of actual running images; uncommitted unrelated Hermes changes excluded",
+  "preexisting_hermes_dirty_files_preserved": 3,
+  "functional_commit": "6eb9a2df1958223fe74cc4442786dbd441984138",
+  "verified_at_utc": "2026-11-13T09:44:31.714027+00:00",
+  "production_images": {
+    "api": "sha256:eec79eb0213eab6f6b0592aa450625eb356a5c02c86490ecd2c5f38dcfe37dad",
+    "local-mcp-api": "sha256:6291c59678dc7c9f34b4b62834f62ee13b5adeeb32c726c261d35255b35d8435",
+    "web": "sha256:4ba5a2f696a6bda6b9b1056fc29c41aa8cbdc6b9103514ff028d2b92bd346c0d"
+  },
+  "production_schema_entries": 38,
+  "public_https": {
+    "public_https_new_script_verified": true,
+    "checked_at_utc": "2026-11-13T09:42:52.518173+00:00",
+    "read_only": true,
+    "status": 200,
+    "script_sha256": "dcb56a0057d8024b5436c56acd220ff93636e03f4f6a52f25266aabfe0c7ebdd"
+  },
+  "local_homepage": [
+    {
+      "sport": "football",
+      "eligible_fixtures": 0,
+      "returned_fixtures": 0,
+      "pages": 1,
+      "complete_for_current_eligibility": true
+    },
+    {
+      "sport": "basketball",
+      "eligible_fixtures": 0,
+      "returned_fixtures": 0,
+      "pages": 1,
+      "complete_for_current_eligibility": true
+    }
+  ],
+  "live_browser": [
+    {
+      "width": 1440,
+      "passed": true,
+      "current_recommended_fixtures": 0,
+      "expert_dates_unbounded": true,
+      "all_matches_date_filter": true
+    },
+    {
+      "width": 390,
+      "passed": true,
+      "current_recommended_fixtures": 0,
+      "expert_dates_unbounded": true,
+      "all_matches_date_filter": true
+    }
+  ],
+  "runtime_integrity": {
+    "all_patched_code_sha256_verified": true,
+    "startup_environment_and_resources_preserved": true,
+    "worker_image_preserved": true,
+    "functional_commit": "6eb9a2df1958223fe74cc4442786dbd441984138"
+  },
+  "maintenance_windows": [
+    {
+      "attempt": 1,
+      "exit_code": 42,
+      "pause_started_at": "2026-11-13T09:29:23.440196+00:00",
+      "pause_ended_at": "2026-11-13T09:32:48.493784+00:00",
+      "detected_during_pause": 0,
+      "maintenance_queued_deadline_elapsed": 0,
+      "detected_at_reset": false
+    },
+    {
+      "attempt": 2,
+      "exit_code": 42,
+      "pause_started_at": "2026-11-13T09:34:14.558790+00:00",
+      "pause_ended_at": "2026-11-13T09:37:47.678582+00:00",
+      "detected_during_pause": 5,
+      "maintenance_queued_deadline_elapsed": 4,
+      "detected_at_reset": false
+    },
+    {
+      "attempt": 3,
+      "exit_code": 0,
+      "pause_started_at": "2026-11-13T09:38:27.939014+00:00",
+      "pause_ended_at": "2026-11-13T09:39:25.328364+00:00",
+      "detected_during_pause": 1,
+      "maintenance_queued_deadline_elapsed": 1,
+      "detected_at_reset": false
+    }
+  ],
+  "monitor": {
+    "heartbeat_at": 1794563242.3327823,
+    "process_healthy": true,
+    "coverage_healthy": false,
+    "unscanned_windows": 0,
+    "failed_windows": 2,
+    "partial_windows": 36,
+    "repair_pending": 4,
+    "repair_waiting_evidence": 4,
+    "state": "running_restored",
+    "authoritative_operations_commit": "0b1d6031",
+    "active_task": {
+      "kind": "scan"
+    }
+  },
+  "limitations": [
+    "当前符合实盘展示条件的足球和篮球推荐均为0；仅验证当前有效集合无遗漏，不代表所有TG发言已经成功识别。",
+    "第二次维护窗4条、第三次1条，合计5条消息超过20秒排队期限；检测时间未重置，维护过程不作为常态20秒SLA通过证据。",
+    "历史重复订单保留原始资金及结算记录；本轮资金测试0。"
+  ],
+  "maintenance_queued_deadline_elapsed_total": 5,
+  "maintenance_job_audit": {
+    "read_only": true,
+    "maintenance_overdue_jobs": [
+      {
+        "state": "failed",
+        "last_error": "source_deleted",
+        "jobs": 1,
+        "signals": "0"
+      },
+      {
+        "state": "unresolved",
+        "last_error": "detection_deadline_exceeded",
+        "jobs": 4,
+        "signals": "0"
+      },
+      {
+        "state": "unresolved",
+        "last_error": "detection_deadline_exceeded",
+        "jobs": 1,
+        "signals": "0"
+      }
+    ]
+  },
+  "root_handoff_synced_at_utc": "2026-11-13T09:47:33.634826+00:00"
+}

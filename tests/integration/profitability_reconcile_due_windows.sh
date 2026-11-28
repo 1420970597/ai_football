@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+test_dir=$(mktemp -d)
+trap 'rm -rf -- "$test_dir"' EXIT
+cd "$test_dir"
+mkdir state
+cp "$root/infra/profitability/reconcile_due_windows.sh" .
+
+date() {
+    if [[ "$*" == '-u +%s%6N' ]]; then
+        printf '%s\n' "$test_now"
+    elif [[ "$*" == '-u +%Y-%m-%dT%H:%M:%SZ' && -n ${test_calendar_time:-} ]]; then
+        printf '%s\n' "$test_calendar_time"
+    else
+        command date "$@"
+    fi
+}
+docker() {
+    [[ "$1 $2 $3 $4 $5" == 'exec -i ai-football-v2-executor-1 python -c' ]] || return 2
+    python "${@:5}"
+}
+export -f date docker
+printf '%s\n' 'set -eu' 'printf "%s\n" "$1" >> calls' \
+    'if [[ ${test_fail:-0} == 1 ]]; then exit 41; fi' \
+    'printf "%s\n" "$test_report"' > reconcile_live_window.sh
+printf '%s\n' 'set -eu' 'printf "%s\n" "$1" >> wallet_calls' \
+    'if [[ ${test_wallet_fail:-0} == 1 ]]; then exit 42; fi' \
+    'printf "%s\n" "{\"samples\":0}"' > reconcile_wallet_window.sh
+
+anchor=2026-11-18T02:14:09.845374Z
+base=$(date -u -d "$anchor" +%s%6N)
+window_us=43200000000
+delay_us=350000000
+run() {
+    bash ./reconcile_due_windows.sh "$anchor" "$test_dir/state"
+}
+
+# An empty placeholder is eligible only after the delay.
+export test_now=$((base + window_us + delay_us - 1))
+export test_report='[{"complete_page": false, "scan_issue": "upstream_total_changed"}]'
+: > state/0.json
+run
+test ! -e calls
+test ! -e wallet_calls
+export test_now=$((test_now + 1))
+export test_wallet_fail=1
+result=0
+run || result=$?
+test "$result" = 42
+test "$(sed -n '1p' calls)" = "$anchor"
+test "$(sed -n '1p' wallet_calls)" = "$anchor"
+test ! -e state/0.wallet.json
+cp state/0.json original
+
+# An unsuccessful attempt is retried and the original report survives.
+export test_fail=1
+export test_wallet_fail=0
+result=0
+run || result=$?
+test "$result" = 41
+test "$(stat -c %a state/0.wallet.json)" = 600
+test "$(sed -n '2p' wallet_calls)" = "$anchor"
+test ! -e state/0.retry.json
+test -z "$(find state -name '.rolling.??????' -print)"
+cmp state/0.json original
+export test_fail=0
+export test_report='[{"complete_page": true, "order_receipt_fields_reconciled": false, "local_only": 0, "upstream_only": 0, "issues": {"missing_currency": 1, "missing_fees": 1}}]'
+run
+test "$(stat -c %a state/0.retry.json)" = 600
+cmp state/0.json original
+run
+test "$(wc -l < calls)" = 3
+test "$(wc -l < wallet_calls)" = 2
+
+# Missing reports come first, then malformed reports. Missing receipt fields do not cause a retry.
+export test_now=$((base + 4 * window_us + delay_us))
+printf '%s\n' "$test_report" > state/1.json
+printf '%s\n' '{broken' > state/2.json
+run
+test "$(sed -n '4p' calls)" = 2026-11-19T14:14:09.845374Z
+test ! -e state/2.retry.json
+run
+test "$(sed -n '5p' calls)" = 2026-11-19T02:14:09.845374Z
+test -s state/2.retry.json
+test ! -e state/1.retry.json
+test "$(cat state/2.json)" = '{broken'
+run
+test "$(wc -l < calls)" = 5
+
+export test_now=$((base + 5 * window_us + delay_us))
+run
+test "$(sed -n '6p' calls)" = 2026-11-20T02:14:09.845374Z
+test -s state/4.json
+test -s state/4.wallet.json
+run
+test "$(wc -l < calls)" = 6
+
+# A complete scan with a different order list gets one retry in either direction.
+for direction in local_only upstream_only; do
+    if [ "$direction" = local_only ]; then
+        export test_report='[{"complete_page": true, "local_only": 1, "upstream_only": 0}]'
+        ordinal=5
+    else
+        export test_report='[{"complete_page": true, "local_only": 0, "upstream_only": 1}]'
+        ordinal=6
+    fi
+    export test_now=$((base + (ordinal + 1) * window_us + delay_us))
+    run
+    cp "state/$ordinal.json" original
+    run
+    cmp "state/$ordinal.json" original
+    test -s "state/$ordinal.retry.json"
+    run
+    test "$(wc -l < calls)" = "$((6 + 2 * (ordinal - 4)))"
+done
+printf '%s\n' 'Reconciliation scheduling checks passed.'
+
+# Recheck contradictory same-order receipts, while preserving the archived primary scan.
+export test_now=$((base + window_us + delay_us))
+for issue in net_profit_difference payout_difference settlement_time_difference placement_time_difference; do
+    path="$test_dir/discrepancies/$issue"
+    export test_report="[{\"complete_page\":true,\"local_only\":0,\"upstream_only\":0,\"issues\":{\"$issue\":1}}]"
+    bash ./reconcile_due_windows.sh "$anchor" "$path"
+    cp "$path/0.json" original_discrepancy
+    bash ./reconcile_due_windows.sh "$anchor" "$path"
+    test -s "$path/0.retry.json"
+    cmp "$path/0.json" original_discrepancy
+    calls_before=$(wc -l < calls)
+    bash ./reconcile_due_windows.sh "$anchor" "$path"
+    test "$(wc -l < calls)" = "$calls_before"
+done
+
+# Recheck recent windows only when a fresh fixed-window snapshot gains receipts.
+mkdir -p watch/reconciliations watch/state
+state_path="$test_dir/watch/reconciliations"
+export test_now=$((base + window_us + delay_us))
+export test_report='[{"complete_page":true,"local_only":0,"upstream_only":0,"local_settled":51,"begin":"2026-11-18T02:14:09.845374Z","end":"2026-11-18T14:14:09.845374Z"}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.json" original_late
+calls_before=$(wc -l < calls)
+snapshot() {
+    printf '{"anchor":"%s","observed_at":"%s","windows":[{"ordinal":0,"since":"%s","until":"%s","closed":true,"settled":%s,"accounts":%s,"provider_accounts":1,"local_receipt_digest":"%s"}]}\n' \
+        "$1" "$2" "$anchor" "$3" "$4" "${5:-1}" "${6:-}" > watch/state/latest.json
+}
+boundary=2026-11-18T14:14:09.845374Z
+fresh=2026-11-18T14:19:58Z
+snapshot "$anchor" "$fresh" "$boundary" 51
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot 2026-11-18T02:14:00Z "$fresh" "$boundary" 52
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot "$anchor" 2026-11-18T14:00:00Z "$boundary" 52
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot "$anchor" "$fresh" 2026-11-18T14:14:00Z 52
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+snapshot "$anchor" "$fresh" "$boundary" 52 2
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$calls_before"
+snapshot "$anchor" "$fresh" "$boundary" 52
+export test_fail=1
+result=0
+bash ./reconcile_due_windows.sh "$anchor" "$state_path" || result=$?
+test "$result" = 41
+test ! -e "$state_path/0.late-52.json"
+export test_fail=0
+export test_report='[{"complete_page":true,"local_only":0,"upstream_only":0,"local_settled":52}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(stat -c %a "$state_path/0.late-52.json")" = 600
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 2))"
+snapshot "$anchor" "$fresh" "$boundary" 53
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test -s "$state_path/0.late-53.json"
+cmp "$state_path/0.json" original_late
+printf '%s\n' 'Late settlement reconciliation checks passed.'
+
+# Both previous scans can miss upstream orders while the local ledger advances.
+state_path="$test_dir/watch/unmatched"
+calls_before=$(wc -l < calls)
+snapshot "$anchor" "$fresh" "$boundary" 51
+export test_report='[{"complete_page":false,"local_only":2,"upstream_only":0,"local_settled":50,"begin":"2026-11-18T02:14:09.845374Z","end":"2026-11-18T14:14:09.845374Z"}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.json" unmatched_original
+export test_report='[{"complete_page":true,"local_only":1,"upstream_only":0,"local_settled":51,"begin":"2026-11-18T02:14:09.845374Z","end":"2026-11-18T14:14:09.845374Z"}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.retry.json" unmatched_retry
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 2))"
+snapshot "$anchor" "$fresh" "$boundary" 52
+export test_report='[{"complete_page":true,"local_only":0,"upstream_only":0,"local_settled":52}]'
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test -s "$state_path/0.late-52.json"
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 3))"
+cmp "$state_path/0.json" unmatched_original
+cmp "$state_path/0.retry.json" unmatched_retry
+
+# A changed digest can require a recheck without changing the order count.
+state_path="$test_dir/watch/changed-receipts"
+old_digest=$(printf '%064d' 1)
+new_digest=$(printf '%064d' 2)
+calls_before=$(wc -l < calls)
+export test_report="[{\"complete_page\":true,\"local_only\":0,\"upstream_only\":0,\"local_settled\":51,\"begin\":\"$anchor\",\"end\":\"$boundary\",\"local_receipt_digest\":\"v1:$old_digest\"}]"
+snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$old_digest"
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+cp "$state_path/0.json" original_receipts
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 1))"
+snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$new_digest"
+result=0
+bash ./reconcile_due_windows.sh "$anchor" "$state_path" || result=$?
+test "$result" = 75
+test ! -e "$state_path/0.receipt-$new_digest.json"
+test -z "$(find "$state_path" -name '.rolling.??????' -print)"
+export test_report="${test_report/$old_digest/$new_digest}"
+correct_report=$test_report
+export test_report="${test_report/$boundary/2026-11-18T14:15:00Z}"
+result=0
+bash ./reconcile_due_windows.sh "$anchor" "$state_path" || result=$?
+test "$result" = 75
+test ! -e "$state_path/0.receipt-$new_digest.json"
+export test_report=$correct_report
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test -s "$state_path/0.receipt-$new_digest.json"
+bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+test "$(wc -l < calls)" = "$((calls_before + 4))"
+cmp "$state_path/0.json" original_receipts
+
+for scan_issue in incomplete payout_difference; do
+    state_path="$test_dir/watch/digest-$scan_issue"
+    snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$old_digest"
+    export test_report="${correct_report/$new_digest/$old_digest}"
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    snapshot "$anchor" "$fresh" "$boundary" 51 1 "v1:$new_digest"
+    if [[ "$scan_issue" == incomplete ]]; then
+        export test_report="${correct_report/true/false}"
+    else
+        test_report=$(python -c '
+import json
+import sys
+reports = json.loads(sys.argv[1])
+reports[0]["issues"] = {"payout_difference": 1}
+print(json.dumps(reports))
+' "$correct_report")
+        export test_report
+    fi
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    receipt="$state_path/0.receipt-$new_digest"
+    cp "$receipt.json" partial_receipts
+    calls_before=$(wc -l < calls)
+    export test_report=$correct_report
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    test -s "$receipt.retry.json"
+    test "$(stat -c %a "$receipt.retry.json")" = 600
+    cmp "$receipt.json" partial_receipts
+    bash ./reconcile_due_windows.sh "$anchor" "$state_path"
+    test "$(wc -l < calls)" = "$((calls_before + 1))"
+done
+
+mkdir -p infra/profitability .runtime/profitability-watch/reconciliations
+cp "$root/infra/profitability/restore_reconciliation_timer.sh" infra/profitability/
+
+systemctl() {
+    local name=${@: -1}
+    case "$1" in
+        is-active) test -e "$name.active" || return 3 ;;
+        show) printf '%s\n' "$timer_load_state" ;;
+        start) touch "$name.active" ;;
+        *) return 2 ;;
+    esac
+}
+systemd-run() {
+    printf '%s\n' "$@" > "${1#--unit=}.arguments"
+    printf '%s\n' "$@" > timer_arguments
+    printf '%s\n' "$1" >> units_registered
+    touch "${1#--unit=}.timer.active"
+}
+docker() {
+    [[ "$*" == 'exec ai-football-v2-profitability-watch printenv PROFITABILITY_ANCHOR' ]] || return 2
+    printf '%s\n' "$restore_anchor"
+}
+export -f systemctl systemd-run docker
+
+restore() {
+    bash infra/profitability/restore_reconciliation_timer.sh "$@"
+}
+
+rolling_active=ai-football-profitability-reconcile-rolling.timer.active
+export timer_load_state=not-found
+export restore_anchor=invalid
+result=0
+restore || result=$?
+test "$result" = 2
+test ! -e timer_arguments
+test ! -e "$rolling_active"
+
+export restore_anchor="$anchor"
+restore
+state_path="$test_dir/.runtime/profitability-watch/reconciliations"
+printf '%s\n' '--unit=ai-football-profitability-reconcile-rolling' '--collect' '--on-active=15s' \
+    '--on-calendar=*-*-* 02,14:25,45:00 UTC' '--timer-property=AccuracySec=1s' \
+    '--property=Type=oneshot' '--property=TimeoutStartSec=75s' /usr/bin/bash \
+    "$test_dir/infra/profitability/reconcile_due_windows.sh" "$anchor" "$state_path" > expected_arguments
+cmp ai-football-profitability-reconcile-rolling.arguments expected_arguments
+test -e ai-football-profitability-window-evidence.timer.active
+printf '%s\n' '--unit=ai-football-profitability-window-evidence' '--collect' '--on-active=15s' \
+    '--on-calendar=*-*-* 02,14:27,47:00 UTC' '--timer-property=AccuracySec=1s' \
+    '--property=Type=oneshot' '--property=TimeoutStartSec=45s' /usr/bin/bash \
+    "$test_dir/infra/profitability/collect_window_evidence.sh" "$state_path/.." > expected_arguments
+cmp ai-football-profitability-window-evidence.arguments expected_arguments
+test -e ai-football-profitability-analysis.timer.active
+printf '%s\n' '--unit=ai-football-profitability-analysis' '--collect' '--on-active=15s' \
+    '--on-calendar=*-*-* *:55:00 UTC' '--timer-property=AccuracySec=1s' \
+    '--property=Type=oneshot' '--property=TimeoutStartSec=120s' '/usr/bin/bash' \
+    "$PWD/infra/profitability/collect_analysis.sh" "$PWD/.runtime/profitability-watch/reconciliations/.." > expected_arguments
+cmp ai-football-profitability-analysis.arguments expected_arguments
+
+rm timer_arguments
+export restore_anchor=invalid
+restore
+test ! -e timer_arguments
+
+rm "$rolling_active"
+export restore_anchor="$anchor" timer_load_state=loaded
+restore
+test -e "$rolling_active"
+test ! -e timer_arguments
+
+mkdir -p .runtime/profitability-telegram-preview-20261118 .runtime/profitability-watch/preflight-cohorts-20261118T1600Z
+touch .runtime/profitability-telegram-preview-20261118/collect-active.sh
+export test_calendar_time=2026-11-18T19:05:00Z timer_load_state=not-found restore_anchor=invalid
+restore --with-pilot
+test -e ai-football-profitability-preflight-cohorts.timer.active
+test -e ai-football-profitability-telegram-preview.timer.active
+grep -Fqx -- '--on-calendar=*-*-* *:05:00 UTC' ai-football-profitability-preflight-cohorts.arguments
+grep -Fqx -- '2026-11-18T16:00:00Z' ai-football-profitability-preflight-cohorts.arguments
+grep -Fqx -- '--on-calendar=*-*-* *:00,30:00 UTC' ai-football-profitability-telegram-preview.arguments
+grep -Fqx -- "$test_dir/.runtime/profitability-telegram-preview-20261118/collect-active.sh" ai-football-profitability-telegram-preview.arguments
+cp units_registered pilot_registrations
+restore --with-pilot
+cmp units_registered pilot_registrations
+
+rm ai-football-profitability-preflight-cohorts.timer.active ai-football-profitability-telegram-preview.timer.active
+printf '%s\n' '{}' > .runtime/profitability-watch/preflight-cohorts-20261118T1600Z/final.json
+export test_calendar_time=2026-11-20T02:15:00Z
+restore --with-pilot
+cmp units_registered pilot_registrations
+printf '%s\n' 'Reconciliation timer recovery checks passed.'

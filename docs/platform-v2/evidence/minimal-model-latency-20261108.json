@@ -1,0 +1,48 @@
+{
+  "observed_at": "2026-11-08T18:56:18.137728+00:00",
+  "model": "deepseek-v4.1-flash",
+  "samples": [
+    {
+      "sample": 0,
+      "started_at": "2026-11-08T18:56:11.688593+00:00",
+      "http_status": 200,
+      "expected_short_reply": true,
+      "usage": {
+        "prompt_tokens": 61,
+        "completion_tokens": 2,
+        "total_tokens": 63
+      },
+      "elapsed_ms": 2268.081
+    },
+    {
+      "sample": 1,
+      "started_at": "2026-11-08T18:56:13.956682+00:00",
+      "http_status": 200,
+      "expected_short_reply": true,
+      "usage": {
+        "prompt_tokens": 61,
+        "completion_tokens": 2,
+        "total_tokens": 63
+      },
+      "elapsed_ms": 2085.367
+    },
+    {
+      "sample": 2,
+      "started_at": "2026-11-08T18:56:16.042058+00:00",
+      "http_status": 200,
+      "expected_short_reply": true,
+      "usage": {
+        "prompt_tokens": 61,
+        "completion_tokens": 31,
+        "total_tokens": 92
+      },
+      "elapsed_ms": 2095.59
+    }
+  ],
+  "scope": "minimal direct text canary only; excludes images, Hermes, tools and business transactions",
+  "shared_upstream_load_uncontrolled": true,
+  "provider_configuration_changed": false,
+  "production_writes": 0,
+  "funded_tests": false,
+  "credentials_output": false
+}

@@ -1,0 +1,253 @@
+{
+  "schema": "safe-verification-evidence-v1",
+  "recorded_at_utc": "2026-11-08T14:25:00Z",
+  "stage": "isolated related and browser tests only; not deployed",
+  "api_failure_first": {
+    "tests": 5,
+    "seconds": 10.357,
+    "failures": 5,
+    "native_exit": 1
+  },
+  "api_after": {
+    "tests": 5,
+    "seconds": 10.556,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "public_summary_index_and_settlement_related": {
+    "tests": 44,
+    "seconds": 113.622,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "verified_name_candidate_and_mcp_related": {
+    "tests": 69,
+    "seconds": 60.419,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "browser": {
+    "tests": 49,
+    "browser_errors": 0,
+    "native_exit": 0,
+    "response_injection": true,
+    "environment": "task-owned internal Docker network; mock API; no production credentials or bets",
+    "results": [
+      {
+        "name": "桌面比分密度、状态查询、日期与详情",
+        "status": "passed"
+      },
+      {
+        "name": "手机无横向溢出、关注与弹层",
+        "status": "passed"
+      },
+      {
+        "name": "专家统计筛选与详情趋势使用同一结算窗口",
+        "status": "passed"
+      },
+      {
+        "name": "完整原文、两条系统买入、工具证据与图片",
+        "status": "passed"
+      },
+      {
+        "name": "授权原图可鼠标键盘展开收起且重开复位",
+        "status": "passed"
+      },
+      {
+        "name": "原文增量加载、最新系统回执及完整工具返回",
+        "status": "passed"
+      },
+      {
+        "name": "采集中转热配置可保存与清空，保留原业务域名",
+        "status": "passed"
+      },
+      {
+        "name": "独立身份与CSRF、热配置版本、留空保密字段、授予幂等",
+        "status": "passed"
+      },
+      {
+        "name": "Telegram二维码、过期与成员枚举回退",
+        "status": "passed"
+      },
+      {
+        "name": "超时保留已读赛事，恢复刷新后清除错误",
+        "status": "passed"
+      },
+      {
+        "name": "游客权益拒绝、会员未配置支付、注册校验",
+        "status": "passed"
+      },
+      {
+        "name": "初始失败与无赛事状态、请求竞态不覆盖新筛选",
+        "status": "passed"
+      },
+      {
+        "name": "比赛状态切换等待和失败时不能保留其他状态的旧行",
+        "status": "passed"
+      },
+      {
+        "name": "盘口失败仍显示正确比赛状态与真实比分 / 桌面",
+        "status": "passed"
+      },
+      {
+        "name": "盘口失败仍显示正确比赛状态与真实比分 / 手机",
+        "status": "passed"
+      },
+      {
+        "name": "盘口晚响应不能覆盖新筛选，离页取消后台读取",
+        "status": "passed"
+      },
+      {
+        "name": "异步盘口分批上限50且多页刷新保持完整顺序",
+        "status": "passed"
+      },
+      {
+        "name": "普通成员搜索可选为监控作者且读取管理员仍调用原接口",
+        "status": "passed"
+      },
+      {
+        "name": "详情深链、前进后退、主附线筛选与保留筛选刷新",
+        "status": "passed"
+      },
+      {
+        "name": "受限原文登录后恢复原消息与统计分项",
+        "status": "passed"
+      },
+      {
+        "name": "初次错误、加载与离线五状态",
+        "status": "passed"
+      },
+      {
+        "name": "360、768、1280的核心页面不溢出",
+        "status": "passed"
+      },
+      {
+        "name": "联赛多选按系统编号过滤并可清空",
+        "status": "passed"
+      },
+      {
+        "name": "本人关闭不受空额度阻挡，启用必须完整许可",
+        "status": "passed"
+      },
+      {
+        "name": "推荐定位准确报价并标示价格变化",
+        "status": "passed"
+      },
+      {
+        "name": "本人乐鱼绑定与管理员登录不触发二次验证",
+        "status": "passed"
+      },
+      {
+        "name": "多页赛事刷新保留加载深度与滚动并移除消失赛事",
+        "status": "passed"
+      },
+      {
+        "name": "专家关注独立于资金授权并在当前浏览器保留",
+        "status": "passed"
+      },
+      {
+        "name": "找回入口如实提示未配置邮件并完成恢复码提交",
+        "status": "passed"
+      },
+      {
+        "name": "本人导出与待对账注销取消不恢复投注许可",
+        "status": "passed"
+      },
+      {
+        "name": "管理员恢复码只显示一次与只读待办订单",
+        "status": "passed"
+      },
+      {
+        "name": "手机长文、相册、回复及昵称变更保持完整阅读",
+        "status": "passed"
+      },
+      {
+        "name": "手机管理员系统设置无二次验证入口",
+        "status": "passed"
+      },
+      {
+        "name": "Telegram目录及管理员搜索重置游标、空结果、清空与请求乱序",
+        "status": "passed"
+      },
+      {
+        "name": "手机多盘口与长队名保持分行且不遮挡比赛按钮",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 source_edited / 1440",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 source_deleted / 1440",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 source_disabled / 1440",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 review_source_period_intent_conflict / 1440",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 review_source_line_intent_conflict / 1440",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 review_source_selection_intent_conflict / 1440",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 source_edited / 390",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 source_deleted / 390",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 source_disabled / 390",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 review_source_period_intent_conflict / 390",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 review_source_line_intent_conflict / 390",
+        "status": "passed"
+      },
+      {
+        "name": "撤回推荐状态 review_source_selection_intent_conflict / 390",
+        "status": "passed"
+      },
+      {
+        "name": "消息旧版本失效标识 / 1440",
+        "status": "passed"
+      },
+      {
+        "name": "消息旧版本失效标识 / 390",
+        "status": "passed"
+      }
+    ],
+    "retained_failures": [
+      "E1071 network none: navigator.onLine false; 49 failed",
+      "two concurrent debugging browsers exhausted same 192-process budget",
+      "E1071r2/r3 new or retired network unavailable; did not execute suite"
+    ]
+  },
+  "fact_list_reads_quotes_when_not_requested": false,
+  "old_default_24_summary_contract_preserved": true,
+  "quote_batch_limit": 50,
+  "client_per_request_ms": 7000,
+  "client_overall_ms": 25000,
+  "server_quote_deadline_unchanged": true,
+  "freshness_deadline_unchanged": true,
+  "database_schema_changed": false,
+  "gateway_changed": false,
+  "funded_tests": 0,
+  "clean_full_and_real_browser_acceptance_pending": true
+}

@@ -1,0 +1,38 @@
+{
+  "registry_version": "2026-11-08.1",
+  "retrieval_date": "2026-11-08",
+  "publisher": "7M",
+  "source_team_id": "4745",
+  "sport": "football",
+  "direct_same_record_names": [
+    "卡拉夫",
+    "恰斯拉夫",
+    "FK Caslav"
+  ],
+  "sources": [
+    {
+      "url": "https://www.7m.hk/football/data/teams/4745",
+      "kind": "public_team_page",
+      "sha256": "2be4e250c60d3515d5ac6b9b23116086dd156122f04d77ece7d55600d95cb3ee"
+    },
+    {
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=4745&lang=big&nc=179414050",
+      "kind": "public_same_team_metadata",
+      "sha256": "fb75c37b3bec2066e11c09a96e56dce00a290e0d320912356e21373b6730c6bd"
+    },
+    {
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=4745&lang=gb",
+      "kind": "public_same_team_metadata",
+      "sha256": "3672fc7c702ad92640968d965b01e0a73f189f530fa44c149fe2b8e3dd85d542"
+    }
+  ],
+  "source_reference": "7m:4745:20261108",
+  "reference_scope": "Name evidence only; Leyu remains the match and market authority",
+  "unverified_names_not_admitted": [
+    "卡尔夫",
+    "嘉拉贝"
+  ],
+  "home_canonical_equivalence_registered": false,
+  "production_data_modified": false,
+  "all_functionality_verified": false
+}

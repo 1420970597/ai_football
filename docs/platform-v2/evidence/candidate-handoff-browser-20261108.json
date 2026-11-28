@@ -1,0 +1,185 @@
+{
+  "application_source": "4b90ab6bc6235323d11af85ebfb4e0fe9a2a2398",
+  "supplementary_framework_test_commit": "7907b0e1404537d8a3df54e36eac15a9b3863c85",
+  "supplementary_test_sha256": "3641e1324a425d8fddd52eae29f837666716526f4f07551104629ee4a5d21da2",
+  "handoff_completed_at": "2026-11-08T16:58:08Z",
+  "full_suite": {
+    "source_parent_commit": "4b90ab6bc6235323d11af85ebfb4e0fe9a2a2398",
+    "committed_source_verified": true,
+    "tests": 1847,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1255.437
+  },
+  "image_ids": {
+    "api": "sha256:9f51b80eb6b11c6c40bc6e73e777f3b584c04f7a3c39e72ed840a23d63c72b60",
+    "web": "sha256:343fff37fa919e61569bedb6dc01472c9cd7275f02e1b5e2a2831188ac496cc8"
+  },
+  "scope_verification": {
+    "only_api_worker_web_images_and_hermes_skill_profile_recreated": true,
+    "other_three_local_and_four_remote_unchanged": true,
+    "provider_environment_config_context_runner_and_personal_permissions_unchanged": true
+  },
+  "ledger": {
+    "signals_before": 624,
+    "signals_after": 624,
+    "old_ledger_rows": 878,
+    "immutable_signals_quotes_and_ledger_preserved": true,
+    "database_rollback": false
+  },
+  "financial": {
+    "old_orders_preserved": 2,
+    "policy_and_account_ownership_unchanged": true,
+    "financial_pre_and_post_snapshots_idle": true,
+    "no_funds_lock_or_order_mutation": true
+  },
+  "browser": {
+    "results": [
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1998,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 1195,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 1108,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 1313,
+        "markets_included": false,
+        "server_items": 0,
+        "dom_rows": 0
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 1386,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1369,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 808,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 1189,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 1003,
+        "markets_included": false,
+        "server_items": 0,
+        "dom_rows": 0
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 808,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      }
+    ],
+    "response_injection": false,
+    "production_writes": 0
+  },
+  "screenshots": {
+    "phase-all-390.png": "3d8e9ad119c0febc49827a3054fc1af1825d15ac7e5fa7d69218adaf42e63796",
+    "original-expanded-1440.png": "688dfc8964dc49ab1b185b4f87fed6a18b69b6d92078a0ec17d0e2ca011d9154",
+    "original-expanded-390.png": "55b700d36c4530eccca525ab79cebeb7793434734808fd48d9e748f0b6a4e8e1",
+    "phase-cancelled-1440.png": "dc2619e0e068a21fafe979583d4d285f18717f049946111ac1bc4fe8866c6076",
+    "phase-finished-390.png": "30b5e54ee44fe2aef5138168fe185e3beb86494c7bad34cf6315df6ec76b4591",
+    "phase-scheduled-1440.png": "7189ea6c9618bc666ad8198886b49b8bf6a2691b81e74543543d3f67ada6fcb3",
+    "phase-live-390.png": "75a8ffa686eb022eaab9fff04e2ac1970d21ff3fc0f84e6835d15d42f5280b57",
+    "phase-scheduled-390.png": "fad0d14058be9cfd0af9f40272ee40cd7b39f4acbb64efdb81c24fa154f14bba",
+    "phase-finished-1440.png": "41dc3893f5024fd981509fdb616bacee596f91b3ad3c8cc8205ee3ceb890b1b6",
+    "phase-live-1440.png": "48c48ea009abaaa38d24b3727a2ebfb189b1473a4302b1a2f47f26edae46877c",
+    "phase-all-1440.png": "3a31e49d3cfdfc16ae738ae34f96694d204993f21d9f22a8864a98391f8da46a",
+    "phase-cancelled-390.png": "28dae08aabbd9a9be8c9a741535ffa2905ede89bdddb6d205219473d29b41b8c"
+  },
+  "supplementary_async_summary_checks": "numeric scroll and visible fixture anchor checks failed; separate work package opened",
+  "initial_framework_failure": "outdated exact test omitted existing source_line_intent_conflict diagnostic; stricter full diagnostic test rerun passed",
+  "initial_preparation_failure": "API compose labels omitted independently deployed web image; explicit actual-image baseline verified",
+  "gateway_model_configuration_changes": false,
+  "funded_tests": 0,
+  "complete_delivery_claim": false
+}

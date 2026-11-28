@@ -1,0 +1,34 @@
+{
+  "results": [
+    {
+      "width": 1440,
+      "sport": "football",
+      "matches": 20,
+      "recommendations": 60,
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "sport": "basketball",
+      "matches": 6,
+      "recommendations": 24,
+      "passed": true
+    },
+    {
+      "width": 390,
+      "sport": "football",
+      "matches": 20,
+      "recommendations": 60,
+      "passed": true
+    },
+    {
+      "width": 390,
+      "sport": "basketball",
+      "matches": 6,
+      "recommendations": 24,
+      "passed": true
+    }
+  ],
+  "real_production_reads": true,
+  "production_writes": 0
+}

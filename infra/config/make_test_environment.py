@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
-from reuse_inventory import render_compose_env
+try:
+    from .reuse_inventory import render_compose_env
+except ImportError:
+    from reuse_inventory import render_compose_env
 
 
 if __name__ == "__main__":
@@ -24,6 +27,14 @@ if __name__ == "__main__":
         "HERMES_API_KEY": "fixture-hermes-internal",
         "HERMES_PROVIDER_BASE_URL": "https://model.example.invalid/v1",
         "HERMES_PROVIDER_API_KEY": "fixture-model-provider",
+        # Keep fixture paths project-local; Compose shell overrides remain
+        # higher priority and are separately rejected by the rendered gate.
+        "STORAGE_TUNNEL_DIRECTORY": "./.runtime/config-fixtures/tunnel",
+        "S3_CA_FILE": "./.runtime/config-fixtures/s3-ca.crt",
+        "LEYU_SIGNING_FILE": "./.runtime/config-fixtures/signing.json",
+        "LEYU_DISCOVERY_FILE": "./.runtime/config-fixtures/discovery.json",
+        "WEB_BIND_ADDRESS": "0.0.0.0", "WEB_PORT": "3003",
+        "LIVE_ORDERS_ENABLED": "false", "EXECUTOR_LIVE_ORDERS_ENABLED": "false",
     }
     target.write_text(render_compose_env(values), encoding="utf-8")
     target.chmod(0o600)

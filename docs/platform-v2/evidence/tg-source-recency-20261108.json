@@ -1,0 +1,62 @@
+{
+  "observed_at": "2026-11-08T20:09:57.590603+00:00",
+  "read_only": true,
+  "production_writes": 0,
+  "sources": [
+    {
+      "checkpoint_age_seconds": 301,
+      "lease_active": true,
+      "trusted_enabled": 0,
+      "pending_author_backfills": 0,
+      "latest_trusted_post_age_seconds": null,
+      "latest_trusted_post_version_age_seconds": null,
+      "source_alias": "source_1"
+    },
+    {
+      "checkpoint_age_seconds": 31,
+      "lease_active": true,
+      "trusted_enabled": 1,
+      "pending_author_backfills": 0,
+      "latest_trusted_post_age_seconds": 23773,
+      "latest_trusted_post_version_age_seconds": 23567,
+      "source_alias": "source_2"
+    },
+    {
+      "checkpoint_age_seconds": 31,
+      "lease_active": true,
+      "trusted_enabled": 2,
+      "pending_author_backfills": 0,
+      "latest_trusted_post_age_seconds": 23380,
+      "latest_trusted_post_version_age_seconds": 23224,
+      "source_alias": "source_3"
+    },
+    {
+      "checkpoint_age_seconds": 28,
+      "lease_active": true,
+      "trusted_enabled": 0,
+      "pending_author_backfills": 0,
+      "latest_trusted_post_age_seconds": null,
+      "latest_trusted_post_version_age_seconds": null,
+      "source_alias": "source_4"
+    },
+    {
+      "checkpoint_age_seconds": 19,
+      "lease_active": true,
+      "trusted_enabled": 3,
+      "pending_author_backfills": 0,
+      "latest_trusted_post_age_seconds": 13580,
+      "latest_trusted_post_version_age_seconds": 6433,
+      "source_alias": "source_5"
+    },
+    {
+      "checkpoint_age_seconds": 15,
+      "lease_active": true,
+      "trusted_enabled": 1,
+      "pending_author_backfills": 0,
+      "latest_trusted_post_age_seconds": 11879,
+      "latest_trusted_post_version_age_seconds": 11871,
+      "source_alias": "source_6"
+    }
+  ],
+  "identities_exported": false
+}

@@ -1,0 +1,83 @@
+{
+  "window_start": "2026-11-08T23:11:17.050065+00:00",
+  "window_last_database_sample": "2026-11-08T23:41:18.230174+00:00",
+  "database_samples": 55,
+  "market_samples": 61,
+  "messages_final": {
+    "created_versions": 176,
+    "published_posts": 0,
+    "older_posts_revised": 176,
+    "published_ready": 0,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 0,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 0,
+    "missing_receipt": 0
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "event_latency_final": {
+    "event_versions": 0,
+    "avg_ms": null,
+    "p95_ms": null,
+    "within_3s": 0,
+    "older_backlog_versions_received": 176
+  },
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T23:40:53.045465+00:00",
+    "last_poll_elapsed_ms": 20220.3,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 23236,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 15.3,
+    "oldest_quote_age_seconds": 361084.2,
+    "failed_batches": 0
+  },
+  "source_commit": "27cb7dee5039c1b5c49b46fa657369c8a132415e",
+  "component_native_exits": {
+    "independent-native": 0,
+    "market-native": 0,
+    "official-scan": 0,
+    "official-reconcile": 0,
+    "natural-audit": 0,
+    "completion-audit": 0
+  },
+  "health_all_200": true,
+  "telegram_all_healthy": true,
+  "official_complete_sources": 6,
+  "official_posts": 0,
+  "normalized_posts": 0,
+  "matched": 0,
+  "missing": 0,
+  "auxiliary_observer_native_exit": 2,
+  "auxiliary_observer_controller_exit": 1,
+  "auxiliary_failure": "Nonroot process could not read mode-0600 mounted script; failed before observations.",
+  "full_auxiliary_coverage": false,
+  "replacement_started_with_new_id": true,
+  "zero_new_posts_is_not_positive_semantic_acceptance": true,
+  "whole_database_freshness_claim": false,
+  "three_second_acceptance": false,
+  "raw_sha256": {
+    "e1810-watch-summary.json": "2e22568fb794c8cb2e17135039c5bff48224509bcaa03c2c10fbeb9dc9a03042",
+    "e1810-official-scan.json": "2dcdc276d53b32f88e4a1ba4b1adfcfca6866e34bf71526297c1b956f86b147d",
+    "e1810-official-reconcile.json": "415457a6475a4584d6f35a5fbe4eaaeddcf306339112e0d536f8e6ab2f561275",
+    "e1811-composition-readonly.stderr": "e02fc1613fbd50a826389a9eb826b6a682e1768162f127425ab1cbc53fedc4d4"
+  }
+}

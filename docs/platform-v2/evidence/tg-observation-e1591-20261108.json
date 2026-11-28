@@ -1,0 +1,173 @@
+{
+  "window_start": "2026-11-08T20:48:37.430310+00:00",
+  "window_last_database_sample": "2026-11-08T21:18:38.636797+00:00",
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1802.9,
+    "health_all_200": true,
+    "telegram_all_healthy": true,
+    "baseline_live_event_counters": {
+      "received": 110330,
+      "staged": 5811,
+      "deferred": 0,
+      "unmapped_source": 104519
+    },
+    "final_live_event_counters": {
+      "received": 111566,
+      "staged": 5831,
+      "deferred": 0,
+      "unmapped_source": 105735
+    },
+    "live_event_delta": {
+      "received": 1236,
+      "staged": 20,
+      "deferred": 0,
+      "unmapped_source": 1216
+    }
+  },
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 189,
+    "published_posts": 10,
+    "older_posts_revised": 179,
+    "published_ready": 9,
+    "published_pending": 0,
+    "published_unsupported": 1
+  },
+  "reviews_final": {
+    "eligible": 9,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 9,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 10,
+    "avg_ms": "3235.9",
+    "p95_ms": "6311.5",
+    "within_3s": 4,
+    "older_backlog_versions_received": 179
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 9
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 9
+    }
+  ],
+  "market_samples": 61,
+  "market_degraded_samples": [],
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T21:18:02.343689+00:00",
+    "last_poll_elapsed_ms": 17706.0,
+    "last_complete_at": null,
+    "freshness": "partial",
+    "fresh_active_quotes": 12,
+    "known_time_active_quotes": 22466,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 14.1,
+    "oldest_quote_age_seconds": 352510.9,
+    "failed_batches": 0
+  },
+  "includes_successful_api_handoff": false,
+  "whole_database_freshness_claim": false,
+  "schema": "safe-continuous-tg-window-v1",
+  "read_only": true,
+  "production_writes": 0,
+  "api_source_commit": "875028c27be043f469d05624f9a02987306dde70",
+  "dedicated_post_release_window": true,
+  "official_source_scans": [
+    {
+      "source_alias": "source_1",
+      "trusted_sender_count": 0,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_2",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_3",
+      "trusted_sender_count": 2,
+      "scanned": 14,
+      "complete": true,
+      "eligible_posts": 10
+    },
+    {
+      "source_alias": "source_4",
+      "trusted_sender_count": 0,
+      "scanned": 3,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_5",
+      "trusted_sender_count": 3,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_6",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    }
+  ],
+  "official_posts": 10,
+  "normalized_posts": 10,
+  "missing_posts": 0,
+  "paired_read_only_observer": {
+    "samples": 91,
+    "native_exit_code": 0,
+    "read_errors": 0
+  },
+  "natural_semantic_audit": "tg-natural-nine-texts-one-unsupported-20261108.json",
+  "natural_recommendation_samples": 0,
+  "natural_non_recommendation_samples": 9,
+  "unsupported_originals_preserved": 1,
+  "three_second_target_passed": false
+}

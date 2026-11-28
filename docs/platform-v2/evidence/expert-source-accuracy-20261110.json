@@ -1,0 +1,66 @@
+{
+  "observed_at": "2026-11-10T08:43:00Z",
+  "basis": "Authorized original message and SHA-verified original image inspection, not model success",
+  "production_writes": 0,
+  "historical_signal_replay": false,
+  "live_model_validation": "blocked_provider_transient",
+  "cases": [
+    {
+      "message_id": "82ea4686-e8e2-4491-ba13-ba941dcc8c7a",
+      "image_sha256": "970b3cabcfbceeb7af450b189503ae0f691ce94533d7ad8bc376e91510d0f399",
+      "classification": "three_independent_new_basketball_picks",
+      "expected": [
+        {"teams": ["蔚山现代太阳神", "高阳索诺天枪"], "market_kind": "handicap", "selected_team": "蔚山现代太阳神", "selection_line": "1.5"},
+        {"teams": ["神户鹳鸟", "涩谷太阳摇滚"], "market_kind": "handicap", "selected_team": "神户鹳鸟", "selection_line": "11.5"},
+        {"teams": ["三河海马", "信州勇士"], "market_kind": "total", "period": "full_time", "selection": "over", "line": "172.5"}
+      ],
+      "constraint": "The third total belongs to image row 3, not row 2; do not infer unspecified handicap period from available quotes."
+    },
+    {
+      "message_id": "b7abf223-4967-42cc-9a35-247b68023b17",
+      "image_sha256": "192196a2f4c7d9841e3d36ef85e59b59c8b6491bac3bd375d5bd32950956ddf2",
+      "classification": "same_three_picks_independently_inspected_original",
+      "constraint": "Preserve each row's fixture, selected team and line; changing image odds are not expert intent changes."
+    },
+    {
+      "message_id": "a2ff9a5f-a4ac-4f97-a9db-f3baa249b6f7",
+      "image_sha256": "ab76a47fc9f9bca0f2c79c6dc12ef6044cb5df35f0d672184191de0421c91c1c",
+      "classification": "new_half_total_with_scoreboard_identity",
+      "expected": {"teams": ["卡塔尔U23", "新加坡U23"], "market_kind": "total", "selection": "over", "line": "0.75"},
+      "constraint": "Bare half shorthand requires the existing fresh native first-half proof; the scoreboard alone does not waive period validation."
+    },
+    {
+      "message_id": "92080060-a3ef-4d12-9999-ffdb65e6c7f9",
+      "classification": "explicit_text_half_total_with_two_named_teams",
+      "expected": {"teams": ["卡塔尔U23", "新加坡U23"], "market_kind": "total", "selection": "over", "line": "0.75"},
+      "constraint": "Keep U23 team identity and the existing ambiguous-half proof requirement."
+    },
+    {
+      "message_id": "9125e481-df61-4da7-af78-97b303e17086",
+      "image_sha256": "7275e85eca0e8cc41ebe35717a1014ff229948b7d296246c5d2b94a23ac9a1c2",
+      "classification": "historical_feedback_and_new_image_pick_in_same_message",
+      "expected": {"teams": ["卡塔尔U23", "新加坡U23"], "market_kind": "handicap", "period": "full_time", "selected_team": "新加坡U23", "selection_line": "1.5"},
+      "constraint": "Earlier losing-result marks do not apply to the new Singapore pick. Image price 2.11 is not a match criterion. Do not infer settlement rules from the European-market label."
+    },
+    {
+      "message_id": "e01f786d-78f5-4c5b-93ff-dc286d8eeecf",
+      "classification": "cheering_sticker_without_pick",
+      "expected_pick_count": 0
+    },
+    {
+      "message_id": "9687669d-dfdc-4fd4-a051-8dd1ea3084c4",
+      "classification": "results_feedback_without_new_pick",
+      "expected_pick_count": 0
+    },
+    {
+      "message_id": "23056d1b-6967-4d58-97a9-b5cbeae3f6de",
+      "classification": "commentary_without_independent_fixture_period_line",
+      "constraint": "Reply context is empty. Do not invent a new pick from commentary."
+    }
+  ],
+  "limitations": [
+    "These are source expectations, not claims of available live quotes or accepted recommendations.",
+    "The current explicit-text guard only prevents a no-binding false completion. Partial multi-pick omissions and image semantics require real model regression.",
+    "No source image, credentials or production test recommendations are committed."
+  ]
+}

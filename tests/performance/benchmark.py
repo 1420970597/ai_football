@@ -7,13 +7,16 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import time
 import uuid
 
 import asyncpg
 import httpx
 
-from app.expert_statistics import METRIC_SQL
+from app.expert_statistics import QUALITY_METRIC_SQL, StatisticsScope, signal_scope
+from app.result_ledger import result_facts
+from app.settlement import settle
 from seed import DATABASE, EXPERT, HOST
 
 REPORTS = Path('/w/reports/performance')
@@ -36,9 +39,6 @@ AUTHOR_SQL = ("SELECT m.id,m.raw_text,m.media_objects,m.media_state,m.posted_at,
               "j.state AS analysis_state,j.last_error AS analysis_error FROM v2_expert_messages m JOIN v2_experts e ON e.id=m.expert_id "
               "LEFT JOIN LATERAL(SELECT state,last_error FROM v2_analysis_jobs WHERE message_id=m.id ORDER BY created_at DESC LIMIT 1) j ON TRUE "
               "WHERE m.expert_id=$1 ORDER BY m.posted_at DESC,m.id DESC LIMIT 31")
-STATS_SQL = ('SELECT e.id,e.display_nickname,e.avatar_object_key,e.enabled,' + METRIC_SQL +
-             ' FROM v2_experts e LEFT JOIN v2_expert_signals s ON s.expert_id=e.id AND s.created_at>=$1 AND s.created_at<$2 '
-             'WHERE e.enabled GROUP BY e.id ORDER BY unit_net DESC,total_signals DESC,e.display_nickname,e.id')
 TOOL_SQL = ("SELECT f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id),to_jsonb(f) FROM v2_fixtures f "
             "WHERE f.phase IN ('live','scheduled') AND ($1='all' OR f.phase=$1) "
             "AND (lower(f.home_team) LIKE $2 OR lower(f.away_team) LIKE $2 OR $3=ANY(f.home_aliases) OR $3=ANY(f.away_aliases)) "
@@ -47,11 +47,42 @@ TOOL_SQL = ("SELECT f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id),to_jsonb(
 
 
 def distribution(values):
+    if not values or any(not math.isfinite(value) or value < 0 for value in values):
+        raise ValueError('measurement samples must be nonempty finite nonnegative milliseconds')
     ordered = sorted(values)
     def percentile(fraction):
         return round(ordered[max(0, math.ceil(len(ordered) * fraction) - 1)], 3)
     return {'samples': len(values), 'p50_ms': percentile(.50), 'p95_ms': percentile(.95),
             'min_ms': round(ordered[0], 3), 'max_ms': round(ordered[-1], 3), 'quantile_method': 'nearest_rank'}
+
+
+def statistics_cases(now):
+    scope = StatisticsScope(now-timedelta(days=30), now+timedelta(days=1))
+    prefix, args = signal_scope(scope)
+    aggregate = (prefix + 'SELECT e.id,e.display_nickname,e.avatar_object_key,e.enabled,' + QUALITY_METRIC_SQL +
+        ' FROM v2_experts e LEFT JOIN scoped s ON s.expert_id=e.id '
+        'WHERE e.enabled AND ($6::uuid IS NULL OR e.id=$6) GROUP BY e.id '
+        'ORDER BY unit_net DESC,total_signals DESC,e.display_nickname,e.id')
+    source_prefix, source_args = signal_scope(scope,classify=False)
+    sources = (source_prefix + 'SELECT DISTINCT x.id,x.display_name FROM v2_expert_sources x '
+        'JOIN v2_expert_messages m ON m.source_id=x.id JOIN scoped s ON s.message_id=m.id '
+        'JOIN v2_experts e ON e.id=s.expert_id WHERE x.enabled AND e.enabled ORDER BY x.display_name,x.id')
+    return {'statistics_aggregation':(aggregate,tuple(args)), 'statistics_source_options':(sources,tuple(source_args))}
+
+
+async def validate_statistics_fixture(conn):
+    missing = await conn.fetchval("SELECT count(*) FROM v2_expert_signals s WHERE NOT EXISTS(SELECT 1 FROM v2_quote_evidence e WHERE e.reference_id=s.id AND e.evidence_kind='expert_signal')")
+    if missing:
+        raise RuntimeError('benchmark signals lack immutable quote evidence')
+    rows = await conn.fetch("SELECT l.*,r.status,r.home_score,r.away_score,r.half_home_score,r.half_away_score,r.provider_reference,r.source_updated_at,r.evidence,r.content_hash,f.sport "
+        "FROM v2_signal_settlements l JOIN v2_fixture_results r ON r.fixture_id=l.fixture_id AND r.version=l.result_version JOIN v2_fixtures f ON f.id=l.fixture_id")
+    for row in rows:
+        facts = result_facts(row)
+        digest = hashlib.sha256(json.dumps(facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        value = settle(row['calculation']['signal'], facts)
+        if row['content_hash'] != digest or row['calculation']['result'] != facts or (value.outcome,value.unit_net,value.effective_stake,value.reason) != tuple(row[k] for k in ('outcome','unit_net','effective_stake','reason')):
+            raise RuntimeError('benchmark settlement fixture is not reproducible')
+    return {'quote_snapshots_complete':True,'reproduced_settlements':len(rows),'synthetic_official_results_only':True}
 
 
 async def measure_sql(conn, sql, args=(), iterations=25):
@@ -86,7 +117,7 @@ def tool_body(index):
     number = index + 1
     return {'review_id': str(uuid.UUID(hashlib.md5(f'synthetic-job-{number}'.encode()).hexdigest())),
             'attempt_id': str(uuid.UUID(hashlib.md5(f'synthetic-attempt-{number}'.encode()).hexdigest())),
-            'team_query': 'Perf Club 000', 'page_size': 25}
+            'team_query': 'Perf Club 00', 'page_size': 25}
 
 
 async def exercise_pagination(client):
@@ -97,7 +128,7 @@ async def exercise_pagination(client):
     while True:
         response = await client.post(API + '/internal/mcp/search_matches', json=body, headers=headers)
         if response.status_code != 200:
-            raise RuntimeError('tool pagination failed')
+            raise RuntimeError(f'tool pagination failed HTTP{response.status_code}: {response.text[:300]}')
         value = response.json()
         pages += 1
         total += len(value['items'])
@@ -118,6 +149,85 @@ async def exercise_pagination(client):
     return {'candidate_count': total, 'pages': pages, 'page_size': 25,
             'walk_and_resolve_ms': walk_elapsed,
             'market_count': len(payload['markets']), 'markets_http': markets}
+
+
+async def statistics_main():
+    """Measure only the current statistics route; no MCP writes contaminate it."""
+    if os.environ.get('PERFORMANCE_SYNTHETIC_ONLY') != 'true':
+        raise RuntimeError('synthetic-only flag required')
+    source_before=source_digests()
+    started=time.perf_counter()
+    async with httpx.AsyncClient(timeout=15,trust_env=False) as client:
+        for attempt in range(30):
+            try:
+                response=await client.get(API+'/readyz')
+                if response.status_code==200:
+                    break
+            except httpx.TransportError:
+                pass
+            await asyncio.sleep(.5)
+        else:
+            raise RuntimeError('isolated production API not ready')
+        conn=await asyncpg.connect(f'postgresql://performance_test@{HOST}/{DATABASE}',command_timeout=30)
+        try:
+            for name in ('json','jsonb'):
+                await conn.set_type_codec(name,schema='pg_catalog',encoder=json.dumps,decoder=json.loads)
+            if await conn.fetchval('SELECT current_user')!='performance_test' or await conn.fetchval('SELECT current_database()')!=DATABASE:
+                raise RuntimeError('unexpected performance target')
+            validation=await validate_statistics_fixture(conn)
+            queries=statistics_cases(datetime.now(timezone.utc))
+            timings={key:await measure_sql(conn,sql,args) for key,(sql,args) in queries.items()}
+            baseline_sql,baseline_args=queries['statistics_aggregation']
+            trial_sql=(baseline_sql.replace('WITH checked AS MATERIALIZED (','WITH checked AS (',1)
+                       if 'WITH checked AS MATERIALIZED (' in baseline_sql else
+                       baseline_sql.replace('WITH checked AS (','WITH checked AS MATERIALIZED (',1))
+            if trial_sql==baseline_sql:
+                raise RuntimeError('temporary statistics experiment did not alter the expected CTE')
+            baseline_rows=[dict(row) for row in await conn.fetch(baseline_sql,*baseline_args)]
+            trial_rows=[dict(row) for row in await conn.fetch(trial_sql,*baseline_args)]
+            if baseline_rows!=trial_rows:
+                raise RuntimeError('temporary statistics materialization changed measured results')
+            trial_timing=await measure_sql(conn,trial_sql,baseline_args)
+            http,body=await measure_http(client,'GET','/api/v1/public/experts?days=30')
+            expected={'total_signals':10000,'eligible_signals':10000,'excluded_signals':0,'pending':2500,'win':2500,'loss':2500,'void':2500,'settled_signals':7500}
+            if len(body['items'])!=100 or any(sum(row[key] for row in body['items'])!=count for key,count in expected.items()) or len(body['source_options'])!=1:
+                raise RuntimeError('current statistics HTTP does not match evidence-backed fixtures')
+            if source_before!=source_digests():
+                raise RuntimeError('frozen source changed during measurement')
+            report={'format':'isolated-evidence-statistics-v1','synthetic_only':True,'production_performance_verified':False,
+                'created_at':datetime.now(timezone.utc).isoformat(),'source_commit':os.environ.get('PERFORMANCE_SOURCE_COMMIT'),
+                'source_sha256':source_before,'source_frozen':True,'verifier_image_id':os.environ.get('PERFORMANCE_IMAGE_ID'),
+                'postgres_image_id':os.environ.get('PERFORMANCE_PG_IMAGE_ID'),'postgres_version':await conn.fetchval('SHOW server_version'),
+                'seed':json.loads((REPORTS/'seed.json').read_text()),'fixture_validation':validation,'statistics_expected':expected,
+                'sql':timings,'http':{'statistics':http},
+                'temporary_statistics_experiment':{'change':'toggle checked CTE materialization against production query','query':trial_sql,
+                    'timing':trial_timing,'same_ordered_result':True,'production_source_modified':False},
+                'resource_caps':{'postgres_cpus':.35,'api_cpus':.25,'client_cpus':.15,
+                'postgres_memory_mib':768,'api_memory_mib':256,'client_memory_mib':256,'data_tmpfs_mib':512,
+                'postgres_max_wal_mib':128,'postgres_checkpoint_seconds':30},
+                'elapsed_seconds':round(time.perf_counter()-started,3),
+                'limitations':['synthetic_data_only','warm_sequential_keepalive_not_capacity_or_production_p95',
+                    'local_docker_tmpfs_not_remote_vps_or_disk_io','no_browser_or_hermes_or_upstream_calls',
+                    'statistics_only_not_complete_performance_suite']}
+            (REPORTS/'statistics-baseline.json').write_text(json.dumps(report,sort_keys=True,ensure_ascii=False,indent=2)+'\n')
+            print(json.dumps({'sql':{key:{field:value[field] for field in ('samples','p50_ms','p95_ms')} for key,value in timings.items()},
+                              'temporary_alternate_plan':{key:trial_timing[key] for key in ('samples','p50_ms','p95_ms')},
+                              'http':http,'fixture_validation':validation,'elapsed_seconds':report['elapsed_seconds']},sort_keys=True))
+        finally:
+            await conn.close()
+
+
+async def pagination_probe():
+    if os.environ.get('PERFORMANCE_SYNTHETIC_ONLY')!='true':
+        raise RuntimeError('synthetic-only flag required')
+    if '--pagination-asgi-probe' in sys.argv:
+        from app.main import app
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),timeout=15) as client:
+                print(json.dumps(await exercise_pagination(client),sort_keys=True))
+    else:
+        async with httpx.AsyncClient(timeout=15,trust_env=False) as client:
+            print(json.dumps(await exercise_pagination(client),sort_keys=True))
 
 
 async def main():
@@ -145,6 +255,7 @@ async def main():
             home_rows = await conn.fetch(HOME_SQL)
             fixture_ids = [row['id'] for row in home_rows[:50]]
             now = datetime.now(timezone.utc)
+            fixture_validation = await validate_statistics_fixture(conn)
             sql_cases = {
                 'homepage_fixture_page': (HOME_SQL, ()),
                 'homepage_quote_summary': (QUOTE_SQL, (fixture_ids,)),
@@ -153,7 +264,7 @@ async def main():
                 'detail_signals': ('SELECT s.id,s.expert_id,e.display_nickname,s.market_id,s.line,s.selection,s.recommendation_price,s.outcome,s.unit_net FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id WHERE s.fixture_id=$1 ORDER BY s.created_at DESC LIMIT 100', ('perf-match-00001',)),
                 'author_message_page': (AUTHOR_SQL, (uuid.UUID(EXPERT),)),
                 'review_candidate_selection': (TOOL_SQL, ('all', '%perf club 000%', 'perf club 000', '', None, None)),
-                'statistics_aggregation': (STATS_SQL, (now-timedelta(days=30), now+timedelta(days=1))),
+                **statistics_cases(now),
             }
             pure_sql = {name: await measure_sql(conn, query, args) for name, (query, args) in sql_cases.items()}
             http = {}
@@ -170,6 +281,14 @@ async def main():
             http['statistics'], statistics = await measure_http(client, 'GET', '/api/v1/public/experts?days=30')
             if len(statistics['items']) != 100:
                 raise RuntimeError('statistics expert population mismatch')
+            expected = {'total_signals':10000,'eligible_signals':10000,'excluded_signals':0,'pending':2500,'win':2500,'loss':2500,'void':2500,'settled_signals':7500}
+            if any(sum(row[key] for row in statistics['items']) != count for key,count in expected.items()) or len(statistics['source_options']) != 1:
+                raise RuntimeError('current statistics HTTP did not verify complete evidence-backed population')
+            (REPORTS/'statistics-checkpoint.json').write_text(json.dumps({'format':'evidence-statistics-checkpoint-v1',
+                'synthetic_only':True,'fixture_validation':fixture_validation,'statistics_expected':expected,
+                'source_sha256':source_before,'seed':json.loads((REPORTS/'seed.json').read_text()),
+                'sql':{key:value for key,value in pure_sql.items() if key.startswith('statistics_')},
+                'http':{'statistics':http['statistics']}},sort_keys=True,ensure_ascii=False,indent=2)+'\n')
             http['review_search_first_page'], _ = await measure_http(client, 'POST', '/internal/mcp/search_matches',
                 headers={'Authorization': 'Bearer synthetic-performance-tools'}, body=tool_body, iterations=20)
             pagination = await exercise_pagination(client)
@@ -185,12 +304,12 @@ async def main():
             sizes = {row['table_name']: row['bytes'] for row in await conn.fetch("SELECT relname AS table_name,pg_total_relation_size(relid) AS bytes FROM pg_catalog.pg_statio_user_tables ORDER BY relname")}
             if source_before != source_digests():
                 raise RuntimeError('project source changed while performance measurement was running')
-            report = {'format': 'isolated-performance-v1', 'synthetic_only': True, 'production_performance_verified': False,
+            report = {'format': 'isolated-performance-v2-evidence-statistics', 'synthetic_only': True, 'production_performance_verified': False,
                 'created_at': datetime.now(timezone.utc).isoformat(), 'source_commit': os.environ.get('PERFORMANCE_SOURCE_COMMIT'),
                 'source_worktree': 'includes_uncommitted_project_changes', 'verifier_image_id': os.environ.get('PERFORMANCE_IMAGE_ID'),
                 'postgres_image_id': os.environ.get('PERFORMANCE_PG_IMAGE_ID'), 'source_sha256': source_before,
-                'seed': json.loads((REPORTS/'seed.json').read_text()), 'postgres_version': await conn.fetchval('SHOW server_version'),
-                'resource_caps': {'postgres': {'cpus': .35, 'memory_mib': 384, 'data_tmpfs_mib': 256, 'shared_buffers_mib': 32},
+                'seed': json.loads((REPORTS/'seed.json').read_text()), 'fixture_validation':fixture_validation, 'statistics_expected':expected, 'postgres_version': await conn.fetchval('SHOW server_version'),
+                'resource_caps': {'postgres': {'cpus': .35, 'memory_mib': 768, 'data_tmpfs_mib': 512, 'shared_buffers_mib': 32,'max_wal_mib':128,'checkpoint_seconds':30},
                                   'api': {'cpus': .25, 'memory_mib': 256, 'uvicorn_workers': 1},
                                   'client': {'cpus': .15, 'memory_mib': 256}, 'active_cpu_total': .75},
                 'http': http, 'sql': pure_sql, 'pagination': pagination,
@@ -211,4 +330,4 @@ async def main():
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(statistics_main() if '--statistics-only' in sys.argv else pagination_probe() if '--pagination-probe' in sys.argv or '--pagination-asgi-probe' in sys.argv else main())

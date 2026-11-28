@@ -1,0 +1,14 @@
+{
+  "recorded_at": "2026-10-27",
+  "scope": "real Hermes gateway, synthetic color image, no recommendation writes",
+  "http": 200,
+  "seconds": 3.705,
+  "wrapper_model": "hermes-agent",
+  "configured_route": "cline-pass/deepseek-v4.1-flash",
+  "transcript_http": 200,
+  "tools": [
+    "skill_view"
+  ],
+  "response": "已读取 expert-review 技能（本次仅做图像与技能连通性验收，未调用任何比赛搜索、盘口读取或推荐写入工具）。\n\n从左到右：左边色块是红色，右边色块是蓝色。",
+  "limits": "One color recognition probe does not establish sports image accuracy."
+}

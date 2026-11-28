@@ -1,0 +1,34 @@
+{
+  "results": [
+    {
+      "width": 1440,
+      "status": "passed",
+      "message_id": "32d94e59-7ebb-4f4c-a9dd-8a6593eda314",
+      "accepted_count": 2,
+      "two_distinct_fixtures": true,
+      "total_over_three": true,
+      "away_handicap_minus_one": true,
+      "system_prices": [
+        2,
+        1.9
+      ],
+      "no_horizontal_overflow": true
+    },
+    {
+      "width": 390,
+      "status": "passed",
+      "message_id": "32d94e59-7ebb-4f4c-a9dd-8a6593eda314",
+      "accepted_count": 2,
+      "two_distinct_fixtures": true,
+      "total_over_three": true,
+      "away_handicap_minus_one": true,
+      "system_prices": [
+        2,
+        1.9
+      ],
+      "no_horizontal_overflow": true
+    }
+  ],
+  "production_writes": false,
+  "response_injection": false
+}

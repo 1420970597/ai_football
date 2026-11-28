@@ -85,6 +85,26 @@ class FixtureTests(unittest.TestCase):
         self.assertIsNone(timestamp(datetime(2026, 1, 1)))
         self.assertIsNotNone(timestamp("1790784000000"))
 
+    def test_imminent_status_110_is_scheduled_without_invented_score(self):
+        for status in (110, "110"):
+            with self.subTest(status=status):
+                row = parse_fixtures([match(ms=status, mmp="0", msc=["S801|1.11:1.43", "S802|1.62:1.44"])])[0]
+                self.assertEqual("scheduled", row["phase"])
+                self.assertIsNone(row["clock_minute"])
+                self.assertIsNone(row["home_score"])
+                self.assertIsNone(row["away_score"])
+                self.assertIsNone(row["source_updated_at"])
+        self.assertEqual("finished", parse_fixtures([match(ms=110, mmp="999")])[0]["phase"])
+        self.assertEqual("cancelled", parse_fixtures([match(ms=111, mmp="0")])[0]["phase"])
+
+    def test_imminent_quotes_have_prematch_score_basis_but_finished_do_not(self):
+        for status in (110, "110"):
+            quotes = parse_quotes(market_row(ms=status, mmp="0"), "leyu:m1")
+            self.assertTrue(quotes)
+            self.assertTrue(all(q["score_basis"] == "full_period" for q in quotes))
+        quotes = parse_quotes(market_row(ms=110, mmp="999"), "leyu:m1")
+        self.assertTrue(all(q["score_basis"] == "unknown" for q in quotes))
+
     def test_score_uses_exact_period_key_and_absence(self):
         self.assertEqual((None, None), score("S10|4:3"))
         self.assertEqual((3, 1), score("S1|3:1"))
@@ -92,6 +112,73 @@ class FixtureTests(unittest.TestCase):
 
 
 class QuoteTests(unittest.TestCase):
+    def basketball_row(self, market_id="38", **changes):
+        total = market_id == "38"
+        return market_row(csid="2", ms=0, mmp="0",
+            hpsPns=[{"chpid": market_id, "hpn": "全场大小" if total else "全场让分"}],
+            hpsData=[{"hps": [{"chpid": market_id, "hpid": market_id, "ctsp": "1790785712143",
+                "hl": {"hid": "basket-main", "hv": "179.5" if total else "-6.5", "hs": 0, "ol": [
+                    {"oid": "basket-first", "ot": "Over" if total else "1", "os": 1, "ov": 195000},
+                    {"oid": "basket-second", "ot": "Under" if total else "2", "os": 1, "ov": 185000},
+                ]}}]}], **changes)
+
+    def test_basketball_full_game_native_markets_preserve_exact_binding(self):
+        for market_id, kind, line, selections in (
+                ("38", "total", "179.5", ["over", "under"]),
+                ("39", "handicap", "-6.5", ["home", "away"])):
+            with self.subTest(market_id=market_id):
+                quotes = parse_quotes(self.basketball_row(market_id), "leyu:m1")
+                self.assertEqual(selections, [q["selection"] for q in quotes])
+                self.assertEqual(["1.95", "1.85"], [q["price"] for q in quotes])
+                for quote in quotes:
+                    self.assertEqual((market_id, market_id, kind, "full_time", line, "basket-main"),
+                        (quote["market_id"], quote["play_id"], quote["market_kind"], quote["period"],
+                         quote["line"], quote["market_instance_id"]))
+                    self.assertEqual("active", quote["status"])
+                    self.assertEqual("full_period", quote["score_basis"])
+
+    def test_basketball_ids_never_apply_to_other_or_missing_sports(self):
+        for sport in ("1", "5", "999", "", None):
+            for market_id in ("38", "39"):
+                with self.subTest(sport=sport, market_id=market_id):
+                    row = self.basketball_row(market_id)
+                    row["csid"] = sport
+                    quotes = parse_quotes(row, "leyu:m1")
+                    self.assertEqual(2, len(quotes))
+                    self.assertTrue(all(q["market_kind"] == "unsupported" and q["status"] == "suspended"
+                                        and q["period"] == "source_" + market_id for q in quotes))
+
+    def test_basketball_mapping_does_not_change_native_status_or_unknown_source_time(self):
+        for market_id in ("38", "39"):
+            for status, expected in ((1, "suspended"), (2, "closed"), (3, "closed")):
+                row = self.basketball_row(market_id)
+                block = row["hpsData"][0]["hps"][0]
+                block["hl"]["hs"] = status
+                block.pop("ctsp")
+                quotes = parse_quotes(row, "leyu:m1")
+                self.assertTrue(all(q["status"] == expected and q["source_updated_at"] is None
+                                    and q["source_time_quality"] == "unknown" for q in quotes))
+
+    def test_basketball_added_lines_remain_distinct_and_live_score_basis_unknown(self):
+        row = self.basketball_row()
+        row["ms"] = 1
+        row["mmp"] = "6"
+        row["hpsData"][0]["hpsAdd"] = [{"chpid": "38", "hpid": "38",
+            "hl": {"hv": "178.5", "hid": "basket-additional", "hs": 0, "ol": [
+                {"oid": "added-over", "ot": "Over", "os": 1, "ov": 200000}]}}]
+        quotes = parse_quotes(row, "leyu:m1")
+        self.assertEqual(3, len(quotes))
+        self.assertEqual({"179.5", "178.5"}, {q["line"] for q in quotes})
+        self.assertEqual([True, True, False], [q["is_main"] for q in quotes])
+        self.assertTrue(all(q["score_basis"] == "unknown" for q in quotes))
+        self.assertEqual("basket-additional", quotes[2]["market_instance_id"])
+
+    def test_unverified_basketball_market_stays_unsupported(self):
+        quotes = parse_quotes(self.basketball_row("198"), "leyu:m1")
+        self.assertEqual(2, len(quotes))
+        self.assertTrue(all(q["market_kind"] == "unsupported" and q["status"] == "suspended"
+                            and q["period"] == "source_198" for q in quotes))
+
     def test_split_lines_decimal_and_sign_inheritance(self):
         for raw, expected in [("0/0.5", ".25"), ("-0.5/-1", "-.75"), ("-0.5/1", "-.75"), ("-1/1.5", "-1.25")]:
             self.assertEqual(Decimal(expected), parse_line(raw))
@@ -152,7 +239,7 @@ class QuoteTests(unittest.TestCase):
         self.assertEqual([], parse_quotes(row, "leyu:m1"))
         row = {"hps": [{"chpid": "17", "hl": {"ol": [{"ot": "X", "ov": 320000}]}}]}
         quote = parse_quotes(row, "leyu:m1")[0]
-        self.assertEqual(("first_half", "draw", "0"), (quote["period"], quote["selection"], quote["line"]))
+        self.assertEqual(("first_half", "draw", None), (quote["period"], quote["selection"], quote["line"]))
 
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):

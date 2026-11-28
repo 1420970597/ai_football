@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import time
@@ -10,6 +11,8 @@ import asyncpg
 
 from app.database import apply_migrations
 from app.security import token_hash
+from app.result_ledger import ALGORITHM_VERSION
+from app.settlement import settle
 
 HOST = 'ai-football-v2-perf-pg'
 DATABASE = 'test_performance_baseline'
@@ -56,16 +59,46 @@ async def main():
             await conn.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,attempt_id,lease_until,attempts) "
                 "SELECT md5('synthetic-job-'||g)::uuid,md5('synthetic-message-'||g)::uuid,CASE WHEN g<=100 THEN 'running' ELSE 'unresolved' END,'synthetic-job-'||g,"
                 "CASE WHEN g<=100 THEN md5('synthetic-attempt-'||g)::uuid END,CASE WHEN g<=100 THEN now()+interval '1 hour' END,CASE WHEN g<=100 THEN 1 ELSE 0 END FROM generate_series(1,10000) g")
-            await conn.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,outcome,unit_net,effective_stake,settled_at) "
+            await conn.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,outcome,unit_net,effective_stake,settled_at,score_basis,result_version,settlement_reason) "
                 "SELECT md5('synthetic-signal-'||g)::uuid,m.id,m.expert_id,'perf-match-'||lpad(g::text,5,'0'),'scheduled','perf-market-1','合成独赢','full_time','winner',0,'home',1.96,now(),.9,"
-                "CASE g%4 WHEN 0 THEN 'win' WHEN 1 THEN 'loss' WHEN 2 THEN 'push' ELSE 'pending' END,CASE g%4 WHEN 0 THEN .96 WHEN 1 THEN -1 WHEN 2 THEN 0 END,"
-                "CASE WHEN g%4=2 THEN 0 ELSE 1 END,CASE WHEN g%4<>3 THEN now() END FROM generate_series(1,10000) g JOIN v2_expert_messages m ON m.id=md5('synthetic-message-'||g)::uuid")
+                "CASE g%4 WHEN 0 THEN 'win' WHEN 1 THEN 'pending' WHEN 2 THEN 'loss' ELSE 'void' END,CASE g%4 WHEN 0 THEN .96 WHEN 2 THEN -1 WHEN 3 THEN 0 END,"
+                "CASE g%4 WHEN 0 THEN 1 WHEN 2 THEN 1 WHEN 3 THEN 0 END,CASE WHEN g%4<>1 THEN now() END,'full_period',CASE WHEN g%4<>1 THEN 1 END,"
+                "CASE g%4 WHEN 1 THEN 'result_not_confirmed' WHEN 3 THEN 'provider_confirmed_void' ELSE 'three_way_winner' END "
+                "FROM generate_series(1,10000) g JOIN v2_expert_messages m ON m.id=md5('synthetic-message-'||g)::uuid")
             await conn.execute("INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence) "
-                "SELECT md5('synthetic-evidence-'||g)::uuid,'perf-match-'||lpad(g::text,5,'0'),'perf-market-1','合成独赢','full_time',0,'home',1.96,'expert_signal',md5('synthetic-signal-'||g)::uuid,now(),'{\"origin\":\"synthetic-performance-only\"}'::jsonb FROM generate_series(1,10000) g")
+                "SELECT md5('synthetic-evidence-'||g)::uuid,'perf-match-'||lpad(g::text,5,'0'),'perf-market-1','合成独赢','full_time',0,'home',1.96,'expert_signal',md5('synthetic-signal-'||g)::uuid,now(),"
+                "jsonb_build_object('origin','synthetic-performance-only','score_basis','full_period','quote_id',md5('synthetic-quote-'||g||'-1')::uuid) FROM generate_series(1,10000) g")
+            rows=await conn.fetch("SELECT * FROM v2_expert_signals WHERE outcome<>'pending'")
+            results,calculations=[],[]
+            for row in rows:
+                void=row['outcome']=='void'
+                home=None if void else 2 if row['outcome']=='win' else 0
+                away=None if void else 1
+                half=None if void else 0
+                reference='synthetic-confirmed-result-'+row['fixture_id']
+                stamp=row['settled_at']
+                evidence={'source':'SYNTHETIC PERFORMANCE ONLY','rule':'regular_time_90_minutes'}
+                facts={'status':'void' if void else 'confirmed','home':home,'away':away,'half_home':half,'half_away':half,
+                       'provider_reference':reference,'source_updated_at':stamp.isoformat(),'evidence':evidence}
+                digest=hashlib.sha256(json.dumps(facts,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+                inputs={'sport':'football','kind':row['market_kind'],'period':row['period'],'phase':row['phase'],
+                        'price':str(row['recommendation_price']),'line':str(row['line']),'selection':row['selection'],
+                        'score_basis':row['score_basis'],'score_baseline':row['score_baseline']}
+                value=settle(inputs,facts)
+                results.append((row['fixture_id'],1,reference,digest,facts['status'],home,away,half,half,stamp,evidence))
+                calculations.append((row['id'],row['fixture_id'],1,ALGORITHM_VERSION,value.outcome,value.unit_net,
+                                     value.effective_stake,value.reason,{'signal':inputs,'result':facts},stamp))
+            await conn.executemany("INSERT INTO v2_fixture_results(fixture_id,version,provider_reference,content_hash,status,home_score,away_score,half_home_score,half_away_score,source_updated_at,evidence) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",results)
+            await conn.executemany("INSERT INTO v2_signal_settlements(signal_id,fixture_id,result_version,algorithm_version,outcome,unit_net,effective_stake,reason,calculation,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",calculations)
+            await conn.execute("UPDATE v2_fixtures f SET phase=CASE WHEN r.status='void' THEN 'cancelled' ELSE 'finished' END,"
+                "match_state=CASE WHEN r.status='void' THEN 'provider_confirmed_void' ELSE 'finished' END,home_score=r.home_score,away_score=r.away_score,half_home_score=r.half_home_score,half_away_score=r.half_away_score "
+                "FROM v2_fixture_results r WHERE f.id=r.fixture_id")
+            await conn.execute("UPDATE v2_current_quotes q SET status='closed' FROM v2_fixture_results r WHERE q.fixture_id=r.fixture_id")
         await conn.execute('ANALYZE')
         counts = {key: await conn.fetchval('SELECT count(*) FROM ' + table) for key, table in
                   {'fixtures': 'v2_fixtures', 'quotes': 'v2_current_quotes', 'messages': 'v2_expert_messages',
-                   'signals': 'v2_expert_signals', 'experts': 'v2_experts', 'jobs': 'v2_analysis_jobs'}.items()}
+                   'signals': 'v2_expert_signals', 'experts': 'v2_experts', 'jobs': 'v2_analysis_jobs',
+                   'quote_evidence':'v2_quote_evidence','result_versions':'v2_fixture_results','settlement_calculations':'v2_signal_settlements'}.items()}
         print(json.dumps({'synthetic_only': True, 'counts': counts, 'seed_seconds': round(time.perf_counter()-started,3),
                           'database': DATABASE, 'created_at': datetime.now(timezone.utc).isoformat()}, sort_keys=True))
     finally:

@@ -73,17 +73,22 @@ async def revision_locked(conn) -> int:
 @router.get("/internal/collector/renewal/config")
 async def renewal_config(request: Request):
     authorized(request)
-    async with database.current_pool().acquire() as conn:
-        async with conn.transaction(isolation="repeatable_read", readonly=True):
-            revision = await conn.fetchval("SELECT revision FROM v2_configuration_revisions WHERE namespace='leyu'")
-            rows = await conn.fetch("SELECT setting_key,encrypted_value FROM v2_admin_settings WHERE setting_key=ANY($1::text[])", list(LEYU_CONFIG_KEYS))
-            values = {}
-            for row in rows:
-                try:
-                    values[row["setting_key"]] = decrypt_secret(request.app.state.settings.encryption_key, row["encrypted_value"])
-                except Exception:
-                    raise HTTPException(status_code=503, detail="乐鱼配置解密失败，需核对密钥版本") from None
-    return {"version": revision, "items": values}
+    # One statement shares one MVCC snapshot for revision and encrypted values.
+    # Avoid BEGIN/read/read/COMMIT round trips on the remote database, without
+    # caching credentials or returning a revoked configuration on failure.
+    snapshot = await database.current_pool().fetchrow(
+        "SELECT revision,(SELECT coalesce(jsonb_object_agg(setting_key,encrypted_value),'{}'::jsonb) "
+        "FROM v2_admin_settings WHERE setting_key=ANY($1::text[])) AS encrypted_values "
+        "FROM v2_configuration_revisions WHERE namespace='leyu'", list(LEYU_CONFIG_KEYS))
+    if snapshot is None:
+        raise HTTPException(status_code=503, detail="乐鱼配置版本未初始化")
+    values = {}
+    for key, encrypted in snapshot['encrypted_values'].items():
+        try:
+            values[key] = decrypt_secret(request.app.state.settings.encryption_key, encrypted)
+        except Exception:
+            raise HTTPException(status_code=503, detail="乐鱼配置解密失败，需核对密钥版本") from None
+    return {"version": snapshot['revision'], "items": values}
 
 
 @router.post("/internal/collector/renewal/claim", status_code=201)

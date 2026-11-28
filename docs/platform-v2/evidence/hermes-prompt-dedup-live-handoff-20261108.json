@@ -1,0 +1,93 @@
+{
+  "schema": "prompt_dedup_api_worker_release_v1",
+  "api_source_commit": "27cb7dee5039c1b5c49b46fa657369c8a132415e",
+  "api_image_id": "sha256:465b2598728c54022b908d9be0511ee7e6ffa66ef6ca16162a3a3e772883f171",
+  "web_image_id": "sha256:45ae18d5f137e1566fc8e31b754d6fb45f28eb1d1017d48b384d954c8aaf9809",
+  "api_handoff_completed_at": "2026-11-08T22:27:48Z",
+  "source_and_dependencies_exact": true,
+  "tests": 1942,
+  "test_seconds": 1328.382,
+  "native_failures_errors_skips": 0,
+  "fixed_framework_and_nine_original_core_binding_checks_passed": true,
+  "prompt_artifact_release": {
+    "changed": true,
+    "release_id": "e1741-prompt-20261108",
+    "active_version": "6760835cb11941b2022d4424ee561c40c80948ecf3b486efd73479235791cab9",
+    "test_count": 1942,
+    "model_and_provider_unchanged": true,
+    "quality_approval": false
+  },
+  "actual_worker_consumption": {
+    "actual_deployed_worker": true,
+    "consumed": true,
+    "calls": [
+      "GET",
+      "POST"
+    ],
+    "model_configuration_version": "6760835cb11941b2022d4424ee561c40c80948ecf3b486efd73479235791cab9",
+    "configuration_version": "4eae31f2776c412f7ce24dc0f8764450d87607d7198d5fa9ad7ae8bfe44abfef",
+    "prompt_sha256": "deda2036c76905f2fe540a36c120c5ff6cece05620ae6e24c5a7269dabb12bda",
+    "elapsed_ms": 3352.57,
+    "model_generation_or_orders": false
+  },
+  "rollout_verification": {
+    "only_api_and_worker_recreated": true,
+    "other_five_local_and_four_remote_containers_unchanged": true,
+    "model_provider_key_profile_permissions_and_mounts_unchanged": true,
+    "audited_prompt_only_version_transition_consumed": true
+  },
+  "ledger_verification": {
+    "signals_before": 624,
+    "signals_after": 624,
+    "old_ledger_rows": 880,
+    "immutable_signals_quotes_and_ledger_preserved": true,
+    "database_rollback": false
+  },
+  "financial_verification": {
+    "old_orders_preserved": 2,
+    "policy_and_account_ownership_unchanged": true,
+    "financial_pre_and_post_snapshots_idle": true,
+    "no_funds_lock_or_order_mutation": true
+  },
+  "warm_samples": 15,
+  "warm_unavailable_samples_retained": 13,
+  "real_browser_cases_passed": 24,
+  "real_delayed_GET_race_cases_passed": 2,
+  "real_phase_click_to_DOM_ms": {
+    "min": 798,
+    "max": 1903
+  },
+  "original_images_mouse_keyboard_scroll_reopen_passed": true,
+  "summary_anchor_and_focus_retained": true,
+  "primary_visually_inspected_screenshots": 7,
+  "production_test_writes": 0,
+  "response_rewrites": 0,
+  "funded_tests": 0,
+  "three_second_model_end_to_end_acceptance": false,
+  "unqualified_free_text_accuracy_claimed": false,
+  "dedicated_window_actual_origin": "2026-11-08T22:27:55.872506283Z",
+  "dedicated_window_status": "in_progress",
+  "complete_delivery_claimed": false,
+  "retained_draft_failures": {
+    "e1741_import_path": 1,
+    "e1742_nested_readonly_mount": 125,
+    "e1745_corrected": 0
+  },
+  "raw_sha256": {
+    "e1747-live-browser/results.json": "b648c2e3a3d6eb0ce443b539737350e2e5592f9b1ec89cc6e21dcc07c00dcc08",
+    "e1748-anchor-production/results.json": "9dfa0b9daf85114e1150133b0bd08e38549fda7754891c335c4db4d97c6ad928",
+    "e1749-live-browser/results.json": "bb3e557e29db02775c4f1b8523d1ae5de5e8a09c994d58c4149fef03dd0dd38e",
+    "e1747-live-browser/phase-finished-390.png": "fc94e07ed1bb28672c94c9bc845e0ab4506cdab402daa553f72325d4fb65e431",
+    "e1747-live-browser/original-expanded-1440.png": "688dfc8964dc49ab1b185b4f87fed6a18b69b6d92078a0ec17d0e2ca011d9154",
+    "e1747-live-browser/original-expanded-390.png": "55b700d36c4530eccca525ab79cebeb7793434734808fd48d9e748f0b6a4e8e1",
+    "e1748-anchor-production/settled-summaries-390.png": "9c6bf1f3a0122a1ba9ec27c884668979937bafe7e43b5f7e4eb44af5ffb4abc7",
+    "e1749-live-browser/expert-ranking-1440.png": "cd52a9240a00e53b385eb8aaace7372ebe308ef15f27d5fd2c62411f20c1e316",
+    "e1749-live-browser/tg-member-race-1440.png": "52c55aae933f5562053997672d190c0ac2cba630b4d8ccae4bbd45610461459e",
+    "e1749-live-browser/tg-member-race-390.png": "7e45822c0be11ebb6c6949556b774d77e0f60ff65141ae3556068d0d2c22a174",
+    "e1741-rollout-verification.json": "3bbf46f6b4250d679f0e0e074c5f91d86a41e3c833fd32f44293bd2e170cb006",
+    "e1741-prompt-transition-verification.json": "fd63182a4319860298f2c0367fa29f8b847db2c76285e973e0f307f5a863e636",
+    "e1741-ledger-preservation.json": "1009f1de9bd3356857476a8e039bebce70da166c46b76cf1bfbae7fb4e26120d",
+    "e1741-financial-verification.json": "d2591d0af078b366cc36f3a3ac39377125c2d3c6093d1271e3aa96de903e753c",
+    "e1741-telegram-warm-readiness.jsonl": "73bdf6aaa72f378c467bc34e7c8cbda4a63b63c4288117e398c72605ae1404a4"
+  }
+}

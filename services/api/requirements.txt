@@ -5,3 +5,4 @@ httpx==0.28.1
 cryptography==50.0.2
 boto3==1.43.118
 python-multipart==0.0.20
+Pillow==13.0.0

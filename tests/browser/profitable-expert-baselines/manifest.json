@@ -1,0 +1,27 @@
+{
+  "channel_threshold": 16,
+  "max_changed_ratio": 0.002,
+  "browser_version": "141.0.7390.37",
+  "synthetic_data": true,
+  "production_evidence": false,
+  "screens": [
+    {
+      "width": 1440,
+      "file": "profitable-mode-1440.png",
+      "sha256": "e110b4bb46643d34e244a1608394e41bb4354b572a0aaf5a51a23e10a34aaf33",
+      "status": "baseline_written",
+      "clicks": "passed",
+      "owner_confirmation": "required",
+      "manual_restored": true
+    },
+    {
+      "width": 390,
+      "file": "profitable-mode-390.png",
+      "sha256": "dca775d12c338b337991cc3b47a6815d2eaadec395d8ace05e6197756deb7f78",
+      "status": "baseline_written",
+      "clicks": "passed",
+      "owner_confirmation": "required",
+      "manual_restored": true
+    }
+  ]
+}

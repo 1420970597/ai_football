@@ -24,6 +24,9 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.security.GeneralSecurityException;
+import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -34,7 +37,7 @@ public final class MainActivity extends Activity {
     private View pairing, offline;
     private TextView hostLabel, offlineMessage, pairingMessage;
     private EditText serviceInput;
-    private Button verifyButton, returnButton;
+    private Button verifyButton, returnButton, scanButton;
     private ProgressBar progress;
     private PairingStore pairingStore;
     private String service;
@@ -43,6 +46,11 @@ public final class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private Future<?> probe;
     private int probeGeneration;
+    private static final int SCAN_REQUEST = 4281;
+    private boolean scanPending;
+    private final BackRequest backRequest = new BackRequest();
+    private Runnable backTimeout;
+    private String closeDialogScript;
     private ConnectivityManager connectivity;
     private ConnectivityManager.NetworkCallback networkCallback;
 
@@ -68,6 +76,8 @@ public final class MainActivity extends Activity {
         serviceInput = findViewById(R.id.service_input);
         verifyButton = findViewById(R.id.verify_service);
         returnButton = findViewById(R.id.return_service);
+        scanButton = findViewById(R.id.scan_service);
+        scanPending = state != null && state.getBoolean("scanner_pending", false);
         progress = findViewById(R.id.load_progress);
         if (Build.VERSION.SDK_INT >= 28) findViewById(R.id.pairing_heading).setAccessibilityHeading(true);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -78,12 +88,19 @@ public final class MainActivity extends Activity {
         findViewById(R.id.retry_page).setOnClickListener(v -> openService());
         findViewById(R.id.change_service).setOnClickListener(v -> showPairing());
         verifyButton.setOnClickListener(v -> verifyService());
+        scanButton.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle(R.string.scan_service).setMessage(R.string.scan_help)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.scan_start, (dialog, which) -> scanService()).show());
         returnButton.setOnClickListener(v -> { cancelProbe(); openService(); });
         applyInsets();
         registerNetworkState();
         try {
             service = pairingStore.read();
-            if (service == null) showPairing(); else openService();
+            if (service == null || scanPending || (state != null && state.getBoolean("pairing_visible", false))) {
+                showPairing();
+                if (state != null) serviceInput.setText(state.getString("pairing_candidate", service == null ? "" : service));
+            } else openService();
         } catch (GeneralSecurityException e) {
             pairingStore.clear();
             showPairing(); pairingMessage.setText(R.string.pairing_reset);
@@ -124,6 +141,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showPairing() {
+        cancelBack();
         cancelProbe();
         if (rendererLost) { recreate(); return; }
         webView.stopLoading(); progress.setVisibility(View.GONE); offline.setVisibility(View.GONE);
@@ -134,13 +152,52 @@ public final class MainActivity extends Activity {
         pairingMessage.setText(R.string.pairing_help);
     }
 
+    private void scanService() {
+        if (scanPending || pairing.getVisibility() != View.VISIBLE) return;
+        cancelProbe();
+        for (String packageName : ScanPolicy.PACKAGES) {
+            Intent intent = new Intent(ScanPolicy.ACTION).setPackage(packageName)
+                    .putExtra("SCAN_MODE", "QR_CODE_MODE").putExtra("SCAN_FORMATS", "QR_CODE");
+            if (intent.resolveActivity(getPackageManager()) == null) continue;
+            try {
+                scanPending = true;
+                scanButton.setEnabled(false);
+                startActivityForResult(intent, SCAN_REQUEST);
+                return;
+            } catch (ActivityNotFoundException | SecurityException unavailable) {
+                scanPending = false;
+                scanButton.setEnabled(true);
+            }
+        }
+        pairingMessage.setText(R.string.scan_unavailable);
+        serviceInput.requestFocus();
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != SCAN_REQUEST || !scanPending) return;
+        scanPending = false;
+        scanButton.setEnabled(true);
+        if (isFinishing() || isDestroyed() || pairing.getVisibility() != View.VISIBLE) return;
+        if (resultCode != RESULT_OK) { pairingMessage.setText(R.string.scan_cancelled); return; }
+        try {
+            String candidate = ScanPolicy.candidate(data == null ? null : data.getStringExtra("SCAN_RESULT"),
+                    data == null ? null : data.getStringExtra("SCAN_RESULT_FORMAT"));
+            serviceInput.setText(candidate);
+            serviceInput.setError(null);
+            pairingMessage.setText(R.string.scan_candidate);
+        } catch (IllegalArgumentException | android.os.BadParcelableException invalid) {
+            pairingMessage.setText(R.string.scan_invalid);
+        }
+    }
+
     private void verifyService() {
         final String candidate;
         try { candidate = UrlPolicy.normalizeService(serviceInput.getText().toString()); }
         catch (IllegalArgumentException e) { serviceInput.setError(e.getMessage()); return; }
         cancelProbe();
         int generation = probeGeneration;
-        verifyButton.setEnabled(false); serviceInput.setEnabled(false);
+        verifyButton.setEnabled(false); serviceInput.setEnabled(false); scanButton.setEnabled(false);
         pairingMessage.setText(R.string.verifying_service);
         ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(serviceInput.getWindowToken(), 0);
         probe = executor.submit(() -> {
@@ -173,18 +230,20 @@ public final class MainActivity extends Activity {
                 }).show();
     }
 
-    private void finishProbe() { verifyButton.setEnabled(true); serviceInput.setEnabled(true); }
+    private void finishProbe() { verifyButton.setEnabled(true); serviceInput.setEnabled(true); scanButton.setEnabled(!scanPending); }
     private void cancelProbe() { probeGeneration++; if (probe != null) probe.cancel(true); finishProbe(); }
 
     private void openService() {
+        cancelBack();
         cancelProbe();
         if (rendererLost) { recreate(); return; }
         if (service == null) { showPairing(); return; }
         pairing.setVisibility(View.GONE); offline.setVisibility(View.GONE); webView.setVisibility(View.VISIBLE);
         hostLabel.setText(Uri.parse(service).getAuthority());
         webView.setWebViewClient(new SafeWebClient(service, page, new SafeWebClient.Listener() {
-            @Override public void loading(boolean loading) { progress.setVisibility(loading ? View.VISIBLE : View.GONE); }
+            @Override public void loading(boolean loading) { if (loading) cancelBack(); progress.setVisibility(loading ? View.VISIBLE : View.GONE); }
             @Override public void failed(String message) {
+                cancelBack();
                 progress.setVisibility(View.GONE); offlineMessage.setText(message); offline.setVisibility(View.VISIBLE);
             }
             @Override public void external(String url) { confirmExternal(url); }
@@ -222,6 +281,7 @@ public final class MainActivity extends Activity {
     }
 
     private void clearWebIdentity(Runnable after) {
+        cancelBack();
         if (!rendererLost) { webView.stopLoading(); webView.clearCache(true); webView.clearHistory(); }
         WebStorage.getInstance().deleteAllData();
         CookieManager.getInstance().removeAllCookies(removed -> {
@@ -244,13 +304,67 @@ public final class MainActivity extends Activity {
 
     @Override public void onBackPressed() { handleBack(); }
     private void handleBack() {
+        if (webView == null) { finish(); return; }
         if (pairing.getVisibility() == View.VISIBLE && service != null) { cancelProbe(); openService(); }
-        else if (!rendererLost && offline.getVisibility() != View.VISIBLE && webView.canGoBack()) webView.goBack();
-        else finish();
+        else if (pairing.getVisibility() == View.VISIBLE || rendererLost || offline.getVisibility() == View.VISIBLE) finish();
+        else checkDialogBeforeBack();
+    }
+
+    private void checkDialogBeforeBack() {
+        String documentUrl = webView.getUrl();
+        if (service == null || UrlPolicy.classify(service, documentUrl) != UrlPolicy.Navigation.INTERNAL) {
+            finish(); return;
+        }
+        long token = backRequest.begin();
+        if (token == 0) return;
+        backTimeout = () -> {
+            if (backRequest.complete(token) && !isFinishing() && !isDestroyed()) {
+                backTimeout = null;
+                Toast.makeText(this, R.string.back_check_timeout, Toast.LENGTH_SHORT).show();
+            }
+        };
+        webView.postDelayed(backTimeout, 750);
+        try {
+            if (closeDialogScript == null) {
+                try (InputStream source = getResources().openRawResource(R.raw.close_dialog)) {
+                    ByteArrayOutputStream script = new ByteArrayOutputStream();
+                    byte[] block = new byte[1024];
+                    int count;
+                    while ((count = source.read(block)) != -1) script.write(block, 0, count);
+                    closeDialogScript = new String(script.toByteArray(), StandardCharsets.UTF_8);
+                }
+            }
+            webView.evaluateJavascript(closeDialogScript, result -> {
+                if (!backRequest.complete(token)) return;
+                if (backTimeout != null) webView.removeCallbacks(backTimeout);
+                backTimeout = null;
+                if (isFinishing() || isDestroyed() || rendererLost || !documentUrl.equals(webView.getUrl())) return;
+                if ("\"none\"".equals(result)) { if (webView.canGoBack()) webView.goBack(); else finish(); }
+                else if (!"\"handled\"".equals(result)) Toast.makeText(this, R.string.back_check_timeout, Toast.LENGTH_SHORT).show();
+            });
+        } catch (Exception unavailable) {
+            cancelBack();
+            Toast.makeText(this, R.string.back_check_timeout, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void cancelBack() {
+        backRequest.cancel();
+        if (backTimeout != null && webView != null) webView.removeCallbacks(backTimeout);
+        backTimeout = null;
     }
     @Override protected void onPause() { if (webView != null && !rendererLost) { CookieManager.getInstance().flush(); webView.onPause(); } super.onPause(); }
     @Override protected void onResume() { super.onResume(); if (webView != null && !rendererLost) webView.onResume(); }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        if (pairing != null) {
+            state.putBoolean("scanner_pending", scanPending);
+            state.putBoolean("pairing_visible", pairing.getVisibility() == View.VISIBLE);
+            state.putString("pairing_candidate", serviceInput.getText().toString());
+        }
+    }
     @Override protected void onDestroy() {
+        cancelBack(); scanPending = false;
         probeGeneration++; if (probe != null) probe.cancel(true); executor.shutdownNow();
         if (connectivity != null && networkCallback != null) connectivity.unregisterNetworkCallback(networkCallback);
         if (webView != null && !rendererLost) { webView.stopLoading(); webView.destroy(); }

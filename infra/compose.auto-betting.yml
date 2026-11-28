@@ -1,0 +1,7 @@
+# Explicit API opt-in. Pair with infra/remote/compose.auto-betting.yml on the
+# remote project only after verifying zero active order/account jobs.
+# Expert selection, stake limits and consent remain personal user actions.
+services:
+  api:
+    environment:
+      LIVE_ORDERS_ENABLED: 'true'

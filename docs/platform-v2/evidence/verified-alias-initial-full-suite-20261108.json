@@ -1,0 +1,13 @@
+{
+  "source_parent_commit": "e42a923b62347bd2e0576ba6a97a8f988059bc81",
+  "committed_source_verified": true,
+  "tests": 1795,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 1197.054,
+  "scope": "isolated fixtures; no live providers or money",
+  "native_exit": 0,
+  "controller_exit": 0,
+  "qualifies_new_completion_or_missing_sport_code": false
+}

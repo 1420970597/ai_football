@@ -1,0 +1,69 @@
+{
+  "results": [
+    {
+      "width": 1440,
+      "case": "expert_ranking_refresh",
+      "status": "passed",
+      "experts": 10
+    },
+    {
+      "width": 1440,
+      "case": "expert_detail_and_tabs",
+      "status": "passed",
+      "settled_count_matches_api": true
+    },
+    {
+      "width": 1440,
+      "case": "telegram_monitoring_sources",
+      "status": "passed",
+      "source_count": 6,
+      "status_http": 200
+    },
+    {
+      "width": 1440,
+      "case": "ordinary_member_search_and_admin_scope",
+      "status": "passed",
+      "available_sources_checked": 0,
+      "restricted_sources_reported": 1,
+      "ordinary_member_found": true,
+      "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+      "trust_or_permissions_changed": false
+    },
+    {
+      "width": 390,
+      "case": "expert_ranking_refresh",
+      "status": "passed",
+      "experts": 10
+    },
+    {
+      "width": 390,
+      "case": "expert_detail_and_tabs",
+      "status": "passed",
+      "settled_count_matches_api": true
+    },
+    {
+      "width": 390,
+      "case": "telegram_monitoring_sources",
+      "status": "passed",
+      "source_count": 6,
+      "status_http": 200
+    },
+    {
+      "width": 390,
+      "case": "ordinary_member_search_and_admin_scope",
+      "status": "passed",
+      "available_sources_checked": 0,
+      "restricted_sources_reported": 1,
+      "ordinary_member_found": true,
+      "sample_scope": "current_TG_session_ordinary_member_in_configured_source",
+      "trust_or_permissions_changed": false
+    }
+  ],
+  "response_injection": false,
+  "production_writes": 0,
+  "identities_exported": false,
+  "web_source_commit": "b187600582795593d50d64582210e5cbb05587e2",
+  "api_source_commit": "4b90ab6bc6235323d11af85ebfb4e0fe9a2a2398",
+  "pre_candidate_baseline_only": true,
+  "ordinary_member_fixture": "verified own membership in an already configured source"
+}

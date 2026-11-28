@@ -1,0 +1,10 @@
+{
+  "isolated_replay": true,
+  "production_writes": false,
+  "recovered_from_owned_pg_dump": true,
+  "fixture_id": "leyu:5809480",
+  "verified_alias_sources": {
+    "away": "7m:4745:20261108",
+    "registry_version": "2026-11-08.1"
+  }
+}

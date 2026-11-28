@@ -1,0 +1,114 @@
+{
+  "schema": "safe-visual-intent-live-handoff-v1",
+  "source_commit": "875028c27be043f469d05624f9a02987306dde70",
+  "handoff_completed_at": "2026-11-08T20:43:53Z",
+  "bounded_idle_handoff_all_native_exits": 0,
+  "scope": [
+    "api_image",
+    "review_worker_image",
+    "hermes_mcp_image",
+    "hermes_project_skill_readonly_mount"
+  ],
+  "effective_compose_checks": {
+    "only_api_worker_mcp_images_and_hermes_skill_mount_change": true,
+    "model_config_runner_context_identical": true,
+    "other_effective_configuration_unchanged": true,
+    "rollback_from_actual_configuration": true
+  },
+  "rollout_checks": {
+    "only_api_worker_mcp_images_and_hermes_skill_profile_recreated": true,
+    "other_three_local_and_four_remote_unchanged": true,
+    "provider_environment_config_context_runner_and_personal_permissions_unchanged": true
+  },
+  "ledger_checks": {
+    "signals_before": 624,
+    "signals_after": 624,
+    "old_ledger_rows": 879,
+    "immutable_signals_quotes_and_ledger_preserved": true,
+    "database_rollback": false
+  },
+  "financial_checks": {
+    "old_orders_preserved": 2,
+    "policy_and_account_ownership_unchanged": true,
+    "financial_pre_and_post_snapshots_idle": true,
+    "no_funds_lock_or_order_mutation": true
+  },
+  "model_configuration_checks": {
+    "active_version": "08d7c1684cfc099c3aa742482eebeccd3846bc31ceaa96e82e6e12142fb1a786",
+    "prompt_artifact_changed": false,
+    "model_and_provider_unchanged": true,
+    "quality_approval": false,
+    "test_count": 1935,
+    "model_configuration_database_writes": 0,
+    "recorded_prompt_releases_unchanged": true
+  },
+  "loaded_api_and_worker_source_file_count": 110,
+  "loaded_original_caption_intent_guard": true,
+  "loaded_native_compact_mcp_adapter": true,
+  "warm_readiness": [
+    {
+      "observed_at": "2026-11-08T20:43:02.980848+00:00",
+      "attempt": 1,
+      "read_only": true,
+      "http_status": 200,
+      "state": "unavailable",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 0
+    },
+    {
+      "observed_at": "2026-11-08T20:43:06.239370+00:00",
+      "attempt": 2,
+      "read_only": true,
+      "http_status": 200,
+      "state": "connected",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 1
+    },
+    {
+      "observed_at": "2026-11-08T20:43:09.723592+00:00",
+      "attempt": 3,
+      "read_only": true,
+      "http_status": 200,
+      "state": "connected",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 2
+    }
+  ],
+  "warm_readiness_attempts": 3,
+  "initial_warm_readiness_not_yet_healthy": 1,
+  "model_gateway_configuration_modified": false,
+  "database_rollback": false,
+  "historical_backfill": false,
+  "funded_tests": 0,
+  "browser_and_post_handoff_full_natural_window_pending": true,
+  "positive_natural_recommendation_claimed": false,
+  "three_second_target_passed": false,
+  "full_suite": {
+    "source_parent_commit": "875028c27be043f469d05624f9a02987306dde70",
+    "committed_source_verified": true,
+    "tests": 1935,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1338.168
+  },
+  "raw_evidence_sha256": {
+    "e1586-final-orchestration-sha256.txt": "3fa9728b8a972fc3d1df6b0cfd67bce32275b18ef6238c89bc94adb6d023ff4c",
+    "e1586-loaded-api.json": "64ffbbfb5db8835f7fa49fe43d30fe9ab12350f87dc54a89ed11eaeffa1d4ed5",
+    "e1586-loaded-review-worker.json": "64ffbbfb5db8835f7fa49fe43d30fe9ab12350f87dc54a89ed11eaeffa1d4ed5",
+    "e1586-loaded-mcp.json": "69ae0a67ecee27ba76c4b99aa18087cbcdc953c4c9b8284c2c370caf8c4cccc9",
+    "e1586-loaded-hermes.json": "c80f8b524145dc0401ad939727923b0490f1624da3977d2dd88a66481b433c7f",
+    "e1586-gate.log": "c1c8ecb184bfb6c6033bea162beae571f790f9b9ae6621b59443fb160147a991",
+    "e1586-consumption-before.json": "301a92d9f59048b6138bed32319df713b8e3250404b3822953a8981ca1af5aa6",
+    "e1586-consumption-after.json": "353234359461a0c9b4902f177879fdcf127c0f1fec5a1bc93a477af21ffc9085"
+  }
+}

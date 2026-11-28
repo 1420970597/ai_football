@@ -7,20 +7,16 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from infra.android.package_policy import verify_network_permissions
 
 
 DEVELOPMENT_VERSION = "2.0.0-dev"
 ANDROID_APPLICATION_ID = "com.aifootball.platform"
 ANDROID_VERSION_CODE = "20000"
-REQUIRED_ANDROID_PERMISSIONS = {
-    "android.permission.INTERNET",
-    "android.permission.ACCESS_NETWORK_STATE",
-}
-FORBIDDEN_ANDROID_PERMISSIONS = {
-    "android.permission.READ_EXTERNAL_STORAGE",
-    "android.permission.WRITE_EXTERNAL_STORAGE",
-    "android.permission.READ_PHONE_STATE",
-}
 COMPONENT_SERVICES = {
     "api": ("api", "migrate", "review-worker"), "collector": ("collector",),
     "executor": ("executor",), "mcp": ("hermes-mcp",), "web": ("web",),
@@ -67,7 +63,10 @@ def make_manifest(root: Path, commit: str, images: dict, artifacts: Path) -> dic
         if not file.is_file() or file.is_symlink():
             raise ValueError("both clearly named development APKs are required")
         assets[file.name] = {"sha256": hashlib.sha256(file.read_bytes()).hexdigest(),
-                             "bytes": file.stat().st_size, "signing": "debug" if kind == "debug" else "unsigned"}
+                             "bytes": file.stat().st_size, "signing": "debug" if kind == "debug" else "unsigned",
+                             "package_name": ANDROID_APPLICATION_ID + (".dev" if kind == "debug" else ""),
+                             "version_code": int(ANDROID_VERSION_CODE),
+                             "version_name": DEVELOPMENT_VERSION + ("+debug" if kind == "debug" else "")}
     parent = (artifacts / "source-parent-commit.txt").read_text().strip()
     dirty = (artifacts / "source-worktree-status.txt").read_text().strip()
     if parent != commit or dirty:
@@ -94,14 +93,7 @@ def _validate_android_package(output: str) -> None:
                          if line.startswith("package: ") and all(item in line for item in expected)), "")
     if not package_line or any(item not in package_line for item in expected):
         raise ValueError("Android package id, version code or version name is invalid")
-    permissions = {line.split("name='", 1)[1].split("'", 1)[0] for line in output.splitlines()
-                   if line.startswith("uses-permission: name='")}
-    missing = REQUIRED_ANDROID_PERMISSIONS - permissions
-    forbidden = FORBIDDEN_ANDROID_PERMISSIONS & permissions
-    if missing:
-        raise ValueError("Android required permissions are missing")
-    if forbidden:
-        raise ValueError("Android package requests forbidden permissions")
+    verify_network_permissions(output)
     if "CN=Android Debug" not in output or "Verified using v2 scheme (APK Signature Scheme v2): true" not in output:
         raise ValueError("development package signing verification is missing")
 

@@ -285,11 +285,11 @@ class AdminReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
 
-    async def test_missing_reason_or_recent_auth_cannot_enqueue(self):
+    async def test_missing_reason_is_rejected_but_stale_step_up_timestamp_is_ignored(self):
         self.assertEqual(422, (await self.retry(reason='   ')).status_code)
         await self.pool.execute("UPDATE v2_sessions SET reauthenticated_at=now()-interval '1 hour'")
-        self.assertEqual(403, (await self.retry()).status_code)
-        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+        self.assertEqual(201, (await self.retry()).status_code)
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
 
     async def test_audit_failure_rolls_back_job_trace_and_retry_ledger(self):
         with patch.object(review_logic, 'audit', AsyncMock(side_effect=RuntimeError('isolated-write-failure'))):

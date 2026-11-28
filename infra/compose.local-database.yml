@@ -1,0 +1,55 @@
+# Standalone persistent PostgreSQL. Runtime clients opt in through the overlay;
+# no public port, remote database mutation, or unrelated service recreation.
+name: ai-football-v2-local-storage
+services:
+  local-postgres:
+    image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/db/server.crt
+      - -c
+      - ssl_key_file=/run/db/server.key
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=80
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - log_min_duration_statement=3000
+    environment:
+      POSTGRES_DB: football_v2
+      POSTGRES_USER: football_admin
+      POSTGRES_PASSWORD_FILE: /run/db/admin-password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=trust
+    volumes:
+      - {type: volume, source: local-pgdata, target: /var/lib/postgresql/data}
+      - {type: bind, source: ./.runtime/nov11-local-db/server.crt, target: /run/db/server.crt, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/nov11-local-db/server.key, target: /run/db/server.key, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/nov11-local-db/admin-password, target: /run/db/admin-password, read_only: true, bind: {create_host_path: false}}
+    networks: [storage-private]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U football_admin -d football_v2]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 768m
+    pids_limit: 128
+    shm_size: 128m
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
+volumes:
+  local-pgdata:
+    name: ai-football-v2-local-pgdata
+networks:
+  storage-private:
+    external: true
+    name: ai-football-v2_storage-private

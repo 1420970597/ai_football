@@ -1,0 +1,23 @@
+{
+  "services": {
+    "web": {
+      "image": "sha256:098d1ebf2edf1728becaa08e8293f4d88014c1f0570ee400f1245908194914dc",
+      "command": [
+        "nginx",
+        "-g",
+        "daemon off;"
+      ],
+      "entrypoint": [
+        "/docker-entrypoint.sh"
+      ],
+      "mem_limit": 134217728,
+      "memswap_limit": 268435456,
+      "cpus": 0.1
+    }
+  },
+  "x-homepage-date-release": {
+    "source_revision": "00d8945e023ef633b3e02b484d3020dac8af6f0d",
+    "scope": "web-only",
+    "previous_image": "sha256:4ba5a2f696a6bda6b9b1056fc29c41aa8cbdc6b9103514ff028d2b92bd346c0d"
+  }
+}

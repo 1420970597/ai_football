@@ -1,0 +1,51 @@
+{
+  "checked_at_utc": "2026-11-13T10:11:03.816559+00:00",
+  "passed": true,
+  "scope": "document mathematics, local references, formal planning section and existing-file preservation; no profitability or production validation",
+  "planning_scope": "section nine only; directory charter extracted from current AGENTS responsibility section; not a whole-project planning pass",
+  "document_sha256": "96abf2ca0739385dc43eee83cf7474d761f029291812cf6738fad0a4d2af1057",
+  "document_bytes": 42598,
+  "checks": {
+    "work_packages": 7,
+    "actions": 23,
+    "completed_actions": 0,
+    "planning_errors": [],
+    "local_links": [
+      {
+        "label": "首页防重发布记录",
+        "exists": true,
+        "inside_project": true
+      },
+      {
+        "label": "发布机器报告",
+        "exists": true,
+        "inside_project": true
+      }
+    ],
+    "source_definitions_unique": true,
+    "all_six_sources_referenced": true,
+    "no_unfinished_placeholders": true,
+    "no_obvious_secret_material": true,
+    "existing_files_preserved": {
+      "docs/platform-v2/CI_REPAIR_20261113.md": true,
+      "docs/platform-v2/HANDOFF_CURRENT_20261112.md": true,
+      "reports/ci-repair-20261113.json": true,
+      "reports/expert-profitability-research-20261113.md": true
+    },
+    "research_only_no_business_or_funded_validation": true
+  },
+  "mathematics": {
+    "same_book_margin": -0.05944319036869816,
+    "accuracy_current_contract": 0.49083895853423337,
+    "accuracy_other_denominator": 0.4484581497797357,
+    "effective_stake": 1037.0,
+    "unit_roi": -0.09194792671166827,
+    "mean_excluding_push": -0.08400881057268722,
+    "mean_including_24_push": -0.08226919758412424,
+    "two_expert_share_of_total": 0.7474020783373302,
+    "binary_price_improvement_example": 0.009500000000000064,
+    "sample_size_iid_two_sided_5pct_80power": 2421
+  },
+  "final_readback": "passed; financial definitions, verification protocol, work packages, failure handling, source provenance and local-only legacy-report reference reviewed",
+  "git_whitespace_failure": "initial check exit 2 due to extra final blank line; removed and verification rerun"
+}

@@ -1,0 +1,51 @@
+{
+  "window_start": "2026-11-09T07:28:13.875288+00:00",
+  "window_last_database_sample": "2026-11-09T07:58:13.671604+00:00",
+  "database_samples": 55,
+  "market_samples": 61,
+  "reviews_final": {
+    "eligible": 4,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 4,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 5,
+    "avg_ms": "5646.7",
+    "p95_ms": "8925.8",
+    "within_3s": 1,
+    "older_backlog_versions_received": 177
+  },
+  "whole_database_freshness_claim": false,
+  "source_count": 6,
+  "official_raw_posts": 5,
+  "normalized_posts": 5,
+  "matched_posts": 5,
+  "missing_posts": 0,
+  "unsupported_video_posts": 1,
+  "telegram_degraded_observations": 0,
+  "source_lease_count": 6,
+  "source_lease_owners": 1,
+  "unique_original_images_manually_inspected": 2,
+  "signals_created": 0,
+  "review_dispositions": [
+    "historical result recap and advertisement",
+    "conversation without new recommendation",
+    "unique football fixture and first-half under 1.25 intent; exact line closed and no replacement with under 1.00",
+    "brief conversation without fixture or selection"
+  ],
+  "full_market_freshness_samples": 0,
+  "ten_second_accepted_orders_proven": false,
+  "tool_metadata_observer_exit": 2,
+  "tool_metadata_observer_failure": "nonroot could not read generated script mode 0600; separate 0644 script observer restarted; original failure retained",
+  "metadata_observation_continuity_proven": false,
+  "production_test_orders": 0,
+  "source_artifact_sha256": {
+    "e2085-watch-summary.json": "2c7f58c4a0a2e9d73fe2d52df2624329b4650591e02153ce5bfd2cd6f1f8852b",
+    "e2085-official-reconcile.json": "2119fe4b7a5932e99ee8b82a2aa51afe517d6d8dc75d860fbafc91e33f092cf3",
+    "e2085-natural-audit.json": "bdaa5d05bc86f14311381d5dbb9a178385274360b78a61710017d74ec381d83d",
+    "e2127-image-manifest.json": "ef8d0d549b06d9999b2a44a421171c6c667636545936450f0d7448d3a4e8441c"
+  }
+}

@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from services.collector.leyu_protocol import LeyuError
-from services.collector.worker import CollectorService, fixture_batches, get_config, quote_freshness, wait_for_work
+from services.collector.worker import (CollectorService, fixture_batches, get_config, quote_freshness,
+                                       source_error_detail, wait_for_work)
 
 
 class FakeTelegram:
@@ -62,6 +63,27 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.api.aclose()
+
+    async def test_telegram_quiesces_before_unrelated_refresh_cleanup(self):
+        stop = asyncio.Event()
+        stop.set()
+        order = []
+        self.service.telegram.disconnect.side_effect = lambda: order.append('telegram')
+        self.service.leyu_refresh.close = AsyncMock(side_effect=lambda: order.append('refresh'))
+        await self.service.run(stop)
+        self.assertEqual(['telegram', 'refresh'], order)
+
+    async def test_refresh_cleanup_failure_still_closes_telegram(self):
+        stop = asyncio.Event()
+        stop.set()
+        self.service.leyu_refresh.close = AsyncMock(side_effect=RuntimeError('isolated refresh cleanup failure'))
+        with self.assertRaises(RuntimeError):
+            await self.service.run(stop)
+        self.service.telegram.disconnect.assert_awaited_once()
+
+    async def test_telegram_source_health_prefers_lease_failure_category(self):
+        self.assertEqual("TimeoutError", source_error_detail({"state": "lease_deferred", "lease_error": "TimeoutError"}))
+        self.assertEqual("unavailable", source_error_detail({"state": "unavailable"}))
 
     async def test_persistent_clients_control_server_and_clean_shutdown(self):
         stop = asyncio.Event()
@@ -168,7 +190,7 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         more = list(fixture_batches([{"id": str(n), "markets": [{}] * 100} for n in range(25)]))
         self.assertEqual([20, 5], [len(batch) for batch in more])
         metadata = list(fixture_batches([{"id": str(n), "markets": []} for n in range(501)]))
-        self.assertEqual([250, 250, 1], [len(batch) for batch in metadata])
+        self.assertEqual([500, 1], [len(batch) for batch in metadata])
 
     async def test_upload_sends_only_due_odds_without_marking_partial_snapshot_complete(self):
         fixtures = [
@@ -200,6 +222,49 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.service.on_push([{"fixture_id": "leyu:unknown"}])
         self.assertTrue(self.service.resync.is_set())
         self.service.runtime.collect.assert_not_called()
+
+    async def test_push_priority_is_bounded_and_keeps_ingestion_serial(self):
+        started, release = asyncio.Event(), asyncio.Event()
+        order = []
+        active = peak = 0
+
+        async def handler(request):
+            nonlocal active, peak
+            identity = json.loads(request.content)["items"][0]["id"]
+            active += 1
+            peak = max(peak, active)
+            order.append(identity)
+            try:
+                if identity == "current":
+                    started.set()
+                    await release.wait()
+                await asyncio.sleep(0)
+                return httpx.Response(200, json={"accepted": 1})
+            finally:
+                active -= 1
+
+        def fixture(identity):
+            return {"id": identity, "markets": []}
+
+        self.service.runtime.apply_push = lambda events: ([fixture(events[0]["fixture_id"])], False)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            self.service.api = api
+            current = asyncio.create_task(self.service.upload([fixture("current")]))
+            await started.wait()
+            poll = asyncio.create_task(self.service.upload([fixture("poll")]))
+            await asyncio.sleep(0)
+            pushes = []
+            for identity in ("push1", "push2", "push3"):
+                pushes.append(asyncio.create_task(self.service.on_push([{"fixture_id": identity}])))
+                await asyncio.sleep(0)
+            precise = asyncio.create_task(self.service.upload_precise([fixture("precise")]))
+            await asyncio.sleep(0)
+            release.set()
+            await asyncio.wait_for(asyncio.gather(current, poll, *pushes, precise), 2)
+        self.assertEqual(["current", "push1", "push2", "poll", "push3", "precise"], order)
+        self.assertEqual(1, peak)
+        self.assertFalse(self.service._upload_lock.locked())
+        self.assertFalse(self.service.resync.is_set())
 
     async def test_partial_limit_uploads_schedule_and_only_marks_successful_odds(self):
         stop = asyncio.Event()
@@ -290,8 +355,13 @@ class CollectionBudgetTests(unittest.TestCase):
         self.assertNotIn("far", service._odds_refresh_at)
 
     def test_oversized_market_snapshot_never_silently_truncated(self):
-        with self.assertRaises(LeyuError):
-            list(fixture_batches([{"id": "1", "markets": [{}] * 501}]))
+        batches = list(fixture_batches([{"id": "1", "markets": [{}] * 501, "markets_complete": True}]))
+        self.assertEqual(1, len(batches))
+        fixture = batches[0][0]
+        self.assertNotIn("markets", fixture)
+        self.assertEqual([500, 1], [len(chunk) for chunk in fixture["market_chunks"]])
+        self.assertEqual(501, fixture["market_quote_count"])
+        self.assertTrue(fixture["markets_complete"])
 
     def test_stale_and_missing_source_times_not_marked_fresh(self):
         now = datetime(2026, 10, 26, tzinfo=timezone.utc)

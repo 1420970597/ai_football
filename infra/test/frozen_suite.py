@@ -13,6 +13,13 @@ import time
 import unittest
 
 
+class StartLoggedResult(unittest.TextTestResult):
+    def startTest(self, test):
+        self.stream.writeln('START ' + test.id())
+        self.stream.flush()
+        super().startTest(test)
+
+
 def main() -> int:
     source = Path("/source")
     frozen = Path("/tmp/frozen")
@@ -23,7 +30,8 @@ def main() -> int:
     hashes = {str(p.relative_to(frozen)): hashlib.sha256(p.read_bytes()).hexdigest()
               for p in sorted(frozen.rglob("*")) if p.is_file()}
     os.chdir(frozen)
-    sys.path[:0] = [str(frozen / "services/api"), str(frozen / "services"), str(frozen)]
+    sys.path[:0] = [str(frozen / "services/api"), str(frozen / "services"), str(frozen),
+                    str(frozen / "infra/profitability")]
     # Silence application handlers without disabling per-test log capture.
     # Global disable() also suppresses unittest.assertLogs' own handler.
     logging.disable(logging.NOTSET)
@@ -32,7 +40,13 @@ def main() -> int:
     root_logger.addHandler(logging.NullHandler())
     root_logger.setLevel(logging.CRITICAL)
     started = time.monotonic()
-    result = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.discover("tests"))
+    # Emit one flushed progress line per test; Docker/CI can buffer the
+    # newline-free dot stream until the entire suite finishes or times out.
+    suite = unittest.TestSuite(
+        unittest.TestLoader().discover(directory)
+        for directory in ("tests", "reports/profitability-pilot-20261118")
+    )
+    result = unittest.TextTestRunner(verbosity=2, resultclass=StartLoggedResult).run(suite)
     report = {"source_parent_commit": os.environ.get("SOURCE_COMMIT", "unknown"),
               "committed_source_verified": os.environ.get("SOURCE_IS_CLEAN") == "true", "tests": result.testsRun,
               "failures": len(result.failures), "errors": len(result.errors),
@@ -40,7 +54,10 @@ def main() -> int:
               "source_sha256": hashes, "scope": "isolated fixtures; no live providers or money"}
     output = Path("/evidence")
     output.mkdir(exist_ok=True)
-    (output / "backend-tests.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    # Test fixtures may intentionally contain malformed UTF-16 text. Escape
+    # non-ASCII in the evidence envelope so reporting cannot turn a successful
+    # suite into a false non-zero exit during UTF-8 encoding.
+    (output / "backend-tests.json").write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n")
     return int(not result.wasSuccessful() or bool(result.skipped))
 
 

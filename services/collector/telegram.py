@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+from io import BytesIO
+import warnings
 import os
 import re
 import time
@@ -12,16 +15,18 @@ from typing import Any
 import uuid
 
 import boto3
+import httpx
 from botocore.config import Config
 from telethon import TelegramClient, events, utils
 from telethon.errors import (AuthKeyDuplicatedError, FloodWaitError,
                              SessionPasswordNeededError, PasswordHashInvalidError)
 from telethon.sessions import StringSession
-from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantsAdmins,
+from PIL import Image
+from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantsAdmins, ChannelParticipantsSearch,
                               ChannelParticipantAdmin, ChannelParticipantCreator, Chat, ChatForbidden,
                               ChatParticipantAdmin, ChatParticipantCreator, ChatParticipantsForbidden,
                               UserProfilePhotoEmpty)
-from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.functions.channels import GetParticipantsRequest, GetParticipantRequest
 from telethon.tl.functions.messages import GetFullChatRequest
 
 from .telegram_backend import TelegramBackend
@@ -29,12 +34,45 @@ from .telegram_control import ControlServer
 
 log = logging.getLogger("platform.telegram")
 MAX_MEDIA_BYTES = 8 * 1024 * 1024
-MAX_MESSAGE_MEDIA_BYTES = 32 * 1024 * 1024
+MAX_MESSAGE_MEDIA_BYTES = 24 * 1024 * 1024
 MAX_MEDIA_COUNT = 10
 MAX_IMAGE_PIXELS = 40_000_000
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-MESSAGE_MEDIA_PREFIX = "telegram/messages"
+MESSAGE_MEDIA_PREFIX = "v2/telegram/messages"
 MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
+DIRECTORY_REFRESH_SECONDS = 300
+SYNC_HISTORY_SLICE_SECONDS = 2
+LIVE_MEDIA_MAX_TASKS = 32
+LIVE_MEDIA_CONCURRENCY = 2
+SYNC_HISTORY_MAX_MESSAGES = 25
+AUTHOR_BACKFILL_PAGE_SIZE = 10
+SOURCE_HISTORY_SECONDS = 25
+# Stay below the 30-second remote claim lease and the 25-second API read timeout.
+RECONCILE_BATCH_SECONDS = 24
+RECONCILE_RPC_SECONDS = 5
+RECONCILE_EVENT_LIMIT = 3
+RECONCILE_COMMIT_CONCURRENCY = 2
+# Bound historical event writes across the three concurrently serviced sources.
+RECONCILE_GLOBAL_COMMIT_CONCURRENCY = 3
+# Recent recovery includes a remote receipt lookup and optional album fetch.
+# Keep it below the per-source history slice while allowing their measured tail latency.
+RECENT_HISTORY_SECONDS = 15
+RECENT_HISTORY_LOOKBACK_SECONDS = 10800
+# Keep group entities for several history passes; configuration/session changes clear this cache.
+ENTITY_CACHE_SECONDS = 600
+ENTITY_CACHE_SIZE = 256
+RECENT_HISTORY_PAGE_SIZE = 25
+RECENT_HISTORY_RECEIPTS = 2048
+RECONCILE_ID_LIMIT = 100
+MEDIA_CLEANUP_SECONDS = 5
+# Allow bounded API/database tail latency while staying well below the 90s lease.
+SOURCE_LEASE_REFRESH_SECONDS = 10
+SOURCE_LEASE_REFRESH_SLOW_SECONDS = 1
+MEDIA_RETRY_BATCH_SECONDS = 30
+MEDIA_RETRY_CONCURRENCY = 2
+MEDIA_TRANSFER_SECONDS = 20
+MEDIA_COMMIT_SECONDS = 9
+SESSION_IDENTITY_SECONDS = 5
 
 
 class SourceAccessError(RuntimeError):
@@ -55,6 +93,27 @@ def _utc(value):
     if value.tzinfo is None:
         raise ValueError("Telegram timestamp must include timezone")
     return value.astimezone(timezone.utc)
+
+
+def _trusted_message_author(chat_id, source, message):
+    """Keep the durable author boundary available before optional Telegram I/O."""
+    sender_id = str(getattr(message, "sender_id", "") or "")
+    trusted_sender_ids = {str(value) for value in source.get("trusted_sender_ids", [])}
+    channel_post_identity = (not sender_id and bool(getattr(message, "post", False))
+                             and chat_id in trusted_sender_ids)
+    if channel_post_identity:
+        # Explicitly trusted broadcast posts can lack from_id; ordinary group
+        # messages and anonymous administrators do not inherit this identity.
+        sender_id = chat_id
+    return (sender_id, channel_post_identity) if sender_id in trusted_sender_ids else None
+
+
+def _message_revision_evidence(message):
+    return (message.id, str(message.date), str(getattr(message, 'edit_date', None)),
+            getattr(message, 'message', ''), getattr(message, 'reply_to_msg_id', None),
+            getattr(getattr(getattr(message, 'media', None), 'photo', None), 'id', None),
+            getattr(getattr(getattr(message, 'media', None), 'document', None), 'id', None),
+            getattr(getattr(message, 'media', None), 'id', None))
 
 
 def _factory(session: str, api_id: int, api_hash: str):
@@ -78,6 +137,27 @@ def _valid_image(body: bytes, mime: str) -> bool:
     return mime == "image/webp" and body.startswith(b"RIFF") and body[8:12] == b"WEBP"
 
 
+def _image_dimensions(body: bytes, mime: str) -> dict:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(BytesIO(body)) as image:
+                width, height = image.size
+                frames = getattr(image, 'n_frames', 1)
+                if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+                    raise ValueError('image_pixel_limit')
+                if frames > 100 or width * height * frames > 80_000_000:
+                    raise ValueError('image_animation_limit')
+                if Image.MIME.get(image.format) != mime:
+                    raise ValueError('image_format_mismatch')
+                image.verify()
+        return {'width': width, 'height': height, 'frames': frames}
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError('image_decode_failed') from exc
+
+
 class TelegramCollector:
     def __init__(self, config: dict[str, str], *, api=None, api_url: str | None = None,
                  backend=None, client_factory=None, media_store=None, media_delete=None):
@@ -88,10 +168,27 @@ class TelegramCollector:
         self.media_delete = media_delete
         self.client = None
         self.owner = str(uuid.uuid4())
+        self._source_claim_attempted = False
         self.sources: dict[str, dict] = {}
         self.locks: dict[str, asyncio.Lock] = {}
+        self.live_event_delivery = {
+            "received": 0, "staged": 0, "deferred": 0, "unmapped_source": 0,
+            "ignored_author": 0,
+            "last_received_at": None, "last_staged_at": None,
+            "last_deferred_at": None, "last_deferred_category": None,
+        }
+        self.live_media_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self.media_transfers: set[tuple[str, str]] = set()
+        self.media_slots = asyncio.Semaphore(LIVE_MEDIA_CONCURRENCY)
+        self.retry_slots = asyncio.Semaphore(MEDIA_RETRY_CONCURRENCY)
         self.session_state_lock = asyncio.Lock()
         self.retry_at: dict[str, float] = {}
+        self.directory_retry_at: dict[str, float] = {}
+        self.directory_trusted: dict[str, tuple] = {}
+        self.reconcile_pending: dict[str, list[dict]] = {}
+        self.reconcile_commit_slots = asyncio.Semaphore(RECONCILE_GLOBAL_COMMIT_CONCURRENCY)
+        self.recent_recovery: dict[str, dict] = {}
+        self.entity_cache: OrderedDict[str, tuple] = OrderedDict()
         self.control_server = None
         self.auth_client = None
         self.auth_task = None
@@ -99,6 +196,17 @@ class TelegramCollector:
         self.auth_deadline = 0.0
         self.account = None
         self.invalid_session_fingerprint = None
+        self._verified_identity = None
+        self._rejected_identity_binding = None
+
+    @staticmethod
+    def _account_id(value):
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            return None
+        text = str(value)
+        if not re.fullmatch(r'[1-9][0-9]{0,18}', text) or int(text) > 2 ** 63 - 1:
+            return None
+        return text
 
     @staticmethod
     def _saved_account(config):
@@ -106,9 +214,35 @@ class TelegramCollector:
             account = json.loads(str(config.get("telegram_account", "")))
         except (TypeError, ValueError):
             return None
-        if not isinstance(account, dict) or not account.get("id"):
+        if not isinstance(account, dict) or TelegramCollector._account_id(account.get("id")) is None:
             return None
-        return {key: account.get(key) for key in ("id", "display_name", "username")}
+        return {key: account.get(key) for key in ("display_name", "username")} | {"id": str(account["id"])}
+
+    @staticmethod
+    def _expected_account_problem(config):
+        raw = config.get('telegram_account')
+        if raw is None or raw == '':
+            return 'session_identity_expected_missing'
+        try:
+            account = json.loads(str(raw))
+        except (TypeError, ValueError):
+            return 'session_identity_expected_invalid'
+        if isinstance(account, dict) and account.get('id') in (None, ''):
+            return 'session_identity_expected_missing'
+        return 'session_identity_expected_invalid'
+
+    async def _reject_identity(self, client, reason):
+        self._verified_identity = None
+        self.account = None
+        if self.client is client:
+            self.client = None
+        self.auth_state = {'state': 'failed', 'reason': reason}
+        if client is not None:
+            try:
+                async with asyncio.timeout(SESSION_IDENTITY_SECONDS):
+                    await client.disconnect()
+            except Exception:
+                log.warning('Telegram identity cleanup deferred')
 
     @staticmethod
     def _session_fingerprint(session):
@@ -119,6 +253,7 @@ class TelegramCollector:
         if self.client is client:
             self.client = None
         self.account = None
+        self._verified_identity = None
         self.invalid_session_fingerprint = fingerprint
         self.auth_state = {"state": "session_invalid"}
 
@@ -137,43 +272,66 @@ class TelegramCollector:
         return self.client_factory(session, api_id, api_hash)
 
     async def connect(self) -> bool:
-        if self.client:
-            try:
-                if not self.client.is_connected():
-                    await self.client.connect()
-                if not await self.client.is_user_authorized():
-                    session = str(self.config.get("telegram_session", "")).strip()
-                    await self._mark_session_invalid(self.client, self._session_fingerprint(session))
-                    return False
-                self.account = self._saved_account(self.config)
-                self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
-                return True
-            except AuthKeyDuplicatedError:
-                await self._invalidate_active_session()
-                raise
+        async with self.session_state_lock:
+            return await self._connect()
+
+    async def _connect(self) -> bool:
         session = str(self.config.get("telegram_session", "")).strip()
         if not session:
             return False
+        expected = self._saved_account(self.config)
+        if expected is None:
+            await self._reject_identity(self.client, self._expected_account_problem(self.config))
+            return False
         fingerprint = self._session_fingerprint(session)
+        binding = self._session_fingerprint(session + '\0' + expected['id'])
+        if self._rejected_identity_binding == binding:
+            return False
         if self.invalid_session_fingerprint == fingerprint:
             return False
-        candidate = self._new_client(session)
+        candidate = self.client or self._new_client(session)
+        adopting = self.client is None
         try:
-            await candidate.connect()
+            if not candidate.is_connected():
+                self._verified_identity = None
+                await candidate.connect()
             if not await candidate.is_user_authorized():
                 await self._mark_session_invalid(candidate, fingerprint)
                 return False
+            if self._verified_identity != (candidate, binding):
+                try:
+                    async with asyncio.timeout(SESSION_IDENTITY_SECONDS):
+                        actual = await candidate.get_me()
+                except TimeoutError:
+                    await self._reject_identity(candidate, 'session_identity_timeout')
+                    return False
+                except AuthKeyDuplicatedError:
+                    raise
+                except Exception:
+                    await self._reject_identity(candidate, 'session_identity_unavailable')
+                    return False
+                actual_id = self._account_id(getattr(actual, 'id', None))
+                if actual_id is None:
+                    await self._reject_identity(candidate, 'session_identity_unverifiable')
+                    return False
+                if actual_id != expected['id']:
+                    self._rejected_identity_binding = binding
+                    await self._reject_identity(candidate, 'session_identity_mismatch')
+                    return False
+                self._verified_identity = (candidate, binding)
         except AuthKeyDuplicatedError:
             await self._mark_session_invalid(candidate, fingerprint)
             raise
         except BaseException:
+            self._verified_identity = None
             await candidate.disconnect()
             raise
         self.client = candidate
-        self.account = self._saved_account(self.config)
-        self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
+        self.account = expected
+        self.auth_state = {"state": "authorized", "account": self.account}
         self.invalid_session_fingerprint = None
-        self._handlers(candidate)
+        if adopting:
+            self._handlers(candidate)
         return True
 
     def _handlers(self, client):
@@ -183,25 +341,52 @@ class TelegramCollector:
         client.add_event_handler(self._on_delete, events.MessageDeleted())
 
     async def apply_config(self, config: dict[str, str]):
+        async with self.session_state_lock:
+            await self._apply_config(config)
+
+    async def _apply_config(self, config: dict[str, str]):
         identity = ("telegram_api_id", "telegram_api_hash", "telegram_session")
         changed = any(str(self.config.get(key, "")) != str(config.get(key, "")) for key in identity)
+        previous, current = self._saved_account(self.config), self._saved_account(config)
+        changed = changed or (previous or {}).get('id') != (current or {}).get('id')
         if changed and self.client:
+            await self._cancel_live_media_tasks()
             await self.client.disconnect()
             self.client = None
         if changed:
             self.account = None
+            self.directory_retry_at.clear()
+            self.directory_trusted.clear()
+            self.reconcile_pending.clear()
+            self.recent_recovery.clear()
+            self.entity_cache.clear()
             self.invalid_session_fingerprint = None
+            self._verified_identity = None
+            self._rejected_identity_binding = None
             self.auth_state = {"state": "idle" if str(config.get("telegram_session", "")).strip() else "disconnected"}
         self.config = dict(config)
 
     async def disconnect(self):
+        self.entity_cache.clear()
         await self._cancel_auth()
+        await self._cancel_live_media_tasks()
         if self.client:
             await self.client.disconnect()
             self.client = None
+        self._verified_identity = None
         if self.control_server:
             await self.control_server.close()
             self.control_server = None
+        if self._source_claim_attempted:
+            # A lost claim response may still have granted ownership. Release
+            # only after all local writers and Telegram handlers are drained.
+            async with asyncio.timeout(4):
+                result = await self.backend.release_sources(self.owner)
+            count = result.get('released_sources') if isinstance(result, dict) else None
+            if type(count) is not int or count < 0:
+                raise ValueError('invalid Telegram lease release acknowledgment')
+            self._source_claim_attempted = False
+            log.info('Telegram source leases released count=%d', count)
 
     async def start_control_server(self, *, token: str, host="0.0.0.0", port=8092):
         if not self.control_server:
@@ -215,17 +400,82 @@ class TelegramCollector:
             raise SourceAccessError("invalid_source_identifier")
         if chat_id.startswith("-") and int(chat_id) < -(2 ** 63):
             raise SourceAccessError("invalid_source_identifier")
+        client = self.client
+        cached = self.entity_cache.get(chat_id)
+        if cached and cached[0] is client and time.monotonic() < cached[1]:
+            self.entity_cache.move_to_end(chat_id)
+            return self._group_entity(cached[2])
         value = int(chat_id) if chat_id.startswith("-") else chat_id
         try:
-            entity = await self.client.get_entity(value)
+            entity = await client.get_entity(value)
         except ValueError:
             # StringSession 不持久化实体访问哈希：先从已加入对话解析，不能当成群组无管理员。
-            async for dialog in self.client.iter_dialogs(limit=None):
+            async for dialog in client.iter_dialogs(limit=None):
                 entity = dialog.entity
                 if str(utils.get_peer_id(entity)) == chat_id or str(getattr(entity, "username", "")).casefold() == chat_id.lstrip("@").casefold():
-                    return self._group_entity(entity)
-            raise SourceAccessError("account_has_not_joined_or_entity_is_unavailable") from None
-        return self._group_entity(entity)
+                    break
+            else:
+                raise SourceAccessError("account_has_not_joined_or_entity_is_unavailable") from None
+        entity = self._group_entity(entity)
+        if client is not self.client:
+            raise SourceAccessError('session_changed_during_entity_lookup')
+        self.entity_cache[chat_id] = (client, time.monotonic() + ENTITY_CACHE_SECONDS, entity)
+        self.entity_cache.move_to_end(chat_id)
+        while len(self.entity_cache) > ENTITY_CACHE_SIZE:
+            self.entity_cache.popitem(last=False)
+        return entity
+
+    async def _checkpoint(self, chat_id: str):
+        self._source_claim_attempted = True
+        return await self.backend.checkpoint(chat_id, self.owner)
+
+    async def _cancel_live_media_tasks(self):
+        tasks = list(self.live_media_tasks.values())
+        self.live_media_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _schedule_live_media(self, chat_id: str, payload: dict, members: list):
+        key = (chat_id, str(payload['version_key']))
+        existing = self.live_media_tasks.get(key)
+        if existing and not existing.done():
+            return False
+        if len(self.live_media_tasks) >= LIVE_MEDIA_MAX_TASKS:
+            return False
+        task = asyncio.create_task(self._finish_live_media(chat_id, payload, members))
+        self.live_media_tasks[key] = task
+
+        def finished(done):
+            if self.live_media_tasks.get(key) is done:
+                self.live_media_tasks.pop(key, None)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                log.warning('Telegram live media deferred category=%s', type(exc).__name__)
+
+        task.add_done_callback(finished)
+        return True
+
+    async def _finish_live_media(self, chat_id: str, payload: dict, members: list):
+        started = time.monotonic()
+        state = 'deferred'
+        try:
+            result = await self._complete_pending_media(chat_id, payload, members)
+            state = result.get('state', 'unknown') if isinstance(result, dict) else 'unknown'
+        except FloodWaitError as exc:
+            self.retry_at[chat_id] = time.monotonic() + exc.seconds
+        except AuthKeyDuplicatedError:
+            await self._invalidate_active_session()
+        except Exception as exc:
+            log.warning('Telegram live media deferred category=%s', type(exc).__name__)
+        finally:
+            log.info('Telegram live media finished state=%s elapsed_ms=%.1f images=%s',
+                     state, (time.monotonic() - started) * 1000,
+                     sum(1 for item in members if getattr(item, 'media', None)))
 
     def _group_entity(self, entity):
         if isinstance(entity, (ChannelForbidden, ChatForbidden)):
@@ -248,75 +498,435 @@ class TelegramCollector:
             return {"state": "disabled", "sources": {}}
         if not await self.connect():
             state = self.auth_state.get("state") if self.auth_state.get("state") in {"session_invalid", "failed"} else "unauthorized"
-            return {"state": state, "sources": {}}
+            return {"state": state, "sources": {}, **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
         self.sources = {str(item["chat_id"]): item for item in await self.backend.sources()}
+        # Disabled sources are no longer read. Their immutable events remain
+        # remote and will be scheduled again when the source is enabled.
+        self.reconcile_pending = {chat: rows for chat, rows in self.reconcile_pending.items() if chat in self.sources}
+        self.recent_recovery = {chat: state for chat, state in self.recent_recovery.items() if chat in self.sources}
         result = {}
         # 群组之间独立，但控制并发和 Telegram flood；单群失败不阻止其他群。
         gate = asyncio.Semaphore(3)
 
+        async def keep_lease(chat_id):
+            started = time.monotonic()
+            try:
+                async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
+                    async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                        await self._checkpoint(chat_id)
+            except Exception as exc:
+                result[chat_id]['lease_state'] = 'deferred'
+                result[chat_id]['lease_error'] = type(exc).__name__
+                log.warning('Telegram source lease refresh deferred category=%s elapsed_ms=%.1f',
+                            type(exc).__name__, (time.monotonic() - started) * 1000)
+                if result[chat_id]['state'] in {'caught_up', 'catching_up', 'backoff', 'flood_wait'}:
+                    result[chat_id]['history_state'] = result[chat_id]['state']
+                    result[chat_id]['state'] = 'lease_deferred'
+            else:
+                elapsed = time.monotonic() - started
+                if elapsed >= SOURCE_LEASE_REFRESH_SLOW_SECONDS:
+                    log.warning('Telegram source lease refresh slow elapsed_ms=%.1f', elapsed * 1000)
+
         async def one(chat_id, source):
             async with gate:
                 try:
-                    result[chat_id] = await self._sync_source(chat_id, source)
+                    async with asyncio.timeout(SOURCE_HISTORY_SECONDS):
+                        result[chat_id] = await self._sync_source(chat_id, source)
                     if result[chat_id]["state"] != "backoff":
-                        await self._reconcile_known(chat_id, source)
+                        async with asyncio.timeout(SOURCE_HISTORY_SECONDS):
+                            result[chat_id]['author_backfill'] = await self._sync_author_backfill(chat_id, source)
+                        reconciliation = await self._reconcile_known(chat_id, source)
+                        result[chat_id]['reconciliation'] = reconciliation
+                        if reconciliation['state'] == 'deferred':
+                            result[chat_id]['history_state'] = result[chat_id]['state']
+                            result[chat_id]['state'] = 'reconciliation_deferred'
                 except FloodWaitError as exc:
                     self.retry_at[chat_id] = time.monotonic() + exc.seconds
                     result[chat_id] = {"state": "flood_wait", "retry_after": exc.seconds}
+                    log.warning('Telegram source backoff request=%s retry_seconds=%s',
+                                type(getattr(exc, 'request', None)).__name__, exc.seconds)
                 except AuthKeyDuplicatedError as exc:
                     await self._invalidate_active_session()
                     result[chat_id] = {"state": "unavailable", "error": type(exc).__name__}
                     log.warning("Telegram session invalidated category=%s", type(exc).__name__)
+                except TimeoutError:
+                    result[chat_id] = {'state': 'unavailable', 'error': 'TimeoutError', 'reason': 'history_deadline',
+                                       'reconciliation_pending': len(self.reconcile_pending.get(chat_id, []))}
+                    log.warning('Telegram source deferred category=history_deadline')
                 except Exception as exc:
-                    result[chat_id] = {"state": "unavailable", "error": type(exc).__name__}
+                    result[chat_id] = {"state": "unavailable", "error": type(exc).__name__,
+                                       'reconciliation_pending': len(self.reconcile_pending.get(chat_id, []))}
                     log.warning("Telegram source unavailable category=%s", type(exc).__name__)
+                # Refresh before releasing this slot so the next source wave
+                # cannot consume another group's 90-second lease.
+                await keep_lease(chat_id)
 
         await asyncio.gather(*(one(chat_id, source) for chat_id, source in self.sources.items()))
         await self.retry_pending()
         try:
-            cleanup = await self.cleanup_orphan_media()
+            async with asyncio.timeout(MEDIA_CLEANUP_SECONDS):
+                cleanup = await self.cleanup_orphan_media()
         except Exception as exc:
             cleanup = {"state": "deferred", "candidates": 0, "deleted": 0, "error": type(exc).__name__}
             log.warning("Telegram orphan media inventory unavailable category=%s", type(exc).__name__)
         return {"state": "connected", "sources": result, "media_cleanup": cleanup}
 
+    async def _refresh_directory(self, chat_id: str, source: dict):
+        if not callable(getattr(self.backend, 'directory', None)):
+            return
+        trusted = tuple(sorted(str(value) for value in source.get('trusted_sender_ids', [])))
+        now = time.monotonic()
+        if now < self.directory_retry_at.get(chat_id, 0) and trusted == self.directory_trusted.get(chat_id):
+            return
+        self.directory_trusted[chat_id] = trusted
+        self.directory_retry_at[chat_id] = now + DIRECTORY_REFRESH_SECONDS
+        observed_at = datetime.now(timezone.utc).isoformat()
+        admins, profiles, cursor, seen = [], {}, None, set()
+        result = {'state': 'unavailable', 'reason': 'directory_unavailable'}
+        try:
+            async with asyncio.timeout(20):
+                while True:
+                    page = await self.control('/admins', {'chat_id': chat_id, 'cursor': cursor})
+                    result = page
+                    if page.get('state') != 'ready':
+                        break
+                    admins.extend(page['items'])
+                    for item in page['items']:
+                        profiles[str(item['sender_id'])] = {'sender_id': str(item['sender_id']), 'nickname': item['nickname']}
+                    cursor = page.get('next_cursor')
+                    if not cursor:
+                        break
+                    if cursor in seen or len(admins) > 2000:
+                        raise SourceAccessError('directory_pagination_stalled')
+                    seen.add(cursor)
+                for sender_id in trusted:
+                    if result.get('state') == 'flood_wait':
+                        break
+                    if sender_id in profiles:
+                        continue
+                    try:
+                        entity = await self.client.get_entity(int(sender_id))
+                        if str(utils.get_peer_id(entity)) == sender_id and not getattr(entity, 'deleted', False):
+                            profiles[sender_id] = {'sender_id': sender_id, 'nickname': _nickname(entity, sender_id)}
+                    except FloodWaitError:
+                        raise
+                    except AuthKeyDuplicatedError:
+                        raise
+                    except Exception:
+                        continue
+        except AuthKeyDuplicatedError:
+            await self._invalidate_active_session()
+            raise
+        except FloodWaitError as exc:
+            result = {'state': 'flood_wait', 'reason': 'flood_wait', 'retry_after': exc.seconds}
+        except Exception as exc:
+            result = {'state': 'unavailable', 'reason': str(exc) if isinstance(exc, SourceAccessError) else type(exc).__name__}
+        retry = max(DIRECTORY_REFRESH_SECONDS, int(result.get('retry_after') or 0))
+        self.directory_retry_at[chat_id] = time.monotonic() + retry
+        try:
+            await self.backend.directory({'chat_id': chat_id, 'owner': self.owner, 'observed_at': observed_at,
+                'state': result['state'] if result.get('state') in {'ready', 'flood_wait'} else 'unavailable',
+                'reason': result.get('reason'), 'retry_after': result.get('retry_after'),
+                'admins': admins if result.get('state') == 'ready' else [],
+                'profiles': [item for key, item in profiles.items() if key in trusted]})
+        except Exception as exc:
+            self.directory_retry_at[chat_id] = time.monotonic() + 30
+            log.warning('Telegram directory persistence deferred category=%s', type(exc).__name__)
+
     async def _sync_source(self, chat_id: str, source: dict) -> dict:
         if time.monotonic() < self.retry_at.get(chat_id, 0):
             return {"state": "backoff"}
+        # Claim the new process's lease before directory writes, but keep the
+        # potentially slow Telegram enumeration outside the live-message lock.
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
-            checkpoint = await self.backend.checkpoint(chat_id, self.owner)
-            original = int(checkpoint["last_message_id"])
-            last, count = original, 0
-            entity = await self._entity(chat_id)
-            async for message in self.client.iter_messages(entity, min_id=original, reverse=True, limit=None):
-                if not message or int(message.id) <= last:
-                    continue
-                # 先持久原文/待媒体状态，确认后才推进高水位；不使用内存 seen 集合。
-                await self._process_message(chat_id, source, message, entity)
-                last, count = int(message.id), count + 1
-                if count % 25 == 0:
+            checkpoint = await self._checkpoint(chat_id)
+        await self._refresh_directory(chat_id, source)
+        recent = await self._recover_recent(chat_id, source)
+        original = int(checkpoint["last_message_id"])
+        last, count = original, 0
+        started = time.monotonic()
+        catching_up = False
+        entity = await self._entity(chat_id)
+        async for message in self.client.iter_messages(entity, min_id=original, reverse=True, limit=None):
+            if not message or int(message.id) <= last:
+                continue
+            # 先持久原文/待媒体状态，确认后才推进高水位；不使用内存 seen 集合。
+            await self._process_message(chat_id, source, message, entity)
+            last, count = int(message.id), count + 1
+            if count % 25 == 0:
+                async with lock:
                     await self.backend.advance(chat_id, self.owner, last, original)
-                    original = last
-                if count >= 1000:
-                    break
-            if last != original:
+                original = last
+            # Release this group's FIFO lock between durable slices so
+            # live events do not wait behind years of initial history.
+            # The next pass resumes from the persisted high-water mark.
+            if count >= SYNC_HISTORY_MAX_MESSAGES or time.monotonic() - started >= SYNC_HISTORY_SLICE_SECONDS:
+                catching_up = True
+                break
+        if last != original:
+            async with lock:
                 await self.backend.advance(chat_id, self.owner, last, original)
-            return {"state": "caught_up" if count < 1000 else "catching_up", "last_message_id": last, "observed": count}
+        state = ('recent_deferred' if recent['state'] == 'deferred'
+                 else 'catching_up' if catching_up or recent['state'] == 'catching_up' else 'caught_up')
+        return {"state": state, "last_message_id": last, "observed": count, 'recent_history': recent}
+
+    async def _recover_recent(self, chat_id: str, source: dict) -> dict:
+        """Prioritize recent gaps without advancing the archival checkpoint.
+
+        Receipt cache entries follow durable event commits only. Losing this
+        bounded cache on restart causes safe replays, never skipped messages.
+        Each pass checks the head before continuing older pages, so old work
+        cannot hide newly arrived messages.
+        """
+        if not source.get('trusted_sender_ids'):
+            return {'state': 'caught_up', 'scanned': 0, 'persisted': 0}
+        state = self.recent_recovery.setdefault(chat_id, {'cursor': None, 'receipts': OrderedDict()})
+        receipts = state['receipts']
+        # A slow/retried sweep must not age its oldest unresolved gap out of
+        # the window before reaching it. Move the boundary only after a
+        # complete sweep; restart safely covers the last two hours again.
+        cutoff = state.setdefault('cutoff', datetime.now(timezone.utc) - timedelta(seconds=RECENT_HISTORY_LOOKBACK_SECONDS))
+        scanned, persisted = 0, 0
+        started = time.monotonic()
+        phase = 'setup'
+        phase_elapsed = {}
+        phase_counts = {'pages': 0, 'album_expansions': 0, 'receipt_lookups': 0, 'stage_group_calls': 0}
+        # This cache lives for this bounded scan only. Keep independent version
+        # fingerprints: Telethon message objects themselves may be mutable.
+        albums = {}
+
+        async def timed(name, awaitable):
+            nonlocal phase
+            phase = name
+            phase_started = time.monotonic()
+            try:
+                return await awaitable
+            finally:
+                phase_elapsed[name] = phase_elapsed.get(name, 0.0) + (time.monotonic() - phase_started) * 1000
+
+        def timing_fields():
+            elapsed = {name: round(value, 1) for name, value in sorted(phase_elapsed.items())}
+            return json.dumps({'phase_ms': elapsed, **phase_counts}, sort_keys=True, separators=(',', ':'))
+
+        async def page(entity, cursor, continuation=False):
+            nonlocal scanned, persisted
+            options = {'max_id': cursor} if cursor is not None else {}
+            async def read_page():
+                return [m async for m in self.client.iter_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
+
+            phase_counts['pages'] += 1
+            members = await timed('telegram_page', read_page())
+            lookup = getattr(self.backend, 'event_receipts', None)
+            known = None
+            last = cursor
+            for message in members:
+                if _utc(message.date) < cutoff:
+                    return last, True
+                scanned += 1
+                sender_id = str(getattr(message, 'sender_id', '') or '')
+                if not sender_id and getattr(message, 'post', False):
+                    sender_id = chat_id
+                if sender_id in {str(value) for value in source['trusted_sender_ids']}:
+                    grouped_id = getattr(message, 'grouped_id', None)
+                    if grouped_id:
+                        cached = albums.get(grouped_id)
+                        if cached is None or cached[1].get(message.id) != _message_revision_evidence(message):
+                            phase_counts['album_expansions'] += 1
+                            group = await timed('album_expand', self._expand_album(message, entity))
+                            albums[grouped_id] = (group, {m.id: _message_revision_evidence(m) for m in group})
+                        else:
+                            group = cached[0]
+                    else:
+                        group = [message]
+                    evidence = [_message_revision_evidence(m) for m in group]
+                    key = hashlib.sha256(json.dumps([source.get('allow_media', True), evidence],
+                                                    sort_keys=True).encode()).hexdigest()
+                    if key not in receipts:
+                        if known is None:
+                            if callable(lookup):
+                                phase_counts['receipt_lookups'] += 1
+                                known = await timed('receipt_lookup', lookup(
+                                    chat_id, self.owner, [int(m.id) for m in members]))
+                            else:
+                                known = {}
+                        phase_counts['stage_group_calls'] += 1
+                        result, payload = await timed('stage_group', self._stage_group(
+                            chat_id, source, group, known_receipts=known))
+                        if result.get('persisted') is not True and result.get('state') != 'ignored_empty':
+                            raise RuntimeError('recent Telegram event was not durably committed')
+                        if result.get('persisted') is True:
+                            receipts[key] = True
+                            while len(receipts) > RECENT_HISTORY_RECEIPTS:
+                                receipts.popitem(last=False)
+                            persisted += 1
+                        if payload is not None:
+                            self._schedule_live_media(chat_id, payload, group)
+                last = int(message.id)
+                if continuation:
+                    state['cursor'] = last
+            return last, len(members) < RECENT_HISTORY_PAGE_SIZE
+
+        try:
+            async with asyncio.timeout(RECENT_HISTORY_SECONDS):
+                entity = await timed('telegram_entity', self._entity(chat_id))
+                head_cursor, complete = await page(entity, None)
+                if not complete:
+                    cursor = min(state['cursor'], head_cursor) if state['cursor'] is not None else head_cursor
+                    state['cursor'] = cursor
+                    _, complete = await page(entity, cursor, continuation=True)
+                if complete:
+                    state['cursor'] = None
+                    state.pop('cutoff', None)
+                result = {'state': 'caught_up' if complete else 'catching_up',
+                          'scanned': scanned, 'persisted': persisted}
+                log.info('Telegram recent history complete state=%s elapsed_ms=%.1f scanned=%s persisted=%s timings=%s',
+                         result['state'], (time.monotonic() - started) * 1000, scanned, persisted, timing_fields())
+                return result
+        except AuthKeyDuplicatedError:
+            raise
+        except FloodWaitError:
+            raise
+        except Exception as exc:
+            log.warning('Telegram recent history deferred category=%s stage=%s elapsed_ms=%.1f '
+                        'scanned=%s persisted=%s timings=%s', type(exc).__name__, phase,
+                        (time.monotonic() - started) * 1000, scanned, persisted, timing_fields())
+            return {'state': 'deferred', 'scanned': scanned, 'persisted': persisted, 'reason': type(exc).__name__}
+
+    async def _sync_author_backfill(self, chat_id: str, source: dict) -> dict:
+        tasks = source.get('author_backfills') or []
+        if not tasks:
+            return {'state': 'idle', 'processed': 0}
+        task = tasks[0]
+        sender_id = str(task['sender_id'])
+        previous = int(task['cursor'])
+        until_id = int(task['until_id'])
+        since = _utc(datetime.fromisoformat(str(task['since']).replace('Z', '+00:00')))
+        if until_id <= 0:
+            await self.backend.advance_author_backfill(chat_id, self.owner, sender_id, previous, previous, True)
+            return {'state': 'complete', 'sender_id': sender_id, 'processed': 0}
+        lock = self.locks.setdefault(chat_id, asyncio.Lock())
+        entity = await self._entity(chat_id)
+        messages = []
+        async for message in self.client.iter_messages(
+            entity, from_user=int(sender_id), max_id=previous,
+            limit=AUTHOR_BACKFILL_PAGE_SIZE + 1,
+        ):
+            if int(message.id) <= until_id:
+                messages.append(message)
+            if len(messages) >= AUTHOR_BACKFILL_PAGE_SIZE + 1:
+                break
+        page = messages[:AUTHOR_BACKFILL_PAGE_SIZE]
+        complete = len(messages) <= AUTHOR_BACKFILL_PAGE_SIZE
+        last_cursor = previous
+        processed = 0
+        for message in page:
+            if _utc(message.date) < since:
+                complete = True
+                break
+            result = await self._process_message(chat_id, source, message, entity)
+            if result.get('state') == 'ignored_empty':
+                pass
+            elif result.get('persisted') is not True:
+                raise RuntimeError('author backfill event was not durably committed')
+            last_cursor = int(message.id)
+            processed += 1
+        async with lock:
+            await self.backend.advance_author_backfill(
+                chat_id, self.owner, sender_id, last_cursor, previous, complete)
+        return {'state': 'complete' if complete else 'catching_up', 'sender_id': sender_id, 'processed': processed,
+                'cursor': last_cursor, 'until_id': until_id}
 
     async def _reconcile_known(self, chat_id: str, source: dict):
-        # 高水位只覆盖新消息；按远端调度轮转复核旧版本，补回断线期间的编辑和删除。
-        async with self.locks.setdefault(chat_id, asyncio.Lock()):
-            await self.backend.checkpoint(chat_id, self.owner)
-            entity = await self._entity(chat_id)
-            for item in await self.backend.observed(chat_id, self.owner):
-                ids = item["content"]["member_message_ids"]
-                members = [entry for entry in await self.client.get_messages(entity, ids=ids) if entry]
-                missing = set(ids) - {entry.id for entry in members}
-                if missing:
-                    await self._delete(chat_id, sorted(missing))
+        # Claims survive process loss remotely. Never acknowledge an event
+        # until its checked version/deletion was durably committed.
+        pending = self.reconcile_pending.setdefault(chat_id, [])
+        now = datetime.now(timezone.utc)
+        pending[:] = [item for item in pending if not item.get('claim_lease_until')
+                      or _utc(datetime.fromisoformat(item['claim_lease_until'])) > now]
+        checked = 0
+        stage = 'lease_refresh'
+        try:
+            async with asyncio.timeout(RECONCILE_BATCH_SECONDS):
+                if not pending:
+                    stage = 'claim'
+                    pending.extend(await self.backend.observed(chat_id, self.owner, limit=RECONCILE_EVENT_LIMIT))
+                if not pending:
+                    return {'state': 'ready', 'checked': 0, 'pending': 0}
+                identifiers = sorted({identifier for item in pending if not item.get('_reconcile_applied')
+                                      and not item.get('_reconcile_submission', {}).get('payload')
+                                      for identifier in item['content']['member_message_ids']})
+                by_id = {}
+                if identifiers:
+                    async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                        stage = 'telegram_entity'
+                        entity = await self._entity(chat_id)
+                for offset in range(0, len(identifiers), RECONCILE_ID_LIMIT):
+                    async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                        stage = 'telegram_messages'
+                        members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
+                    by_id.update({entry.id: entry for entry in members if entry})
+                async def commit(item):
+                    nonlocal checked
+                    async with self.reconcile_commit_slots:
+                        reason = await self._commit_reconciliation_item(chat_id, source, item, by_id)
+                    if reason != 'event_not_committed':
+                        pending.remove(item)
+                    if reason is None:
+                        checked += 1
+                    return reason
+
+                while pending:
+                    stage = 'event_commit'
+                    tasks = [asyncio.create_task(commit(item))
+                             for item in pending[:RECONCILE_COMMIT_CONCURRENCY]]
+                    try:
+                        reasons = await asyncio.gather(*tasks)
+                    finally:
+                        for task in tasks:
+                            if not task.done():
+                                task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                    reason = next((value for value in reasons if value is not None), None)
+                    if reason:
+                        return {'state': 'deferred', 'reason': reason,
+                                'checked': checked, 'pending': len(pending)}
+        except TimeoutError:
+            log.warning('Telegram reconciliation deferred category=deadline stage=%s pending=%s',
+                        stage, len(pending))
+            return {'state': 'deferred', 'reason': 'deadline', 'checked': checked, 'pending': len(pending)}
+        return {'state': 'ready', 'checked': checked, 'pending': 0}
+
+    async def _commit_reconciliation_item(self, chat_id: str, source: dict, item: dict, by_id: dict):
+        reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
+        result = {}
+        try:
+            if not item.get('_reconcile_applied'):
+                ids = item['content']['member_message_ids']
+                submission = item.setdefault('_reconcile_submission', {})
+                missing = set(ids) - set(by_id)
+                if submission.get('payload'):
+                    result = await self.backend.event(submission['payload'])
+                elif missing:
+                    result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
+                                                submission=submission)
                 else:
-                    await self._process_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                    result, _ = await self._stage_group(
+                        chat_id, source, sorted((by_id[identifier] for identifier in ids), key=lambda entry: entry.id),
+                        reconciliation=reference, submission=submission)
+                if not result.get('persisted'):
+                    return 'event_not_committed'
+                item['_reconcile_applied'] = True
+            if result.get('reconciliation_acknowledged') is True:
+                item['_reconcile_acknowledged'] = True
+            if not item.get('_reconcile_acknowledged'):
+                await self.backend.acknowledge_observed(chat_id, self.owner, reference)
+                item['_reconcile_acknowledged'] = True
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 409:
+                raise
+            return 'claim_changed'
+        return None
 
     async def _expand_album(self, message, entity):
         grouped_id = getattr(message, "grouped_id", None)
@@ -331,30 +941,57 @@ class TelegramCollector:
         return sorted(members, key=lambda item: item.id)
 
     async def _process_message(self, chat_id: str, source: dict, message, entity=None):
+        if _trusted_message_author(chat_id, source, message) is None:
+            return {"state": "ignored_author"}
         members = await self._expand_album(message, entity) if getattr(message, "grouped_id", None) else [message]
         return await self._process_group(chat_id, source, members)
 
     async def _process_group(self, chat_id: str, source: dict, members: list):
+        result, _ = await self._stage_group(chat_id, source, members)
+        return result
+
+    async def _stage_group(self, chat_id: str, source: dict, members: list, *, reconciliation: dict | None = None,
+                           submission: dict | None = None, known_receipts: dict | None = None):
+        """Persist the complete immutable version before any media transfer."""
         message = members[0]
-        sender_id = str(getattr(message, "sender_id", "") or "")
-        if sender_id not in {str(value) for value in source.get("trusted_sender_ids", [])}:
-            return {"state": "ignored_author"}
-        sender = await message.get_sender()
+        author = _trusted_message_author(chat_id, source, message)
+        if author is None:
+            return {"state": "ignored_author"}, None
+        sender_id, channel_post_identity = author
+        sender = getattr(message, "sender", None)
         manifests = []
         raw_text = "\n\n".join(item.message for item in members if getattr(item, "message", None))
-        reply = next((item.reply_to_msg_id for item in members if getattr(item, "reply_to_msg_id", None)), None)
+        reply_member = next((item for item in members if getattr(item, "reply_to_msg_id", None)), None)
+        reply = reply_member.reply_to_msg_id if reply_member is not None else None
         reply_context = {}
+        sender_task = asyncio.create_task(message.get_sender()) if sender is None and not channel_post_identity else None
+        reply_task = None
         if reply:
             try:
-                replied = await message.get_reply_message()
-                if replied:
-                    reply_context = {"message_id": str(replied.id), "sender_id": str(getattr(replied, "sender_id", "") or ""),
-                                     "text": (getattr(replied, "message", "") or "")[:20000],
-                                     "has_media": bool(getattr(replied, "media", None))}
-                else:
-                    reply_context = {"unavailable": True}
-            except Exception:
+                reply_task = asyncio.create_task(reply_member.get_reply_message())
+            except BaseException:
+                if sender_task is not None:
+                    sender_task.cancel()
+                    await asyncio.gather(sender_task, return_exceptions=True)
+                raise
+        lookup_tasks = [task for task in (sender_task, reply_task) if task is not None]
+        lookup_results = await asyncio.gather(*lookup_tasks, return_exceptions=True)
+        lookup_values = dict(zip((task for task in (sender_task, reply_task) if task is not None), lookup_results))
+        if sender_task is not None:
+            sender_result = lookup_values[sender_task]
+            if isinstance(sender_result, BaseException):
+                raise sender_result
+            sender = sender_result
+        if reply_task is not None:
+            replied = lookup_values[reply_task]
+            if isinstance(replied, BaseException):
+                raise replied
+            if replied is None:
                 reply_context = {"unavailable": True}
+            else:
+                reply_context = {"message_id": str(replied.id), "sender_id": str(getattr(replied, "sender_id", "") or ""),
+                                 "text": (getattr(replied, "message", "") or "")[:20000],
+                                 "has_media": bool(getattr(replied, "media", None))}
         for item in members:
             if getattr(item, "media", None):
                 file = getattr(item, "file", None)
@@ -362,14 +999,16 @@ class TelegramCollector:
                                   "bytes": int(getattr(file, "size", 0) or 0),
                                   "width": int(getattr(file, "width", 0) or 0), "height": int(getattr(file, "height", 0) or 0)})
         if not raw_text.strip() and not manifests:
-            return {"state": "ignored_empty"}
+            return {"state": "ignored_empty"}, None
         version_at = max(_utc(getattr(item, "edit_date", None) or item.date) for item in members)
         grouped_id = getattr(message, "grouped_id", None)
         payload = {
             "chat_id": chat_id, "owner": self.owner,
             "platform_message_id": f"album:{grouped_id}" if grouped_id else str(message.id),
             "member_message_ids": [int(item.id) for item in members],
-            "sender_id": sender_id, "sender_nickname": _nickname(sender, sender_id),
+            "sender_id": sender_id, "sender_nickname": (
+                str(source.get("display_name") or sender_id)[:120]
+                if channel_post_identity else _nickname(sender, sender_id)),
             "event_kind": "edit" if any(getattr(item, "edit_date", None) for item in members) else "message",
             "source_version_at": version_at.isoformat(), "posted_at": _utc(message.date).isoformat(),
             "raw_text": raw_text, "reply_to_platform_message_id": str(reply) if reply else None,
@@ -384,47 +1023,183 @@ class TelegramCollector:
                              and item["width"] * item["height"] <= MAX_IMAGE_PIXELS for item in manifests)
                      and sum(item["bytes"] for item in manifests) <= MAX_MESSAGE_MEDIA_BYTES)
         payload["media_state"] = ("pending" if supported else "unsupported") if manifests else "ready"
+        receipt = (known_receipts or {}).get(payload['version_key'])
+        if (reconciliation is None and receipt
+                and receipt.get('sender_nickname') == payload['sender_nickname']
+                and (receipt.get('media_state') == 'ready' and payload['media_state'] in {'ready', 'pending'}
+                     or receipt.get('media_state') == payload['media_state'] == 'unsupported')):
+            return {'persisted': True, 'state': receipt['media_state'],
+                    'message_id': receipt.get('message_id'), 'durable_receipt_reused': True}, None
+        if reconciliation is not None:
+            payload['reconciliation'] = reconciliation
+        if submission is not None:
+            submission['payload'] = payload
         first = await self.backend.event(payload)
-        if first.get("state") in {"ready", "superseded", "ignored_stale", "deleted"} or not manifests or not supported:
-            return first
-        objects = []
+        if first.get("state") in {"ready", "reconciled", "superseded", "ignored_stale", "deleted"} or not manifests or not supported:
+            return first, None
+        payload["media_objects"] = list(first.get("media_objects") or [])
+        return first, payload
+
+    async def _complete_pending_media(self, chat_id: str, payload: dict, members: list):
+        key = (chat_id, str(payload['version_key']))
+        if key in self.media_transfers:
+            return {"state": "pending", "duplicate_transfer": True}
+        self.media_transfers.add(key)
         try:
-            used = 0
-            for item in members:
-                if getattr(item, "media", None):
-                    stored = await self._store_media(chat_id, item)
-                    used += int(stored["bytes"])
-                    if used > MAX_MESSAGE_MEDIA_BYTES:
+            return await self._transfer_pending_media(chat_id, payload, members)
+        finally:
+            self.media_transfers.discard(key)
+
+    async def _transfer_pending_media(self, chat_id: str, payload: dict, members: list):
+        # Transfers never own the group's event/checkpoint lock. The backend
+        # rejects obsolete versions and validates the lease again at commit.
+        objects = []
+        staged = list(payload.get("media_objects") or [])
+        image_members = [item for item in members if getattr(item, "media", None)]
+        custom_store = self.media_store is not None
+
+        async def cancel_and_collect(tasks):
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            return [value for value in results if not isinstance(value, BaseException)]
+
+        try:
+            async with asyncio.timeout(MEDIA_TRANSFER_SECONDS):
+                if custom_store:
+                    async def store_image(item):
+                        async with self.media_slots:
+                            return await self.media_store(chat_id, item)
+
+                    tasks = [asyncio.create_task(store_image(item)) for item in image_members]
+                    try:
+                        objects.extend(await asyncio.gather(*tasks))
+                    except BaseException:
+                        objects.extend(await cancel_and_collect(tasks))
+                        raise
+                    if sum(int(item.get('bytes') or 0) for item in objects) > MAX_MESSAGE_MEDIA_BYTES:
                         raise ValueError("message_media_size_limit")
-                    objects.append(stored)
+                else:
+                    async def prepare_image(item):
+                        async with self.media_slots:
+                            return await self._prepare_media_candidate(chat_id, item)
+
+                    tasks = [asyncio.create_task(prepare_image(item)) for item in image_members]
+                    try:
+                        prepared = await asyncio.gather(*tasks)
+                    except BaseException:
+                        await cancel_and_collect(tasks)
+                        raise
+
+                    records = {value.get("object_key"): value for value in staged}
+                    for candidate in prepared:
+                        record = candidate["record"]
+                        previous = records.get(record["object_key"])
+                        if previous is not None and previous != record:
+                            raise ValueError("media_candidate_evidence_changed")
+                        records[record["object_key"]] = record
+                    candidate_records = list(records.values())
+                    if sum(int(item.get("bytes") or 0) for item in candidate_records) > MAX_MESSAGE_MEDIA_BYTES:
+                        raise ValueError("message_media_size_limit")
+                    staged = candidate_records
+
+                    previous_keys = {value.get("object_key") for value in payload.get("media_objects") or []}
+                    changed = any(value.get("object_key") not in previous_keys for value in staged)
+                    if changed:
+                        result = await self._commit_media_payload(
+                            chat_id, payload | {"media_state": "pending", "media_objects": staged})
+                        if result.get("state") not in {"pending", "failed"}:
+                            raise SourceAccessError("media_version_no_longer_pending")
+
+                    async def upload_image(candidate):
+                        async with self.media_slots:
+                            return await self._upload_media_candidate(candidate)
+
+                    tasks = [asyncio.create_task(upload_image(value)) for value in prepared]
+                    try:
+                        objects.extend(await asyncio.gather(*tasks))
+                    except BaseException:
+                        objects.extend(await cancel_and_collect(tasks))
+                        raise
+        except (FloodWaitError, AuthKeyDuplicatedError):
+            raise
         except Exception as exc:
-            payload.update(media_state="failed", last_error=type(exc).__name__, media_objects=[])
-            await self.backend.event(payload)
-            return {"persisted": True, "state": "failed"}
-        payload.update(media_state="ready", media_objects=objects)
-        return await self.backend.event(payload)
+            # Completed objects stay indexed for retry/orphan retention. A
+            # cancelled S3 thread may finish remotely, but cannot commit ready.
+            candidates = {value["object_key"]: value for value in [*staged, *objects]}
+            payload = payload | {"media_state": "failed", "last_error": type(exc).__name__, "media_objects": list(candidates.values())}
+        else:
+            payload = payload | {"media_state": "ready", "media_objects": objects}
+        return await self._commit_media_payload(chat_id, payload)
+
+    async def _commit_media_payload(self, chat_id: str, payload: dict):
+        started = time.monotonic()
+        category = 'none'
+        try:
+            async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
+                # The event endpoint atomically validates and renews this owner's
+                # lease. A second claim RPC adds latency without stronger evidence.
+                # Never hold the group lock while waiting on the remote transaction.
+                return await self.backend.event(payload)
+        except Exception as exc:
+            category = type(exc).__name__
+            raise
+        finally:
+            log.info('Telegram media event commit state=%s images=%s objects=%s category=%s elapsed_ms=%.1f',
+                     payload.get('media_state', 'unknown'), len(payload.get('media_manifest') or []),
+                     len(payload.get('media_objects') or []), category, (time.monotonic() - started) * 1000)
 
     async def retry_pending(self):
         if not self.client or not self.backend:
             return
-        for item in await self.backend.pending():
+        try:
+            async with asyncio.timeout(MEDIA_RETRY_BATCH_SECONDS):
+                await self._retry_pending_batch()
+        except TimeoutError:
+            # The persisted pending/failed version is retried next pass.
+            log.warning("Telegram media retry deferred category=batch_deadline")
+
+    async def _retry_pending_batch(self):
+        items = await self.backend.pending(limit=MEDIA_RETRY_CONCURRENCY)
+        tasks = [asyncio.create_task(self._retry_pending_item(item)) for item in items]
+        if not tasks:
+            return
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _retry_pending_item(self, item):
+        async with self.retry_slots:
             chat_id = str(item["chat_id"])
             source = self.sources.get(chat_id)
-            if source is None:
-                continue
+            if source is None or time.monotonic() < self.retry_at.get(chat_id, 0):
+                return
             try:
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                    await self.backend.checkpoint(chat_id, self.owner)
-                    entity = await self._entity(chat_id)
-                    identifiers = item["content"]["member_message_ids"]
-                    members = [entry for entry in await self.client.get_messages(entity, ids=identifiers) if entry]
+                    await self._checkpoint(chat_id)
+                entity = await self._entity(chat_id)
+                identifiers = item["content"]["member_message_ids"]
+                members = [entry for entry in await self.client.get_messages(entity, ids=identifiers) if entry]
+                async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                    await self._checkpoint(chat_id)
                     missing = set(identifiers) - {entry.id for entry in members}
-                    if missing:
-                        await self._delete(chat_id, sorted(missing))
-                    else:
-                        await self._process_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                if missing:
+                    await self._delete(chat_id, sorted(missing))
+                    payload = None
+                else:
+                    _, payload = await self._stage_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                if payload is not None:
+                    await self._complete_pending_media(chat_id, payload, members)
             except FloodWaitError as exc:
                 self.retry_at[chat_id] = time.monotonic() + exc.seconds
+            except AuthKeyDuplicatedError:
+                await self._invalidate_active_session()
+                raise
             except Exception as exc:
                 log.warning("Telegram media retry deferred category=%s", type(exc).__name__)
 
@@ -433,36 +1208,74 @@ class TelegramCollector:
             # 新相册由 Album 回调完整聚合；编辑相册仍需读取全组。
             if isinstance(event, events.NewMessage.Event) and not getattr(event.message, "edit_date", None):
                 return
-        await self._live_messages(str(event.chat_id), [event.message])
+        await self._live_messages(str(event.chat_id), [event.message], entity=getattr(event, 'chat', None))
 
     async def _on_album(self, event):
-        await self._live_messages(str(event.chat_id), list(event.messages), full_album=True)
+        await self._live_messages(str(event.chat_id), list(event.messages), full_album=True,
+                                  entity=getattr(event, 'chat', None))
 
-    async def _live_messages(self, chat_id, members, full_album=False):
+    async def _live_messages(self, chat_id, members, full_album=False, entity=None):
+        delivery = self.live_event_delivery
+        delivery["received"] += 1
+        delivery["last_received_at"] = datetime.now(timezone.utc).isoformat()
         source = self.sources.get(chat_id)
         if not source:
+            delivery["unmapped_source"] += 1
             return
+        payload = None
+        group = sorted(members, key=lambda item: item.id) if full_album else members
+        if _trusted_message_author(chat_id, source, group[0]) is None:
+            delivery["ignored_author"] += 1
+            return
+        started = time.monotonic()
+        source_version_at = max(_utc(getattr(item, 'edit_date', None) or item.date) for item in group)
+        source_age_ms = max(0.0, (datetime.now(timezone.utc) - source_version_at).total_seconds() * 1000)
         try:
-            async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self.backend.checkpoint(chat_id, self.owner)
-                if full_album:
-                    await self._process_group(chat_id, source, sorted(members, key=lambda item: item.id))
-                else:
+            lookup_started = time.monotonic()
+            if not full_album and getattr(members[0], "grouped_id", None):
+                if entity is None:
                     entity = await self._entity(chat_id)
-                    await self._process_message(chat_id, source, members[0], entity)
+                if entity is not None:
+                    group = await self._expand_album(members[0], entity)
+            lookup_ms = (time.monotonic() - lookup_started) * 1000
+            persist_started = time.monotonic()
+            # The event transaction validates this owner and lease; a separate checkpoint RPC only serializes live callbacks.
+            _, payload = await self._stage_group(chat_id, source, group)
+            persist_ms = (time.monotonic() - persist_started) * 1000
+            delivery["staged"] += 1
+            delivery["last_staged_at"] = datetime.now(timezone.utc).isoformat()
+            media_ms = 0.0
+            if payload is not None:
+                media_started = time.monotonic()
+                self._schedule_live_media(chat_id, payload, group)
+                media_ms = (time.monotonic() - media_started) * 1000
+            log.info('Telegram live event persisted source_age_ms=%.1f lookup_ms=%.1f persist_ms=%.1f '
+                     'media_ms=%.1f total_ms=%.1f members=%s images=%s',
+                     source_age_ms, lookup_ms, persist_ms, media_ms,
+                     (time.monotonic() - started) * 1000, len(group),
+                     sum(1 for item in group if getattr(item, 'media', None)))
         except Exception as exc:
+            delivery["deferred"] += 1
+            delivery["last_deferred_at"] = datetime.now(timezone.utc).isoformat()
+            delivery["last_deferred_category"] = type(exc).__name__
             if isinstance(exc, AuthKeyDuplicatedError):
                 await self._invalidate_active_session()
             # 不移动高水位，周期补拉负责重新投递失败的新消息。
             log.warning("Telegram live event deferred category=%s", type(exc).__name__)
 
-    async def _delete(self, chat_id: str, identifiers: list[int]):
+    async def _delete(self, chat_id: str, identifiers: list[int], *, reconciliation: dict | None = None,
+                      submission: dict | None = None):
         now = datetime.now(timezone.utc).isoformat()
         key = hashlib.sha256(json.dumps(sorted(identifiers)).encode()).hexdigest()
-        return await self.backend.event({"chat_id": chat_id, "owner": self.owner,
+        payload = {"chat_id": chat_id, "owner": self.owner,
             "platform_message_id": "delete:" + key, "member_message_ids": identifiers, "version_key": key,
             "event_kind": "delete", "source_version_at": now, "posted_at": now,
-            "media_state": "ready", "raw_text": "", "media_manifest": [], "media_objects": []})
+            "media_state": "ready", "raw_text": "", "media_manifest": [], "media_objects": []}
+        if reconciliation is not None:
+            payload['reconciliation'] = reconciliation
+        if submission is not None:
+            submission['payload'] = payload
+        return await self.backend.event(payload)
 
     async def _on_delete(self, event):
         chat_id = str(getattr(event, "chat_id", "") or "")
@@ -470,56 +1283,108 @@ class TelegramCollector:
             return
         try:
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self.backend.checkpoint(chat_id, self.owner)
-                await self._delete(chat_id, [int(value) for value in event.deleted_ids])
+                await self._checkpoint(chat_id)
+            await self._delete(chat_id, [int(value) for value in event.deleted_ids])
         except Exception as exc:
             if isinstance(exc, AuthKeyDuplicatedError):
                 await self._invalidate_active_session()
             log.warning("Telegram deletion unavailable category=%s", type(exc).__name__)
 
-    async def _store_media(self, chat: str, message) -> dict:
-        if self.media_store:
-            return await self.media_store(chat, message)
+    async def _prepare_media_candidate(self, chat: str, message) -> dict:
         mime = getattr(getattr(message, "file", None), "mime_type", None) or "image/jpeg"
         if mime not in ALLOWED_IMAGE_TYPES:
             raise ValueError("unsupported_media")
-        chunks, size = [], 0
-        async for chunk in self.client.iter_download(message.media, request_size=256 * 1024):
-            size += len(chunk)
-            if size > MAX_MEDIA_BYTES:
-                raise ValueError("media_size_limit")
-            chunks.append(bytes(chunk))
-        body = b"".join(chunks)
-        if not body or not _valid_image(body, mime):
-            raise ValueError("image_format_mismatch")
-        digest = hashlib.sha256(body).hexdigest()
-        # Keep message media in a dedicated namespace.  Avatar and future
-        # review-evidence objects must never share this prefix, so retention
-        # jobs can operate on each class without guessing from a key.
-        key = f"{MESSAGE_MEDIA_PREFIX}/{chat}/{message.id}/{digest}"
-        bucket = os.environ.get("S3_BUCKET", "").strip()
-        endpoint = os.environ.get("S3_ENDPOINT_URL", "").strip()
-        access = os.environ.get("S3_ACCESS_KEY", "").strip()
-        secret = os.environ.get("S3_SECRET_KEY", "")
-        if not all((bucket, endpoint, access, secret)):
-            raise RuntimeError("remote_S3_not_configured")
+        timings = {'download_ms': None, 'validation_ms': None}
+        size = 0
+        phase = 'download'
+        category = 'none'
+        try:
+            phase_started = time.monotonic()
+            chunks = []
+            async for chunk in self.client.iter_download(message.media, request_size=256 * 1024):
+                size += len(chunk)
+                if size > MAX_MEDIA_BYTES:
+                    raise ValueError("media_size_limit")
+                chunks.append(bytes(chunk))
+            body = b"".join(chunks)
+            timings['download_ms'] = (time.monotonic() - phase_started) * 1000
 
-        def upload():
-            client = boto3.client("s3", endpoint_url=endpoint, region_name=os.environ.get("S3_REGION", "us-east-1"),
-                                  aws_access_key_id=access, aws_secret_access_key=secret,
-                                  use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
-                                  config=Config(connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
-                                                proxies={"https": os.environ["S3_HTTPS_PROXY"]} if os.environ.get("S3_HTTPS_PROXY") else None))
-            try:
-                client.put_object(
-                    Bucket=bucket, Key=key, Body=body, ContentType=mime,
-                    Metadata={"sha256": digest, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION},
-                )
-            finally:
-                client.close()
-        await asyncio.to_thread(upload)
-        return {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
-                "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
+            phase = 'validation'
+            phase_started = time.monotonic()
+            if not body or not _valid_image(body, mime):
+                raise ValueError("image_format_mismatch")
+            dimensions = await asyncio.to_thread(_image_dimensions, body, mime)
+            digest = hashlib.sha256(body).hexdigest()
+            timings['validation_ms'] = (time.monotonic() - phase_started) * 1000
+
+            # Keep message media in a dedicated namespace. Avatar and future
+            # review-evidence objects must never share this prefix.
+            key = f"{MESSAGE_MEDIA_PREFIX}/{chat}/{message.id}/{digest}"
+            bucket = os.environ.get("S3_BUCKET", "").strip()
+            endpoint = os.environ.get("S3_ENDPOINT_URL", "").strip()
+            access = os.environ.get("S3_ACCESS_KEY", "").strip()
+            secret = os.environ.get("S3_SECRET_KEY", "")
+            if not all((bucket, endpoint, access, secret)):
+                raise RuntimeError("remote_S3_not_configured")
+            record = {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
+                      **dimensions, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
+            return {"record": record, "body": body, "mime_type": mime,
+                    "bucket": bucket, "endpoint": endpoint, "access": access, "secret": secret}
+        except BaseException as exc:
+            category = type(exc).__name__
+            raise
+        finally:
+            log.info('Telegram media phases phase=%s category=%s bytes=%s download_ms=%s validation_ms=%s registration_ms=%s upload_ms=%s',
+                     phase, category, size,
+                     *(f'{timings[name]:.1f}' if timings[name] is not None else 'na'
+                       for name in ('download_ms', 'validation_ms')),
+                     'na', 'na')
+
+    async def _upload_media_candidate(self, candidate: dict) -> dict:
+        record = candidate["record"]
+        body = candidate["body"]
+        mime = candidate["mime_type"]
+        category = 'none'
+        upload_ms = None
+        try:
+            def upload():
+                client = boto3.client(
+                    "s3", endpoint_url=candidate["endpoint"], region_name=os.environ.get("S3_REGION", "us-east-1"),
+                    aws_access_key_id=candidate["access"], aws_secret_access_key=candidate["secret"],
+                    use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
+                    config=Config(signature_version="s3v4",
+                                  s3={"addressing_style": "path", "payload_signing_enabled": True},
+                                  request_checksum_calculation="when_required",
+                                  connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
+                                  proxies={"https": os.environ["S3_HTTPS_PROXY"]}
+                                  if os.environ.get("S3_HTTPS_PROXY") else None))
+                try:
+                    client.put_object(
+                        Bucket=candidate["bucket"], Key=record["object_key"], Body=body, ContentType=mime,
+                        Metadata={"sha256": record["sha256"], "purpose": "expert-message",
+                                  "retention": MESSAGE_MEDIA_RETENTION},
+                    )
+                finally:
+                    client.close()
+
+            started = time.monotonic()
+            await asyncio.to_thread(upload)
+            upload_ms = (time.monotonic() - started) * 1000
+            return record
+        except BaseException as exc:
+            category = type(exc).__name__
+            raise
+        finally:
+            log.info('Telegram media phases phase=upload category=%s bytes=%s download_ms=na validation_ms=na registration_ms=na upload_ms=%s',
+                     category, record.get("bytes", 0), f'{upload_ms:.1f}' if upload_ms is not None else 'na')
+
+    async def _store_media(self, chat: str, message, *, stage_object=None) -> dict:
+        if self.media_store:
+            return await self.media_store(chat, message)
+        candidate = await self._prepare_media_candidate(chat, message)
+        if stage_object is not None:
+            await stage_object(candidate["record"])
+        return await self._upload_media_candidate(candidate)
 
     async def _delete_media_object(self, object_key: str) -> None:
         """Delete one staged object only after the backend has classified it orphaned."""
@@ -630,6 +1495,8 @@ class TelegramCollector:
         self.config["telegram_source_enabled"] = "true"
         self.account = info
         self.invalid_session_fingerprint = None
+        self._rejected_identity_binding = None
+        self._verified_identity = (self.client, self._session_fingerprint(session + '\0' + info['id']))
         self._handlers(self.client)
         self.auth_state = {"state": "authorized", "attempt_id": self.auth_state.get("attempt_id"), "account": info}
 
@@ -648,6 +1515,7 @@ class TelegramCollector:
             return {"connected": bool(self.client and self.client.is_connected()),
                     "authorized": bool(self.client and await self.client.is_user_authorized()),
                     "auth": dict(self.auth_state), "account": self.account,
+                    "live_event_delivery": dict(self.live_event_delivery),
                     "source_health": health}
         if path == "/auth/qr":
             return await self._start_qr(bool(payload.get("replace_existing")))
@@ -686,13 +1554,16 @@ class TelegramCollector:
             self.config["telegram_account"] = ""
             self.account = None
             self.invalid_session_fingerprint = None
+            self._verified_identity = None
+            self._rejected_identity_binding = None
             self.auth_state = {"state": "disconnected"}
             return {"state": "disconnected"}
-        if path in {"/dialogs", "/admins"}:
+        if path in {"/dialogs", "/admins", "/members"}:
             try:
                 if not await self.connect():
-                    return {"items": [], "state": "unauthorized", "manual_id_allowed": False}
-                return await (self._dialogs(payload) if path == "/dialogs" else self._admins(payload))
+                    return {"items": [], "state": "unauthorized", "manual_id_allowed": False,
+                            **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
+                return await ({'/dialogs': self._dialogs, '/admins': self._admins, '/members': self._members}[path](payload))
             except FloodWaitError as exc:
                 return {"items": [], "state": "flood_wait", "retry_after": exc.seconds}
             except Exception as exc:
@@ -709,7 +1580,7 @@ class TelegramCollector:
                 if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
                     reason = "network_unavailable"
                 return {"items": [], "state": "unavailable", "reason": reason,
-                        "manual_id_allowed": path == "/admins" and reason == "member_enumeration_restricted",
+                        "manual_id_allowed": path in {"/admins", "/members"} and reason == "member_enumeration_restricted",
                         **(exc.details if isinstance(exc, SourceAccessError) else {})}
         return {"state": "unsupported"}
 
@@ -806,6 +1677,58 @@ class TelegramCollector:
         return {"items": items, "next_cursor": str(offset + 50) if len(users)>50 else None, "state": "ready", "manual_id_allowed": True,
                 "anonymous_admins_may_be_unlisted": True, "chat_id": str(utils.get_peer_id(entity)), "title": getattr(entity, "title", ""),
                 "q": str(payload.get("q", "")).strip()}
+
+    async def _members(self, payload):
+        entity = await self._entity(str(payload.get('chat_id', '')))
+        offset, term = self._offset(payload.get('cursor')), self._directory_term(payload)
+        users = []
+        if isinstance(entity, Chat):
+            page = await self.client(GetFullChatRequest(entity.id))
+            if isinstance(page.full_chat.participants, ChatParticipantsForbidden):
+                raise SourceAccessError('member_enumeration_restricted')
+            by_id = {user.id: user for user in page.users}
+            for member in page.full_chat.participants.participants:
+                user = by_id.get(member.user_id)
+                if user is None:
+                    raise SourceAccessError('incomplete_member_page')
+                if not term or self._directory_matches(term, user.id, _nickname(user, str(user.id)), getattr(user, 'username', None), '@'+(getattr(user, 'username', None) or '')):
+                    users.append((user, member))
+            users = sorted(users, key=lambda pair: pair[0].id)[offset:offset+51]
+        elif (term.isascii() and term.isdigit()) or term.startswith('@'):
+            if not offset:
+                try:
+                    user = await self.client.get_entity(int(term) if term.isdigit() else term)
+                    page = await self.client(GetParticipantRequest(entity, user))
+                    if type(page.participant).__name__ not in {'ChannelParticipantLeft', 'ChannelParticipantBanned'}:
+                        users = [(user, page.participant)]
+                except ValueError:
+                    raise SourceAccessError('member_identity_unavailable') from None
+        else:
+            raw_offset, seen = offset, set()
+            while len(users)<51:
+                page = await self.client(GetParticipantsRequest(entity, ChannelParticipantsSearch(term), raw_offset, min(200, 51-len(users)), 0))
+                members, by_id = list(page.participants), {user.id:user for user in page.users}
+                if not members:
+                    break
+                for member in members:
+                    if member.user_id in seen or member.user_id not in by_id:
+                        raise SourceAccessError('incomplete_member_page')
+                    seen.add(member.user_id)
+                    users.append((by_id[member.user_id], member))
+                raw_offset += len(members)
+                if raw_offset>=getattr(page, 'count', raw_offset+1):
+                    break
+        items=[]
+        for user, member in users[:50]:
+            if getattr(user, 'deleted', False):
+                continue
+            role = 'owner' if isinstance(member, (ChatParticipantCreator, ChannelParticipantCreator)) else 'administrator' if isinstance(member, (ChatParticipantAdmin, ChannelParticipantAdmin)) else 'member'
+            items.append({'sender_id':str(user.id), 'nickname':_nickname(user,str(user.id)),
+                'username':getattr(user,'username',None), 'admin_kind':role, 'is_admin':role!='member',
+                'has_avatar':bool(getattr(user,'photo',None)), 'avatar_state':'not_loaded' if getattr(user,'photo',None) else 'absent'})
+        return {'state':'ready', 'items':items, 'next_cursor':str(offset+50) if len(users)>50 else None,
+                'chat_id':str(utils.get_peer_id(entity)), 'q':str(payload.get('q','')).strip(),
+                'member_scope':'all_visible_members', 'manual_id_allowed':True}
 
     async def _channel_admin_page(self, entity, offset, limit):
         page = await self.client(GetParticipantsRequest(channel=entity, filter=ChannelParticipantsAdmins(), offset=offset, limit=limit, hash=0))

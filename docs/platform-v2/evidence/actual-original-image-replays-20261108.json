@@ -1,0 +1,168 @@
+{
+  "source_commit": "4b90ab6bc6235323d11af85ebfb4e0fe9a2a2398",
+  "observed_at": "2026-11-08T16:20:00.391383+00:00",
+  "actual_model": "deepseek-v4.1-flash",
+  "gateway_configuration_changed": false,
+  "frozen_source": true,
+  "three_consecutive_repeats_per_scenario": true,
+  "semantic_review_performed": true,
+  "production_writes": 0,
+  "funded_tests": 0,
+  "current_quote_acceptance_or_three_second_latency_verified": false,
+  "prior_failure_retained": {
+    "e1148": "Hermes repeated-output stream cutoff / provider no reply",
+    "e1173": "validation harness wrong input mount; no model request"
+  },
+  "cases": [
+    {
+      "case": "e1170",
+      "scenario": "two_independent_confirmed_tickets",
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "human_semantic_review": "passed",
+      "expected_picks": [
+        {
+          "fixture_id": "leyu:5803628",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "home",
+          "line": "1.25"
+        },
+        {
+          "fixture_id": "leyu:5803626",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "away",
+          "line": "-0.5"
+        }
+      ],
+      "elapsed_ms": 22863.879,
+      "actual_current_quote_acceptance_verified": false,
+      "signals": 0,
+      "orders": 0
+    },
+    {
+      "case": "e1171",
+      "scenario": "two_independent_confirmed_tickets",
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "human_semantic_review": "passed",
+      "expected_picks": [
+        {
+          "fixture_id": "leyu:5803628",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "home",
+          "line": "1.25"
+        },
+        {
+          "fixture_id": "leyu:5803626",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "away",
+          "line": "-0.5"
+        }
+      ],
+      "elapsed_ms": 24216.706,
+      "actual_current_quote_acceptance_verified": false,
+      "signals": 0,
+      "orders": 0
+    },
+    {
+      "case": "e1172",
+      "scenario": "two_independent_confirmed_tickets",
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "human_semantic_review": "passed",
+      "expected_picks": [
+        {
+          "fixture_id": "leyu:5803628",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "home",
+          "line": "1.25"
+        },
+        {
+          "fixture_id": "leyu:5803626",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "away",
+          "line": "-0.5"
+        }
+      ],
+      "elapsed_ms": 27300.18,
+      "actual_current_quote_acceptance_verified": false,
+      "signals": 0,
+      "orders": 0
+    },
+    {
+      "case": "e1183",
+      "scenario": "prior_feedback_with_new_confirmed_ticket",
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "human_semantic_review": "passed",
+      "expected_picks": [
+        {
+          "fixture_id": "leyu:5720800",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "away",
+          "line": "1"
+        }
+      ],
+      "elapsed_ms": 43383.666,
+      "actual_current_quote_acceptance_verified": false,
+      "signals": 0,
+      "orders": 0
+    },
+    {
+      "case": "e1184",
+      "scenario": "prior_feedback_with_new_confirmed_ticket",
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "human_semantic_review": "passed",
+      "expected_picks": [
+        {
+          "fixture_id": "leyu:5720800",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "away",
+          "line": "1"
+        }
+      ],
+      "elapsed_ms": 32088.053,
+      "actual_current_quote_acceptance_verified": false,
+      "signals": 0,
+      "orders": 0
+    },
+    {
+      "case": "e1185",
+      "scenario": "prior_feedback_with_new_confirmed_ticket",
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "human_semantic_review": "passed",
+      "expected_picks": [
+        {
+          "fixture_id": "leyu:5720800",
+          "period": "full_time",
+          "market": "handicap",
+          "selection": "away",
+          "line": "1"
+        }
+      ],
+      "elapsed_ms": 34203.237,
+      "actual_current_quote_acceptance_verified": false,
+      "signals": 0,
+      "orders": 0
+    }
+  ]
+}

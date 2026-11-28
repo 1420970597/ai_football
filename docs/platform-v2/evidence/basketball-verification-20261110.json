@@ -1,0 +1,112 @@
+{
+  "frozen_code_equals_current": true,
+  "frozen_path": ".runtime/basketball-provisional-final-02",
+  "files": [
+    {
+      "path": "services/execution_scope.py",
+      "sha256": "ef392a2b8b5e1f18d2bba4adadca55c0e334ceb215243598ae115fc8b70fbc0b"
+    },
+    {
+      "path": "services/basketball_scores.py",
+      "sha256": "5d774fd95a60769324192ca774b3bcb5eabdb4dd75d13e76f8f29c1cc6b91080"
+    },
+    {
+      "path": "services/api/app/settlement.py",
+      "sha256": "e74a528b290b7c79f5deab78f3ddb5c0f66158d98b7c8bb6d6b2968050488ddb"
+    },
+    {
+      "path": "services/api/app/result_ledger.py",
+      "sha256": "2561c70edf30594bfa26e4d0d1185310b97a9e7f662dbeb6119b79d10eedab86"
+    },
+    {
+      "path": "services/api/app/result_check_queue.py",
+      "sha256": "1731df40f707424345109474d4f680e4d7adf6ade77999e82545af01ab2b37c6"
+    },
+    {
+      "path": "services/api/app/routes/result_checks.py",
+      "sha256": "463e94c395e9d2aa6c9dc0a339318bb129d74b31603f456c4f8f2a2802d90330"
+    },
+    {
+      "path": "services/api/app/routes/results.py",
+      "sha256": "9e1f64cb156567806c5f8ffd8a483940d669de72c76cd722cb92703452484809"
+    },
+    {
+      "path": "services/collector/leyu_results.py",
+      "sha256": "e3a9ad1f16ffbb2c0e7c0dc9ec3790aa71ebe6bfcc4159ead5dee30759f72e31"
+    },
+    {
+      "path": "tests/test_basketball_execution.py",
+      "sha256": "46b87f951311ece9890749d9cb125f98dbd5bad0af62a3481231132f4e7f8a8e"
+    },
+    {
+      "path": "tests/test_basketball_settlement.py",
+      "sha256": "0cea0d9061d04c95c74d61c35b1a20ec532df91ab75fdabc8eff60bc857b75a2"
+    },
+    {
+      "path": "tests/test_handicap_lines.py",
+      "sha256": "29d4088292838c7e715122252bb94a7b1ad35ba6b4db7379c346c9d9a8c6071a"
+    }
+  ],
+  "modules": [
+    "test_basketball_execution",
+    "test_basketball_settlement",
+    "test_settlement",
+    "test_leyu_results",
+    "test_result_ledger",
+    "test_result_checks",
+    "test_result_check_priority",
+    "test_score_rules",
+    "test_handicap_lines"
+  ],
+  "targeted_tests": 109,
+  "seconds": 84.4,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "native_exit_code": 0,
+  "targeted_log": ".runtime/e209-live/basketball-provisional-final-02.log",
+  "targeted_log_sha256": "da1ced677e4431e569c6b3c941440113b1e8955293f0bdcd945d6df51158b6f0",
+  "image": "sha256:a8fc0cb5dbebed71df5688f33c3963a076151c7d41ca8e7625520b8ab7ffc234",
+  "resources": {
+    "cpus": 0.25,
+    "memory_mib": 384,
+    "pids_limit": 100
+  },
+  "database": "e3056 completed private PostgreSQL; per-test test_result_UUID database dropped after each case",
+  "production_writes": 0,
+  "funded_tests": 0,
+  "schema_migrations": 0,
+  "deployments": 0,
+  "failures_retained": [
+    {
+      "log": ".runtime/e209-live/basketball-provisional-red.log",
+      "tests": 1,
+      "native_exit_code": 1,
+      "reason": "prior collector rejects explicit final S7/period conflicts"
+    },
+    {
+      "log": ".runtime/e209-live/basketball-provisional-final.log",
+      "tests": 107,
+      "seconds": 82.232,
+      "errors": 1,
+      "native_exit_code": 1,
+      "reason": "old facts hash uniqueness rejects confirmed v3 restoring original facts"
+    }
+  ],
+  "coverage": [
+    "native 37/38/39 full-time scheduled/live protocol scope",
+    "verified complete no-overtime basketball winner/total/handicap settlement",
+    "confirmed to native conflict to pending and sport-statistics exclusion",
+    "result restoration as immutable version 3 and consecutive replay idempotence",
+    "ordinary network failure preserves confirmed results",
+    "native-only complete period-conflict HTTP exception",
+    "football result revisions, old-provider replay rejection, locking and compatibility"
+  ],
+  "real_native_finals_sha256": "627a1b23a2f6bd2d92c34e4ccf09573c9f9b3377843ec68048fca42079a4a939",
+  "limitations": [
+    "no funded order or deployment validation",
+    "overtime payouts unverified and remain pending",
+    "market 63 quarters/half-time rules and protocol unsupported"
+  ],
+  "verification_scope": "isolated protocol/ledger/API checks; parent owns complete regression, images and browser acceptance"
+}

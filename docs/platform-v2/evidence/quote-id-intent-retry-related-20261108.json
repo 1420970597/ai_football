@@ -1,0 +1,52 @@
+{
+  "schema": "safe-verification-evidence-v1",
+  "stage": "isolated related verification only; not deployed",
+  "new_tests": 14,
+  "related_tests": 169,
+  "seconds": 351.048,
+  "native_exit": 0,
+  "original_image_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+  "original_source_expected_selected_line": "1.25",
+  "original_rejected_selected_line": "0.75",
+  "existing_exact_read_option_was_present": true,
+  "old_implementation": {
+    "tests": 8,
+    "seconds": 16.952,
+    "failures": 4,
+    "errors": 2,
+    "native_exit": 1
+  },
+  "initial_sql_failure": {
+    "tests": 8,
+    "seconds": 16.549,
+    "errors": 7,
+    "native_exit": 1
+  },
+  "exact_test_rerun": {
+    "tests": 8,
+    "seconds": 17.676,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "extra_negative_cases_and_line_guard": {
+    "tests": 24,
+    "seconds": 36.318,
+    "failures": 0,
+    "errors": 0,
+    "native_exit": 0
+  },
+  "first_related_import_failure": {
+    "tests": 62,
+    "seconds": 112.495,
+    "errors": 3,
+    "native_exit": 1
+  },
+  "actual_signal_acceptance_required": true,
+  "same_attempt_required": true,
+  "max_continuation_rounds": 3,
+  "no_automatic_quote_choice": true,
+  "source_odds_comparison": false,
+  "funded_tests": 0,
+  "clean_full_suite_and_natural_acceptance_pending": true
+}

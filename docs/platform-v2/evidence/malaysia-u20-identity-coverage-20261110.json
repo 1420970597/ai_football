@@ -1,0 +1,97 @@
+{
+  "checked_at_utc": "2026-11-10T11:06:00Z",
+  "native_read_only": {
+    "read_only": true,
+    "fixtures": [
+      {
+        "id": "leyu:5833571",
+        "sport": "football",
+        "competition_id": "47130",
+        "competition_name": "马来西亚总统杯U20",
+        "home_team_id": "276425",
+        "home_team": "雪兰莪U20",
+        "home_aliases": [],
+        "away_team_id": "276426",
+        "away_team": "柔佛达鲁塔克欣C队U20",
+        "away_aliases": [],
+        "kickoff_at": "2026-11-10 08:45:00+00:00",
+        "phase": "finished",
+        "clock_minute": 92,
+        "match_state": "7",
+        "home_score": null,
+        "away_score": null,
+        "received_at": "2026-11-10 10:44:56.121211+00:00",
+        "source_updated_at": "2026-11-10 10:44:54.985000+00:00"
+      }
+    ]
+  },
+  "source_image": {
+    "sha256": "3a3218cc57e0bc41c9c3e8f8a02875a9179f7f6267a31df3dc060cc3593ea165",
+    "teams": [
+      "雪兰莪U20",
+      "达罗塔晋C队U20"
+    ],
+    "kickoff_display": "16:45",
+    "competition_display": "马统杯",
+    "clock_minute": 73
+  },
+  "public_fetch_manifest": [
+    {
+      "key": "jdt-official",
+      "url": "https://johorsoutherntigers.my/jdt-academy-dominating-youth-football.jst/",
+      "checked_at": "2026-11-10T11:04:49.539035+00:00",
+      "status": 418,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "final_url": "https://johorsoutherntigers.my/jdt-academy-dominating-youth-football.jst/",
+      "identity_terms_found": []
+    },
+    {
+      "key": "7m-c-u20",
+      "url": "https://www.7m.hk/football/data/zh-cn/teams/749715",
+      "checked_at": "2026-11-10T11:04:50.548110+00:00",
+      "status": 200,
+      "bytes": 42797,
+      "sha256": "42cb415e024f5fa286514f98f408ff17223840fc79ccba5245d58ac0af656024",
+      "final_url": "https://www.7m.hk/football/data/zh-cn/teams/749715",
+      "identity_terms_found": [
+        "Johor Darul",
+        "U20",
+        "柔佛新山C队"
+      ]
+    },
+    {
+      "key": "titan-original-pair",
+      "url": "https://1x2.titan007.com/Oddslist/3111931.htm",
+      "checked_at": "2026-11-10T11:04:51.114815+00:00",
+      "status": 200,
+      "bytes": 22934,
+      "sha256": "ce5ab67e31e607754426d93c230b0f301883936efc13c1edec73e7b4dcceb415",
+      "final_url": "https://1x2.titan007.com/Oddslist/3111931.htm",
+      "identity_terms_found": [
+        "U20",
+        "雪兰莪",
+        "达罗塔晋C队"
+      ]
+    }
+  ],
+  "primary_web_observation": {
+    "url": "https://johorsoutherntigers.my/jdt-academy-dominating-youth-football.jst/",
+    "observed_with": "web browser/search open",
+    "official_article_date": "2026-08-28",
+    "fact": "JDT III competes in President Cup U20; JDT IV competes in Youth Cup U18",
+    "direct_docker_status": 418,
+    "direct_successful_body_sha256": null
+  },
+  "identity_chain": [
+    "Original screenshot and Titan3111931 use 达罗塔晋C队U20 with 雪兰莪U20, November10 16:45.",
+    "7M749715 identifies 柔佛新山C队(U20) as Johor Darul Takzim C(U20), with the same dated opponent and kickoff.",
+    "Native Leyu5833571 has home276425 雪兰莪U20, away276426 柔佛达鲁塔克欣C队U20, November10 08:45 UTC.",
+    "Only reviewed whole C U20 names are registered; no B/adult/U21 identity is inferred."
+  ],
+  "public_data_use": "Identity vocabulary only; no public prices, scores, recommendations or orders imported.",
+  "native_current_phase": "finished",
+  "historical_backfill": false,
+  "production_writes": 0,
+  "funded_tests": 0
+}

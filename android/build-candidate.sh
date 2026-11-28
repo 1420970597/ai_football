@@ -8,8 +8,8 @@ output_dir="$android_dir/build/artifacts"
 cleanup() { docker rm -f "$build_container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 mkdir -p "$output_dir"
-# The production APK starts with an explicit HTTPS pairing address.  Keep
-# fixtures and cleartext URLs out of the application source so a test endpoint
+# The APK starts with an explicitly entered HTTP/HTTPS pairing address. Keep
+# fixtures and hardcoded cleartext URLs out of application source so a test endpoint
 # cannot silently become the default service in a release candidate.
 if rg -n --glob '*.java' --glob '*.kt' --glob '*.xml' \
   'http://|localhost|127\.0\.0\.1|0\.0\.0\.0|[A-Za-z0-9.-]+\.invalid|[A-Za-z0-9.-]+\.test' \
@@ -18,8 +18,14 @@ if rg -n --glob '*.java' --glob '*.kt' --glob '*.xml' \
   exit 1
 fi
 docker build --target toolchain -f "$android_dir/Dockerfile" -t ai-football-android-toolchain:v2.0.0-dev "$project_dir"
+cache_mount=()
+if [[ -d "${ANDROID_GRADLE_MODULE_CACHE:-}/files-2.1" && -n "${ANDROID_GRADLE_MODULE_CACHE:-}" ]]; then
+  cache_mount=(-e GRADLE_RO_DEP_CACHE=/workspace/module-cache \
+    --mount "type=bind,source=$ANDROID_GRADLE_MODULE_CACHE,target=/workspace/module-cache/modules-2,readonly")
+fi
 docker create --name "$build_container" --cpus=1 --memory=1536m \
   -e GRADLE_USER_HOME=/workspace/gradle-cache \
+  "${cache_mount[@]}" \
   -v "$android_dir:/source/android:ro" -v "$project_dir/tests/android:/source/tests/android:ro" \
   --entrypoint sh ai-football-android-toolchain:v2.0.0-dev -c '
     set -eu
@@ -37,10 +43,15 @@ docker create --name "$build_container" --cpus=1 --memory=1536m \
 docker start -a "$build_container"
 container_exit="$(docker inspect --format '{{.State.ExitCode}}' "$build_container")"
 if [[ "$container_exit" != 0 ]]; then exit "$container_exit"; fi
+if [[ -n "${ANDROID_GRADLE_MODULE_CACHE:-}" && "${#cache_mount[@]}" = 0 ]]; then
+  docker cp "$build_container:/workspace/gradle-cache/caches/modules-2/." "$ANDROID_GRADLE_MODULE_CACHE"
+  find "$ANDROID_GRADLE_MODULE_CACHE" -maxdepth 1 -type f \( -name '*.lock' -o -name gc.properties \) -delete
+fi
 docker cp "$build_container:/workspace/frozen/android/app/build/outputs/apk/debug/app-debug.apk" "$output_dir/ballnews-2.0.0-dev-debug.apk"
 docker cp "$build_container:/workspace/frozen/android/app/build/outputs/apk/release/app-release-unsigned.apk" "$output_dir/ballnews-2.0.0-dev-unsigned.apk"
 docker cp "$build_container:/workspace/frozen/source-sha256.txt" "$output_dir/source-sha256.txt"
 docker cp "$build_container:/workspace/frozen/android/app/build/reports/lint-results-debug.xml" "$output_dir/lint-results-debug.xml"
+rm -rf "$output_dir/unit-results"
 docker cp "$build_container:/workspace/frozen/android/app/build/test-results/testDebugUnitTest" "$output_dir/unit-results"
 git -C "$project_dir" rev-parse HEAD > "$output_dir/source-parent-commit.txt"
 git -C "$project_dir" status --porcelain -- android tests/android > "$output_dir/source-worktree-status.txt"

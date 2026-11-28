@@ -1,0 +1,94 @@
+{
+  "accepted_source_commit": "90c2ab78c0a28c46f3857eeb64347ea3a82dcd96",
+  "github_checks": [
+    {
+      "name": "contracts",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42578796475/job/129032411996"
+    },
+    {
+      "name": "backend",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42578796407/job/129032412290"
+    },
+    {
+      "name": "browser",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42578796407/job/129032411909"
+    },
+    {
+      "name": "android",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42578796407/job/129032412199"
+    }
+  ],
+  "runs": [
+    {
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42578796407",
+      "head_sha": "90c2ab78c0a28c46f3857eeb64347ea3a82dcd96",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "browser",
+          "conclusion": "success",
+          "started_at": "2026-11-09T07:21:16Z",
+          "completed_at": "2026-11-09T07:26:19Z"
+        },
+        {
+          "name": "android",
+          "conclusion": "success",
+          "started_at": "2026-11-09T07:21:16Z",
+          "completed_at": "2026-11-09T07:25:02Z"
+        },
+        {
+          "name": "backend",
+          "conclusion": "success",
+          "started_at": "2026-11-09T07:21:16Z",
+          "completed_at": "2026-11-09T07:36:50Z"
+        }
+      ]
+    },
+    {
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42578796475",
+      "head_sha": "90c2ab78c0a28c46f3857eeb64347ea3a82dcd96",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "contracts",
+          "conclusion": "success",
+          "started_at": "2026-11-09T07:21:16Z",
+          "completed_at": "2026-11-09T07:21:29Z"
+        }
+      ]
+    }
+  ],
+  "backend": {
+    "tests": 1981,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 877.54,
+    "committed_source_verified": true
+  },
+  "critical_source_files_equal_to_accepted_commit": 7,
+  "image_smoke": {
+    "uid": 10001,
+    "readable_source_files": 105,
+    "quote_witness_sha256": "83939e29bd9ecbb8a8c08456a614885fbdfc810f99df591f67f3d761426d9575",
+    "migration_count": 28,
+    "api_worker_migrate_imported": true,
+    "credentials_supplied": false,
+    "network_access": false
+  },
+  "visual_status": "passed",
+  "visual_original_threshold": 0.002,
+  "real_api_browser": {
+    "baseline_cases": 16,
+    "extended_account_cases": 9,
+    "browser_errors": 0
+  },
+  "production_test_orders": 0,
+  "limitations": [
+    "isolated CI and browser data do not prove live TG or ten-second accepted betting"
+  ]
+}

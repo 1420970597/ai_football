@@ -1,0 +1,63 @@
+{
+  "status": "semantic_release_completed_natural_window_pending",
+  "source_commit": "935083356bdc23903fafc0c50574c433be105437",
+  "release_completed_at": "2026-11-09T09:04:32Z",
+  "worker_image_id": "sha256:0b82f3ef321d2f35e3e96514e78dd196f60cbcff0c653854b1531076038fec5b",
+  "hermes_fixed_image_id": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
+  "only_runtime_changes": [
+    "review-worker image",
+    "Hermes project skill mount"
+  ],
+  "full_suite": {
+    "source_parent_commit": "935083356bdc23903fafc0c50574c433be105437",
+    "committed_source_verified": true,
+    "tests": 1981,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1310.434
+  },
+  "remote_ci": [
+    {
+      "name": "contracts",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42587183290/job/129059690400"
+    },
+    {
+      "name": "backend",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42587183310/job/129059812895"
+    },
+    {
+      "name": "browser",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42587183310/job/129059813012"
+    },
+    {
+      "name": "android",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/1420970597/ai_football/actions/runs/42587183310/job/129059812515"
+    }
+  ],
+  "rollout_verification": {
+    "only_worker_image_and_hermes_skill_profile_recreated": true,
+    "five_other_local_and_four_remote_containers_unchanged": true,
+    "model_governance_state_and_provider_environment_unchanged": true,
+    "permissions_security_and_resources_unchanged": true
+  },
+  "telegram_sources_healthy": 6,
+  "natural_window_origin": "2026-11-09T09:05:26.29696087Z",
+  "model_provider_and_system_prompt_changed": false,
+  "live_order_capability_and_user_policy_changed": false,
+  "funded_test_orders": 0,
+  "historical_bet_backfill": false,
+  "ten_second_accepted_order_proven": false,
+  "source_artifact_sha256": {
+    "e2154-full-verification.json": "29902da13077900fd0e2b83f002c29f859f94c89e4b931c20e55ade847d36a93",
+    "e2156-manual-verification.json": "9aa30d6ef3ddd703398226ca17048ef503e202b75834e1c6b5803fa7c0a6bbe8",
+    "e2157-worker-image-source-verification.json": "f0644e83fab0dc922e65234594d2ec89371727c7e8d30203e588e64e34542e7e",
+    "e2158-rollout-verification.json": "d3c5f56ec7cf6a74239b34244f02055fde6ad9e5aef266705335baeaf12dea6b",
+    "e2158-telegram-warm-readiness.jsonl": "2e30080a3ed461de7299e00e4a169e52568f67811114e2011a2d79f8f69dd9e8",
+    "e2166-pr-checks.json": "39adff91b3c31459b92e2c8a36af7838dbd4089d3d6a842188ddbedddf102ea1"
+  }
+}
